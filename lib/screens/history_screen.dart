@@ -51,7 +51,7 @@ class _HistoryScreenState extends State<HistoryScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppStyles.backgroundLight,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -59,10 +59,12 @@ class _HistoryScreenState extends State<HistoryScreen>
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'History',
               style: TextStyle(
-                color: AppStyles.textDark,
+                color:
+                    Theme.of(context).textTheme.displayLarge?.color ??
+                    AppStyles.textDark,
                 fontWeight: FontWeight.bold,
                 fontSize: 24,
               ),
@@ -110,45 +112,49 @@ class _HistoryScreenState extends State<HistoryScreen>
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 24.0),
                 children: [
-                  const FadeSlideY(
-                    delay: Duration(milliseconds: 200),
+                  FadeSlideY(
+                    delay: const Duration(milliseconds: 200),
                     child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8.0),
+                      padding: const EdgeInsets.symmetric(vertical: 8.0),
                       child: Text(
                         'Today',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
-                          color: AppStyles.textDark,
+                          color:
+                              Theme.of(context).textTheme.displayLarge?.color ??
+                              AppStyles.textDark,
                         ),
                       ),
                     ),
                   ),
                   FadeSlideY(
                     delay: const Duration(milliseconds: 300),
-                    child: _HistoryItem(
+                    child: const _HistoryItem(
                       isSuccess: true,
                       time: '09:05 AM',
                       status: 'Present',
                     ),
                   ),
-                  const FadeSlideY(
-                    delay: Duration(milliseconds: 400),
+                  FadeSlideY(
+                    delay: const Duration(milliseconds: 400),
                     child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8.0),
+                      padding: const EdgeInsets.symmetric(vertical: 8.0),
                       child: Text(
                         'Yesterday',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
-                          color: AppStyles.textDark,
+                          color:
+                              Theme.of(context).textTheme.displayLarge?.color ??
+                              AppStyles.textDark,
                         ),
                       ),
                     ),
                   ),
                   FadeSlideY(
                     delay: const Duration(milliseconds: 500),
-                    child: _HistoryItem(
+                    child: const _HistoryItem(
                       isSuccess: false,
                       time: '08:55 AM',
                       status: 'Failed',
@@ -156,7 +162,7 @@ class _HistoryScreenState extends State<HistoryScreen>
                   ),
                   FadeSlideY(
                     delay: const Duration(milliseconds: 600),
-                    child: _HistoryItem(
+                    child: const _HistoryItem(
                       isSuccess: true,
                       time: '09:15 AM',
                       status: 'Present',
@@ -190,7 +196,7 @@ class _SummaryCard extends AnimatedWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardTheme.color ?? Colors.white,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
@@ -227,10 +233,12 @@ class _SummaryCard extends AnimatedWidget {
           const SizedBox(height: 8),
           Text(
             countAnimation.value.toString(),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 28,
               fontWeight: FontWeight.bold,
-              color: AppStyles.textDark,
+              color:
+                  Theme.of(context).textTheme.displayLarge?.color ??
+                  AppStyles.textDark,
             ),
           ),
         ],
@@ -272,18 +280,22 @@ class _HistoryItem extends StatelessWidget {
                 children: [
                   Text(
                     title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: AppStyles.textDark,
+                      color:
+                          Theme.of(context).textTheme.displayLarge?.color ??
+                          AppStyles.textDark,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     time,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
-                      color: AppStyles.textGray,
+                      color:
+                          Theme.of(context).textTheme.bodyMedium?.color ??
+                          AppStyles.textGray,
                     ),
                   ),
                 ],
@@ -352,12 +364,7 @@ class _StatusBadgeState extends State<_StatusBadge>
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.bold,
-            color: Color.fromARGB(
-              204,
-              (color.r * 0.7 * 255).round(),
-              (color.g * 0.7 * 255).round(),
-              (color.b * 0.7 * 255).round(),
-            ),
+            color: color, // The vibrant pure color is preferred for both modes
           ),
         ),
       ),

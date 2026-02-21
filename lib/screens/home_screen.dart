@@ -35,6 +35,8 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -43,8 +45,8 @@ class _HomeScreenState extends State<HomeScreen>
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const FadeSlideY(
-                delay: Duration(milliseconds: 100),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 100),
                 child: Text(
                   'Welcome to\nSmart Attendance',
                   textAlign: TextAlign.center,
@@ -52,19 +54,22 @@ class _HomeScreenState extends State<HomeScreen>
                     fontSize: 32,
                     fontWeight: FontWeight.bold,
                     height: 1.2,
-                    color: AppStyles.textDark,
+                    color:
+                        theme.textTheme.displayLarge?.color ??
+                        AppStyles.textDark,
                   ),
                 ),
               ),
               const SizedBox(height: 12),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 200),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 200),
                 child: Text(
                   'Secure. Fast. Reliable.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 16,
-                    color: AppStyles.textGray,
+                    color:
+                        theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -84,19 +89,19 @@ class _HomeScreenState extends State<HomeScreen>
                     padding: const EdgeInsets.all(48),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.white,
+                      color: theme.cardTheme.color ?? Colors.white,
                       boxShadow: [
                         BoxShadow(
-                          color: AppStyles.primaryBlue.withValues(alpha: 0.15),
+                          color: theme.primaryColor.withValues(alpha: 0.15),
                           blurRadius: 30,
                           spreadRadius: 10,
                         ),
                       ],
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.fingerprint_rounded,
                       size: 100,
-                      color: AppStyles.primaryBlue,
+                      color: theme.primaryColor,
                     ),
                   ),
                 ),
@@ -106,7 +111,6 @@ class _HomeScreenState extends State<HomeScreen>
                 delay: const Duration(milliseconds: 400),
                 child: AnimatedButton(
                   onPressed: () => Navigator.of(context).pushNamed('/register'),
-                  style: Theme.of(context).outlinedButtonTheme.style,
                   child: const Text('Register Face'),
                 ),
               ),

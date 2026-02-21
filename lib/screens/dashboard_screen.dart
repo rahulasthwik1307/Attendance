@@ -44,7 +44,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppStyles.backgroundLight,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -52,10 +52,12 @@ class _DashboardScreenState extends State<DashboardScreen>
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Hello, Student 👋',
               style: TextStyle(
-                color: AppStyles.textDark,
+                color:
+                    Theme.of(context).textTheme.displayLarge?.color ??
+                    AppStyles.textDark,
                 fontWeight: FontWeight.bold,
                 fontSize: 24,
               ),
@@ -72,11 +74,9 @@ class _DashboardScreenState extends State<DashboardScreen>
         ),
         actions: [
           IconButton(
-            icon: const Icon(
-              Icons.notifications_none_rounded,
-              color: AppStyles.textDark,
-            ),
-            onPressed: () {},
+            icon: const Icon(Icons.logout_rounded, color: AppStyles.errorRed),
+            onPressed: () =>
+                Navigator.of(context).pushReplacementNamed('/home'),
           ),
           const SizedBox(width: 8),
         ],
@@ -85,36 +85,40 @@ class _DashboardScreenState extends State<DashboardScreen>
         child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
           children: [
-            const FadeSlideY(
-              delay: Duration(milliseconds: 100),
+            FadeSlideY(
+              delay: const Duration(milliseconds: 100),
               child: _StatusCard(
                 title: 'Face Status',
                 value: 'Active',
                 icon: Icons.face_retouching_natural_rounded,
                 statusColor: AppStyles.successGreen,
-                valueColor: AppStyles.textDark,
+                valueColor:
+                    Theme.of(context).textTheme.displayLarge?.color ??
+                    AppStyles.textDark,
               ),
             ),
             const SizedBox(height: 16),
-            const FadeSlideY(
-              delay: Duration(milliseconds: 250),
+            FadeSlideY(
+              delay: const Duration(milliseconds: 250),
               child: _StatusCard(
                 title: 'Location Status',
                 value: 'Set',
                 icon: Icons.location_on_rounded,
                 statusColor: AppStyles.successGreen,
-                valueColor: AppStyles.textDark,
+                valueColor:
+                    Theme.of(context).textTheme.displayLarge?.color ??
+                    AppStyles.textDark,
               ),
             ),
             const SizedBox(height: 16),
-            const FadeSlideY(
-              delay: Duration(milliseconds: 400),
+            FadeSlideY(
+              delay: const Duration(milliseconds: 400),
               child: _StatusCard(
                 title: 'Last Attendance',
                 value: '09:00 AM',
                 icon: Icons.access_time_rounded,
                 statusColor: Colors.transparent,
-                valueColor: AppStyles.primaryBlue,
+                valueColor: Theme.of(context).primaryColor,
               ),
             ),
             const SizedBox(height: 48),
@@ -129,7 +133,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                       decoration: BoxDecoration(
                         boxShadow: [
                           BoxShadow(
-                            color: AppStyles.primaryBlue.withValues(alpha: 0.3),
+                            color: Theme.of(
+                              context,
+                            ).primaryColor.withValues(alpha: 0.3),
                             blurRadius: 20,
                             spreadRadius: 2,
                           ),
@@ -174,28 +180,11 @@ class _DashboardScreenState extends State<DashboardScreen>
                     child: _ActionButton(
                       label: 'Delete Face',
                       icon: Icons.delete_outline_rounded,
-                      isDestructive: true,
+                      isDestructive:
+                          false, // Changed to false to force primaryBlue styling
                     ),
                   ),
                 ],
-              ),
-            ),
-            const SizedBox(height: 48),
-            FadeSlideY(
-              delay: const Duration(milliseconds: 750),
-              child: Center(
-                child: TextButton(
-                  onPressed: () =>
-                      Navigator.of(context).pushReplacementNamed('/home'),
-                  child: const Text(
-                    'Logout',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: AppStyles.textGray,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
               ),
             ),
           ],
@@ -223,6 +212,8 @@ class _StatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20.0),
@@ -231,10 +222,10 @@ class _StatusCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppStyles.primaryBlue.withValues(alpha: 0.1),
+                color: theme.primaryColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icon, color: AppStyles.primaryBlue),
+              child: Icon(icon, color: theme.primaryColor),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -243,9 +234,11 @@ class _StatusCard extends StatelessWidget {
                 children: [
                   Text(
                     title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
-                      color: AppStyles.textGray,
+                      color:
+                          Theme.of(context).textTheme.bodyMedium?.color ??
+                          AppStyles.textGray,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -296,21 +289,32 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = isDestructive ? AppStyles.errorRed : AppStyles.primaryBlue;
+    // Determine content color (white for contrast over filled button backgrounds)
+    final color = isDestructive ? Colors.white : Colors.white;
+
     return AnimatedButton(
       onPressed: () {},
-      style: OutlinedButton.styleFrom(
-        foregroundColor: color,
-        side: BorderSide(color: color, width: 2),
+      style: ElevatedButton.styleFrom(
+        // Override background color if destructive
+        backgroundColor: isDestructive
+            ? AppStyles.errorRed
+            : Theme.of(context).primaryColor,
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4.0),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 20),
+            Icon(icon, size: 20, color: color),
             const SizedBox(width: 8),
-            Text(label, style: const TextStyle(fontSize: 14)),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                color: color,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ],
         ),
       ),

@@ -39,16 +39,21 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final textColor = theme.textTheme.displayLarge?.color ?? AppStyles.textDark;
+    final cardColor = theme.cardTheme.color ?? Colors.white;
+
     return Scaffold(
-      backgroundColor: AppStyles.backgroundLight,
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         automaticallyImplyLeading: false,
-        title: const Text(
+        title: Text(
           'Profile',
           style: TextStyle(
-            color: AppStyles.textDark,
+            color: textColor,
             fontWeight: FontWeight.bold,
             fontSize: 24,
           ),
@@ -72,9 +77,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                           child: Container(
                             width: 130,
                             height: 130,
-                            decoration: BoxDecoration(
+                            decoration: const BoxDecoration(
                               shape: BoxShape.circle,
-                              gradient: const SweepGradient(
+                              gradient: SweepGradient(
                                 colors: [
                                   AppStyles.primaryBlue,
                                   Colors.transparent,
@@ -91,8 +96,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                       height: 120,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Colors.white,
-                        border: Border.all(color: Colors.white, width: 4),
+                        color: cardColor,
+                        border: Border.all(color: cardColor, width: 4),
                         image: const DecorationImage(
                           image: NetworkImage(
                             'https://picsum.photos/200/200?people',
@@ -109,7 +114,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                         decoration: BoxDecoration(
                           color: AppStyles.primaryBlue,
                           shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 3),
+                          border: Border.all(color: cardColor, width: 3),
                         ),
                         child: const Icon(
                           Icons.camera_alt_rounded,
@@ -123,15 +128,15 @@ class _ProfileScreenState extends State<ProfileScreen>
               ),
             ),
             const SizedBox(height: 16),
-            const FadeSlideY(
-              delay: Duration(milliseconds: 200),
+            FadeSlideY(
+              delay: const Duration(milliseconds: 200),
               child: Center(
                 child: Text(
                   'John Doe',
                   style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
-                    color: AppStyles.textDark,
+                    color: textColor,
                   ),
                 ),
               ),
@@ -150,7 +155,7 @@ class _ProfileScreenState extends State<ProfileScreen>
               delay: const Duration(milliseconds: 400),
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: cardColor,
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: [
                     BoxShadow(
@@ -166,21 +171,44 @@ class _ProfileScreenState extends State<ProfileScreen>
                       Icons.person_outline_rounded,
                       'Student Name',
                       'John Doe',
+                      textColor,
                     ),
-                    const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                    Divider(
+                      height: 1,
+                      color: isDark
+                          ? Colors.grey.shade800
+                          : const Color(0xFFE2E8F0),
+                    ),
                     _buildInfoRow(
                       Icons.badge_outlined,
                       'Roll Number',
                       '2021CS001',
+                      textColor,
                     ),
-                    const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                    Divider(
+                      height: 1,
+                      color: isDark
+                          ? Colors.grey.shade800
+                          : const Color(0xFFE2E8F0),
+                    ),
                     _buildInfoRow(
                       Icons.domain_rounded,
                       'Department',
-                      'Computer Science',
+                      'CSE',
+                      textColor,
                     ),
-                    const Divider(height: 1, color: Color(0xFFE2E8F0)),
-                    _buildInfoRow(Icons.school_outlined, 'Year', '3rd Year'),
+                    Divider(
+                      height: 1,
+                      color: isDark
+                          ? Colors.grey.shade800
+                          : const Color(0xFFE2E8F0),
+                    ),
+                    _buildInfoRow(
+                      Icons.school_outlined,
+                      'Year',
+                      '3rd Year',
+                      textColor,
+                    ),
                   ],
                 ),
               ),
@@ -233,7 +261,12 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
-  Widget _buildInfoRow(IconData icon, String label, String value) {
+  Widget _buildInfoRow(
+    IconData icon,
+    String label,
+    String value,
+    Color textColor,
+  ) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
       child: Row(
@@ -247,10 +280,10 @@ class _ProfileScreenState extends State<ProfileScreen>
           const Spacer(),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.bold,
-              color: AppStyles.textDark,
+              color: textColor,
             ),
           ),
         ],

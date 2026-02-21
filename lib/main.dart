@@ -16,6 +16,10 @@ import 'screens/location_error_screen.dart' as loc_error;
 import 'screens/profile_screen.dart' as profile;
 import 'screens/settings_screen.dart' as settings_screen;
 
+final ValueNotifier<ThemeMode> appThemeNotifier = ValueNotifier(
+  ThemeMode.light,
+);
+
 void main() {
   runApp(const SmartAttendanceApp());
 }
@@ -25,65 +29,74 @@ class SmartAttendanceApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Smart Attendance',
-      debugShowCheckedModeBanner: false,
-      theme: AppStyles.lightTheme,
-      initialRoute: '/splash',
-      onGenerateRoute: (routeSettings) {
-        Widget page;
-        switch (routeSettings.name) {
-          case '/splash':
-            page = const splash.SplashScreen();
-            break;
-          case '/home':
-            page = const home.HomeScreen();
-            break;
-          case '/register':
-            page = const face_reg.FaceRegistrationScreen();
-            break;
-          case '/registration_success':
-            page = const reg_success.RegistrationSuccessScreen();
-            break;
-          case '/registration_failed':
-            page = const reg_fail.RegistrationFailedScreen();
-            break;
-          case '/face_preview':
-            page = const preview.FaceCapturePreviewScreen();
-            break;
-          case '/dashboard':
-            page = const dashboard.DashboardScreen();
-            break;
-          case '/history':
-            page = const history.HistoryScreen();
-            break;
-          case '/face_verification':
-            page = const verify.FaceVerificationScreen();
-            break;
-          case '/attendance_success':
-            page = const att_success.AttendanceSuccessScreen();
-            break;
-          case '/attendance_failed':
-            page = const att_fail.AttendanceFailedScreen();
-            break;
-          case '/location_error':
-            page = const loc_error.LocationErrorScreen();
-            break;
-          case '/profile':
-            page = const profile.ProfileScreen();
-            break;
-          case '/settings':
-            page = const settings_screen.SettingsScreen();
-            break;
-          default:
-            page = const splash.SplashScreen();
-        }
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: appThemeNotifier,
+      builder: (context, currentMode, child) {
+        return MaterialApp(
+          title: 'Smart Attendance',
+          debugShowCheckedModeBanner: false,
+          theme: AppStyles.lightTheme,
+          darkTheme: AppStyles.darkTheme,
+          themeMode: currentMode,
+          themeAnimationDuration: const Duration(milliseconds: 400),
+          themeAnimationCurve: Curves.easeInOut,
+          initialRoute: '/splash',
+          onGenerateRoute: (routeSettings) {
+            Widget page;
+            switch (routeSettings.name) {
+              case '/splash':
+                page = const splash.SplashScreen();
+                break;
+              case '/home':
+                page = const home.HomeScreen();
+                break;
+              case '/register':
+                page = const face_reg.FaceRegistrationScreen();
+                break;
+              case '/registration_success':
+                page = const reg_success.RegistrationSuccessScreen();
+                break;
+              case '/registration_failed':
+                page = const reg_fail.RegistrationFailedScreen();
+                break;
+              case '/face_preview':
+                page = const preview.FaceCapturePreviewScreen();
+                break;
+              case '/dashboard':
+                page = const dashboard.DashboardScreen();
+                break;
+              case '/history':
+                page = const history.HistoryScreen();
+                break;
+              case '/face_verification':
+                page = const verify.FaceVerificationScreen();
+                break;
+              case '/attendance_success':
+                page = const att_success.AttendanceSuccessScreen();
+                break;
+              case '/attendance_failed':
+                page = const att_fail.AttendanceFailedScreen();
+                break;
+              case '/location_error':
+                page = const loc_error.LocationErrorScreen();
+                break;
+              case '/profile':
+                page = const profile.ProfileScreen();
+                break;
+              case '/settings':
+                page = const settings_screen.SettingsScreen();
+                break;
+              default:
+                page = const splash.SplashScreen();
+            }
 
-        // Use fade transition for splash→home, slide for everything else
-        if (routeSettings.name == '/home') {
-          return AppStyles.buildFadeTransition(page);
-        }
-        return AppStyles.buildSlideTransition(page);
+            // Use fade transition for splash→home, slide for everything else
+            if (routeSettings.name == '/home') {
+              return AppStyles.buildFadeTransition(page);
+            }
+            return AppStyles.buildSlideTransition(page);
+          },
+        );
       },
     );
   }

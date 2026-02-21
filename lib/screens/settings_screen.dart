@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../utils/app_styles.dart';
 import '../widgets/custom_bottom_nav.dart';
 import '../widgets/fade_slide_y.dart';
+import '../main.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -11,9 +12,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _isFaceVerificationActive = true;
-  final bool _isDarkTheme = false;
-
   void _onNavTap(int index) {
     if (index == 0) Navigator.of(context).pushReplacementNamed('/dashboard');
     if (index == 1) Navigator.of(context).pushReplacementNamed('/history');
@@ -24,15 +22,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppStyles.backgroundLight,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         automaticallyImplyLeading: false,
-        title: const Text(
+        title: Text(
           'Settings',
           style: TextStyle(
-            color: AppStyles.textDark,
+            color:
+                Theme.of(context).textTheme.displayLarge?.color ??
+                AppStyles.textDark,
             fontWeight: FontWeight.bold,
             fontSize: 24,
           ),
@@ -46,7 +46,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               delay: const Duration(milliseconds: 100),
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Theme.of(context).cardTheme.color ?? Colors.white,
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: [
                     BoxShadow(
@@ -58,23 +58,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 child: Column(
                   children: [
-                    _buildSettingsSwitch(
-                      icon: Icons.face_retouching_natural_rounded,
-                      title: 'Face Verification',
-                      subtitle: 'Require face match for attendance',
-                      value: _isFaceVerificationActive,
-                      onChanged: (val) {
-                        setState(() => _isFaceVerificationActive = val);
-                      },
-                    ),
-                    const Divider(height: 1, color: Color(0xFFE2E8F0)),
-                    _buildSettingsSwitch(
-                      icon: Icons.dark_mode_outlined,
-                      title: 'App Theme',
-                      subtitle: 'Switch to dark mode (coming soon)',
-                      value: _isDarkTheme,
-                      onChanged: (val) {
-                        // Demo purpose only, requested Light Theme Only
+                    ValueListenableBuilder<ThemeMode>(
+                      valueListenable: appThemeNotifier,
+                      builder: (context, currentMode, _) {
+                        return _buildSettingsSwitch(
+                          icon: currentMode == ThemeMode.dark
+                              ? Icons.dark_mode_outlined
+                              : Icons.light_mode_outlined,
+                          title: 'App Theme',
+                          subtitle: currentMode == ThemeMode.dark
+                              ? 'Dark Mode Active'
+                              : 'Light Mode Active',
+                          value: currentMode == ThemeMode.dark,
+                          onChanged: (val) {
+                            appThemeNotifier.value = val
+                                ? ThemeMode.dark
+                                : ThemeMode.light;
+                          },
+                        );
                       },
                     ),
                   ],
@@ -86,7 +87,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               delay: const Duration(milliseconds: 200),
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: Theme.of(context).cardTheme.color ?? Colors.white,
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: [
                     BoxShadow(
@@ -98,15 +99,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 child: Column(
                   children: [
-                    _buildActionRow(
+                    _buildSettingsItem(
                       icon: Icons.info_outline_rounded,
                       title: 'About App',
+                      subtitle: 'Learn more about this application',
                       onTap: () {},
                     ),
                     const Divider(height: 1, color: Color(0xFFE2E8F0)),
-                    _buildActionRow(
+                    _buildSettingsItem(
                       icon: Icons.logout_rounded,
                       title: 'Logout',
+                      subtitle: 'Sign out from your account',
                       isDestructive: true,
                       onTap: () =>
                           Navigator.of(context).pushReplacementNamed('/home'),
@@ -122,6 +125,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildSettingsItem({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+    bool isDestructive = false,
+  }) {
+    final theme = Theme.of(context);
+    final titleColor = isDestructive
+        ? AppStyles.errorRed
+        : (theme.textTheme.displayLarge?.color ?? AppStyles.textDark);
+    final iconColor = isDestructive ? AppStyles.errorRed : theme.primaryColor;
+    final iconBgColor = isDestructive
+        ? AppStyles.errorRed.withValues(alpha: 0.1)
+        : theme.primaryColor.withValues(alpha: 0.1);
+
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: iconBgColor,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: iconColor),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: titleColor,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color:
+                          theme.textTheme.bodyMedium?.color ??
+                          AppStyles.textGray,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.chevron_right_rounded,
+              color: theme.textTheme.bodyMedium?.color ?? Colors.grey.shade400,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSettingsSwitch({
     required IconData icon,
     required String title,
@@ -129,17 +198,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required bool value,
     required ValueChanged<bool> onChanged,
   }) {
+    final theme = Theme.of(context);
+    final titleColor =
+        theme.textTheme.displayLarge?.color ?? AppStyles.textDark;
+
     return Padding(
-      padding: const EdgeInsets.all(16.0),
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: AppStyles.primaryBlue.withValues(alpha: 0.1),
+              color: theme.primaryColor.withValues(alpha: 0.1),
               shape: BoxShape.circle,
             ),
-            child: Icon(icon, color: AppStyles.primaryBlue),
+            child: Icon(icon, color: theme.primaryColor),
           ),
           const SizedBox(width: 16),
           Expanded(
@@ -148,18 +221,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: AppStyles.textDark,
+                    color: titleColor,
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
-                    color: AppStyles.textGray,
+                    color:
+                        theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
                   ),
                 ),
               ],
@@ -168,53 +242,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Switch(
             value: value,
             onChanged: onChanged,
-            activeThumbColor: AppStyles.primaryBlue,
-            activeTrackColor: AppStyles.primaryBlue.withValues(alpha: 0.3),
+            activeThumbColor: theme.primaryColor,
+            activeTrackColor: theme.primaryColor.withValues(alpha: 0.3),
+            inactiveThumbColor: Colors.grey.shade400,
+            inactiveTrackColor: theme.scaffoldBackgroundColor,
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildActionRow({
-    required IconData icon,
-    required String title,
-    bool isDestructive = false,
-    required VoidCallback onTap,
-  }) {
-    final color = isDestructive ? AppStyles.errorRed : AppStyles.textDark;
-
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isDestructive
-                    ? AppStyles.errorRed.withValues(alpha: 0.1)
-                    : AppStyles.backgroundLight,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: color),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Text(
-                title,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                ),
-              ),
-            ),
-            Icon(Icons.chevron_right_rounded, color: Colors.grey.shade400),
-          ],
-        ),
       ),
     );
   }

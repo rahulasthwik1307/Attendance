@@ -41,33 +41,34 @@ class _AnimatedButtonState extends State<AnimatedButton>
     super.dispose();
   }
 
-  void _onTapDown(TapDownDetails details) {
-    _controller.forward();
-  }
-
-  void _onTapUp(TapUpDetails details) {
-    _controller.reverse();
-    widget.onPressed();
-  }
-
-  void _onTapCancel() {
-    _controller.reverse();
-  }
-
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: _onTapDown,
-      onTapUp: _onTapUp,
-      onTapCancel: _onTapCancel,
-      child: ScaleTransition(
-        scale: _scaleAnimation,
-        child: IgnorePointer(
-          child: ElevatedButton(
-            onPressed: () {}, // Handled by GestureDetector
-            style: widget.style,
-            child: widget.child,
-          ),
+    return ScaleTransition(
+      scale: _scaleAnimation,
+      child: ElevatedButton(
+        onPressed: () {
+          widget.onPressed();
+        },
+        onFocusChange: (hasFocus) {
+          if (hasFocus) {
+            _controller.forward();
+          } else {
+            _controller.reverse();
+          }
+        },
+        onHover: (isHovering) {
+          if (isHovering) {
+            _controller.forward();
+          } else {
+            _controller.reverse();
+          }
+        },
+        style: widget.style,
+        child: Listener(
+          onPointerDown: (_) => _controller.forward(),
+          onPointerUp: (_) => _controller.reverse(),
+          onPointerCancel: (_) => _controller.reverse(),
+          child: widget.child,
         ),
       ),
     );
