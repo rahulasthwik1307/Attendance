@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Location Error Screen - Smart Attendance</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#135bec",
+                        "background-light": "#f5f8ff",
+                        "background-dark": "#101622",
+                        "error-red": "#ef4444",
+                        "success-green": "#10b981",
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"]
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.5rem",
+                        "lg": "1rem",
+                        "xl": "1.5rem",
+                        "full": "9999px"
+                    },
+                },
+            },
+        }
+    </script>
+<style>
+        .location-glow {
+            filter: drop-shadow(0 0 15px rgba(239, 68, 68, 0.4));
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background-light dark:bg-background-dark font-display antialiased text-slate-900 dark:text-slate-100">
+<!-- Mobile Container (Simulating iOS Device) -->
+<div class="relative mx-auto flex h-screen max-w-[430px] flex-col overflow-hidden bg-background-light dark:bg-background-dark">
+<!-- TopAppBar -->
+<header class="flex items-center justify-between px-6 py-4 pt-12 bg-transparent">
+<button class="flex items-center justify-center size-10 rounded-full hover:bg-slate-200/50 dark:hover:bg-slate-800 transition-colors">
+<span class="material-symbols-outlined text-slate-900 dark:text-slate-100" style="font-size: 24px;">arrow_back_ios_new</span>
+</button>
+<h1 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">Smart Attendance</h1>
+<div class="size-10"></div> <!-- Spacer for symmetry -->
+</header>
+<!-- Main Content Section -->
+<main class="flex-1 flex flex-col items-center px-8 pt-8 text-center">
+<!-- Hero Icon with Glow -->
+<div class="relative flex items-center justify-center mb-8">
+<div class="absolute size-32 bg-error-red/10 rounded-full animate-pulse"></div>
+<div class="location-glow bg-white dark:bg-slate-800 size-24 rounded-full flex items-center justify-center shadow-lg">
+<span class="material-symbols-outlined text-error-red" style="font-size: 48px; font-variation-settings: 'FILL' 1;">location_on</span>
+</div>
+</div>
+<!-- Error Headlines -->
+<h2 class="text-2xl font-bold leading-tight mb-3">You are Outside the <br/> Classroom Area</h2>
+<p class="text-slate-500 dark:text-slate-400 text-base leading-relaxed mb-10 max-w-[280px]">
+                Move closer to your classroom to mark attendance
+            </p>
+<!-- Distance Info Card -->
+<div class="w-full bg-white dark:bg-slate-900 rounded-xl p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-none border border-slate-100 dark:border-slate-800 space-y-6">
+<!-- Your Distance -->
+<div class="flex items-center justify-between">
+<div class="text-left">
+<p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-1">Your Distance</p>
+<p class="text-lg font-bold text-error-red">250m away</p>
+</div>
+<div class="bg-error-red/10 p-2 rounded-lg">
+<span class="material-symbols-outlined text-error-red" style="font-size: 24px;">near_me</span>
+</div>
+</div>
+<!-- Divider -->
+<div class="h-px w-full bg-slate-100 dark:bg-slate-800"></div>
+<!-- Required Distance -->
+<div class="flex items-center justify-between">
+<div class="text-left">
+<p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-1">Required Distance</p>
+<p class="text-lg font-bold text-success-green">Within 50m</p>
+</div>
+<div class="bg-success-green/10 p-2 rounded-lg">
+<span class="material-symbols-outlined text-success-green" style="font-size: 24px;">verified_user</span>
+</div>
+</div>
+</div>
+<!-- Map Visual Placeholder -->
+<div class="mt-8 w-full">
+<div class="relative h-24 w-full rounded-xl overflow-hidden bg-slate-200 dark:bg-slate-800 border border-slate-100 dark:border-slate-700">
+<div class="absolute inset-0 bg-cover bg-center opacity-70 grayscale" data-alt="Abstract map showing user distance from classroom" data-location="University Campus" style="background-image: url('https://placeholder.pics/svg/300')"></div>
+<div class="absolute inset-0 flex items-center justify-center">
+<span class="text-[10px] font-bold text-slate-500 bg-white/80 dark:bg-slate-900/80 px-3 py-1 rounded-full uppercase tracking-widest">Live Map View</span>
+</div>
+</div>
+</div>
+</main>
+<!-- Footer Actions -->
+<footer class="p-8 pb-12 space-y-4">
+<button class="w-full py-4 rounded-xl border-2 border-primary text-primary font-bold text-lg hover:bg-primary/5 transition-all active:scale-[0.98]">
+                Try Again
+            </button>
+<p class="text-sm text-slate-400 dark:text-slate-500 text-center">
+                Contact admin if issue persists
+            </p>
+</footer>
+<!-- iOS Home Indicator Simulation -->
+<div class="absolute bottom-2 left-1/2 -translate-x-1/2 w-32 h-1 bg-slate-300 dark:bg-slate-700 rounded-full"></div>
+</div>
+</body></html>

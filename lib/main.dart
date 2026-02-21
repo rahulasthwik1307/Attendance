@@ -1,0 +1,90 @@
+import 'package:flutter/material.dart';
+import 'utils/app_styles.dart';
+
+import 'screens/splash_screen.dart' as splash;
+import 'screens/home_screen.dart' as home;
+import 'screens/face_registration_screen.dart' as face_reg;
+import 'screens/registration_success_screen.dart' as reg_success;
+import 'screens/registration_failed_screen.dart' as reg_fail;
+import 'screens/face_capture_preview_screen.dart' as preview;
+import 'screens/dashboard_screen.dart' as dashboard;
+import 'screens/history_screen.dart' as history;
+import 'screens/face_verification_screen.dart' as verify;
+import 'screens/attendance_success_screen.dart' as att_success;
+import 'screens/attendance_failed_screen.dart' as att_fail;
+import 'screens/location_error_screen.dart' as loc_error;
+import 'screens/profile_screen.dart' as profile;
+import 'screens/settings_screen.dart' as settings_screen;
+
+void main() {
+  runApp(const SmartAttendanceApp());
+}
+
+class SmartAttendanceApp extends StatelessWidget {
+  const SmartAttendanceApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Smart Attendance',
+      debugShowCheckedModeBanner: false,
+      theme: AppStyles.lightTheme,
+      initialRoute: '/splash',
+      onGenerateRoute: (routeSettings) {
+        Widget page;
+        switch (routeSettings.name) {
+          case '/splash':
+            page = const splash.SplashScreen();
+            break;
+          case '/home':
+            page = const home.HomeScreen();
+            break;
+          case '/register':
+            page = const face_reg.FaceRegistrationScreen();
+            break;
+          case '/registration_success':
+            page = const reg_success.RegistrationSuccessScreen();
+            break;
+          case '/registration_failed':
+            page = const reg_fail.RegistrationFailedScreen();
+            break;
+          case '/face_preview':
+            page = const preview.FaceCapturePreviewScreen();
+            break;
+          case '/dashboard':
+            page = const dashboard.DashboardScreen();
+            break;
+          case '/history':
+            page = const history.HistoryScreen();
+            break;
+          case '/face_verification':
+            page = const verify.FaceVerificationScreen();
+            break;
+          case '/attendance_success':
+            page = const att_success.AttendanceSuccessScreen();
+            break;
+          case '/attendance_failed':
+            page = const att_fail.AttendanceFailedScreen();
+            break;
+          case '/location_error':
+            page = const loc_error.LocationErrorScreen();
+            break;
+          case '/profile':
+            page = const profile.ProfileScreen();
+            break;
+          case '/settings':
+            page = const settings_screen.SettingsScreen();
+            break;
+          default:
+            page = const splash.SplashScreen();
+        }
+
+        // Use fade transition for splash→home, slide for everything else
+        if (routeSettings.name == '/home') {
+          return AppStyles.buildFadeTransition(page);
+        }
+        return AppStyles.buildSlideTransition(page);
+      },
+    );
+  }
+}
