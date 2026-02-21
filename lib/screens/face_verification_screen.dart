@@ -15,7 +15,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   late AnimationController _scanLineController;
   late AnimationController _textFadeController;
   late AnimationController _locationCardController;
-  late Animation<Offset> _locationSlide;
+  late Animation<double> _locationFade;
+
+  String?
+  _mode; // 'password_reset' → /password_reset_face_success, else /attendance_success
 
   final List<String> _instructions = [
     "Align your face",
@@ -50,16 +53,18 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       duration: const Duration(milliseconds: 600),
     );
 
-    _locationSlide = Tween<Offset>(begin: const Offset(0, -1), end: Offset.zero)
-        .animate(
-          CurvedAnimation(
-            parent: _locationCardController,
-            curve: Curves.easeOutBack,
-          ),
-        );
+    _locationFade = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _locationCardController, curve: Curves.easeOut),
+    );
 
     _locationCardController.forward();
-    _cycleInstructions();
+
+    // Read mode argument after the first frame so BuildContext is ready.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final args = ModalRoute.of(context)?.settings.arguments;
+      _mode = args is String ? args : null;
+      _cycleInstructions();
+    });
   }
 
   void _cycleInstructions() async {
@@ -76,8 +81,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       if (i == _instructions.length - 1) {
         await Future.delayed(const Duration(seconds: 1));
         if (mounted) {
-          // Typically go to success. Here just showing success for flow.
-          Navigator.of(context).pushReplacementNamed('/attendance_success');
+          final route = _mode == 'password_reset'
+              ? '/password_reset_face_success'
+              : '/attendance_success';
+          Navigator.of(context).pushReplacementNamed(route);
         }
       }
     }
@@ -213,9 +220,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                 ),
               ],
             ),
-            // Location Card Slide Down
-            SlideTransition(
-              position: _locationSlide,
+            // Location Card Fade In
+            FadeTransition(
+              opacity: _locationFade,
               child: Padding(
                 padding: const EdgeInsets.all(24.0),
                 child: Container(

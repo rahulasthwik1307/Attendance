@@ -15,6 +15,13 @@ import 'screens/attendance_failed_screen.dart' as att_fail;
 import 'screens/location_error_screen.dart' as loc_error;
 import 'screens/profile_screen.dart' as profile;
 import 'screens/settings_screen.dart' as settings_screen;
+import 'screens/activate_account_screen.dart' as activate;
+// Auth & password reset flow
+import 'screens/sign_in_screen.dart' as sign_in;
+import 'screens/forgot_password_screen.dart' as forgot_pw;
+import 'screens/password_reset_face_success_screen.dart' as pw_reset_success;
+import 'screens/set_new_password_screen.dart' as set_new_pw;
+import 'screens/password_change_success_screen.dart' as pw_change_success;
 
 final ValueNotifier<ThemeMode> appThemeNotifier = ValueNotifier(
   ThemeMode.light,
@@ -86,15 +93,30 @@ class SmartAttendanceApp extends StatelessWidget {
               case '/settings':
                 page = const settings_screen.SettingsScreen();
                 break;
+              case '/activate':
+                page = const activate.ActivateAccountScreen();
+                break;
+              // ── Auth & password reset flow ───────────────────────────────
+              case '/sign_in':
+                page = const sign_in.SignInScreen();
+                break;
+              case '/forgot_password':
+                page = const forgot_pw.ForgotPasswordScreen();
+                break;
+              case '/password_reset_face_success':
+                page = const pw_reset_success.PasswordResetFaceSuccessScreen();
+                break;
+              case '/set_new_password':
+                page = const set_new_pw.SetNewPasswordScreen();
+                break;
+              case '/password_change_success':
+                page = const pw_change_success.PasswordChangeSuccessScreen();
+                break;
               default:
                 page = const splash.SplashScreen();
             }
 
-            // Use fade transition for splash→home, slide for everything else
-            if (routeSettings.name == '/home') {
-              return AppStyles.buildFadeTransition(page);
-            }
-            return AppStyles.buildSlideTransition(page);
+            return AppStyles.buildPageTransition(page);
           },
         );
       },

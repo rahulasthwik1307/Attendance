@@ -71,10 +71,10 @@ class AppStyles {
       ),
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
-          TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
-          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-          TargetPlatform.macOS: FadeUpwardsPageTransitionsBuilder(),
-          TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.android: _FadeSlidePageTransitionsBuilder(),
+          TargetPlatform.iOS: _FadeSlidePageTransitionsBuilder(),
+          TargetPlatform.macOS: _FadeSlidePageTransitionsBuilder(),
+          TargetPlatform.windows: _FadeSlidePageTransitionsBuilder(),
         },
       ),
     );
@@ -132,37 +132,61 @@ class AppStyles {
       ),
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
-          TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
-          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-          TargetPlatform.macOS: FadeUpwardsPageTransitionsBuilder(),
-          TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.android: _FadeSlidePageTransitionsBuilder(),
+          TargetPlatform.iOS: _FadeSlidePageTransitionsBuilder(),
+          TargetPlatform.macOS: _FadeSlidePageTransitionsBuilder(),
+          TargetPlatform.windows: _FadeSlidePageTransitionsBuilder(),
         },
       ),
     );
   }
 
-  // Common Nav Transitions
-  static PageRouteBuilder buildFadeTransition(Widget page) {
+  // Unified premium page transition: fade + subtle upward slide.
+  static PageRouteBuilder buildPageTransition(Widget page) {
     return PageRouteBuilder(
       pageBuilder: (context, animation, secondaryAnimation) => page,
       transitionsBuilder: (context, animation, secondaryAnimation, child) {
-        return FadeTransition(opacity: animation, child: child);
+        const curve = Curves.easeInOutCubic;
+        final curved = CurvedAnimation(parent: animation, curve: curve);
+        final slide = Tween<Offset>(
+          begin: const Offset(0, 0.03),
+          end: Offset.zero,
+        ).animate(curved);
+        return FadeTransition(
+          opacity: curved,
+          child: SlideTransition(position: slide, child: child),
+        );
       },
       transitionDuration: const Duration(milliseconds: 300),
+      reverseTransitionDuration: const Duration(milliseconds: 280),
     );
   }
+}
 
-  static PageRouteBuilder buildSlideTransition(Widget page) {
-    return PageRouteBuilder(
-      pageBuilder: (context, animation, secondaryAnimation) => page,
-      transitionsBuilder: (context, animation, secondaryAnimation, child) {
-        final slide = Tween<Offset>(
-          begin: const Offset(1, 0),
-          end: Offset.zero,
-        ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut));
-        return SlideTransition(position: slide, child: child);
-      },
-      transitionDuration: const Duration(milliseconds: 300),
+/// Premium global page transition: gentle fade + subtle upward slide.
+/// Curve: easeInOutCubic — smooth, calm, high-end. No bouncing.
+class _FadeSlidePageTransitionsBuilder extends PageTransitionsBuilder {
+  const _FadeSlidePageTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    const curve = Curves.easeInOutCubic;
+    final curved = CurvedAnimation(parent: animation, curve: curve);
+
+    final slide = Tween<Offset>(
+      begin: const Offset(0, 0.03),
+      end: Offset.zero,
+    ).animate(curved);
+
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(position: slide, child: child),
     );
   }
 }

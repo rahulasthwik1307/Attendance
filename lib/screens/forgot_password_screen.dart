@@ -4,20 +4,20 @@ import '../utils/app_styles.dart';
 import '../widgets/animated_button.dart';
 import '../widgets/fade_slide_y.dart';
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+class ForgotPasswordScreen extends StatefulWidget {
+  const ForgotPasswordScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  // Breathing / glow animation for the face hero
+class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
+    with TickerProviderStateMixin {
   late AnimationController _breatheController;
   late Animation<double> _breatheAnimation;
-
-  // Slow scan ring rotation
   late AnimationController _scanController;
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
 
   @override
   void initState() {
@@ -27,31 +27,42 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       vsync: this,
       duration: const Duration(milliseconds: 2800),
     )..repeat(reverse: true);
-    _breatheAnimation = Tween<double>(begin: 0.92, end: 1.04).animate(
+
+    _breatheAnimation = Tween<double>(begin: 0.93, end: 1.05).animate(
       CurvedAnimation(parent: _breatheController, curve: Curves.easeInOut),
     );
 
     _scanController = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 7),
+      duration: const Duration(seconds: 6),
     )..repeat();
+
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat(reverse: true);
+
+    _pulseAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
   }
 
   @override
   void dispose() {
     _breatheController.dispose();
     _scanController.dispose();
+    _pulseController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final headingColor =
         theme.textTheme.displayLarge?.color ?? AppStyles.textDark;
     final subtitleColor =
         theme.textTheme.bodyMedium?.color ?? AppStyles.textGray;
-    final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -63,48 +74,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             children: [
               const Spacer(flex: 2),
 
-              // ── Branding ─────────────────────────────────────────────────
+              // ── Back + Title ───────────────────────────────────────────────
               FadeSlideY(
                 delay: const Duration(milliseconds: 60),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.all(7),
-                      decoration: BoxDecoration(
+                    IconButton(
+                      icon: Icon(
+                        Icons.arrow_back_ios_new_rounded,
                         color: theme.primaryColor,
-                        borderRadius: BorderRadius.circular(10),
+                        size: 20,
                       ),
-                      child: const Icon(
-                        Icons.shield_rounded,
-                        color: Colors.white,
-                        size: 18,
-                      ),
+                      onPressed: () => Navigator.of(context).pop(),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      'Smart Attendance',
+                      'Forgot Password',
                       style: TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w700,
                         color: theme.primaryColor,
-                        letterSpacing: 0.2,
                       ),
                     ),
                   ],
                 ),
               ),
+
               const Spacer(flex: 1),
 
-              // ── Hero Visual ─────────────────────────────────────────────
-              // Flexible so it gracefully shrinks on compact screens without overflow
+              // ── Hero: Face Scan Visual ─────────────────────────────────────
               Flexible(
                 flex: 12,
                 child: FadeSlideY(
                   delay: const Duration(milliseconds: 160),
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      // Cap hero between 160–220px based on available height
                       final heroSize = constraints.maxHeight.clamp(
                         160.0,
                         220.0,
@@ -117,13 +123,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             animation: Listenable.merge([
                               _breatheAnimation,
                               _scanController,
+                              _pulseAnimation,
                             ]),
                             builder: (context, child) {
                               return Transform.scale(
                                 scale: _breatheAnimation.value,
                                 child: CustomPaint(
-                                  painter: _FaceScanPainter(
+                                  painter: _SecurityScanPainter(
                                     progress: _scanController.value,
+                                    pulse: _pulseAnimation.value,
                                     primaryColor: theme.primaryColor,
                                     isDark: isDark,
                                   ),
@@ -132,20 +140,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               );
                             },
                             child: Center(
-                              child: Container(
-                                width: heroSize * 0.50,
-                                height: heroSize * 0.50,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: theme.primaryColor.withValues(
-                                    alpha: 0.08,
-                                  ),
-                                ),
-                                child: Icon(
-                                  Icons.face_retouching_natural_rounded,
-                                  size: heroSize * 0.265,
-                                  color: theme.primaryColor,
-                                ),
+                              child: Builder(
+                                builder: (context) {
+                                  final heroSize = constraints.maxHeight.clamp(
+                                    160.0,
+                                    220.0,
+                                  );
+                                  return Container(
+                                    width: heroSize * 0.50,
+                                    height: heroSize * 0.50,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: theme.primaryColor.withValues(
+                                        alpha: 0.08,
+                                      ),
+                                    ),
+                                    child: Icon(
+                                      Icons.lock_person_rounded,
+                                      size: heroSize * 0.265,
+                                      color: theme.primaryColor,
+                                    ),
+                                  );
+                                },
                               ),
                             ),
                           ),
@@ -155,45 +171,88 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   ),
                 ),
               ),
+
               const Spacer(flex: 1),
 
-              // ── Heading ───────────────────────────────────────────────────
+              // ── Headline ──────────────────────────────────────────────────
               FadeSlideY(
                 delay: const Duration(milliseconds: 280),
                 child: Text(
-                  'Your Face is\nYour Key',
+                  'Reset Your Password',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 32,
+                    fontSize: 28,
                     fontWeight: FontWeight.w800,
-                    height: 1.15,
+                    height: 1.2,
                     color: headingColor,
-                    letterSpacing: -0.5,
+                    letterSpacing: -0.4,
                   ),
                 ),
               ),
               const SizedBox(height: 10),
 
-              // ── Sub-heading ───────────────────────────────────────────────
+              // ── Sub-text ──────────────────────────────────────────────────
               FadeSlideY(
                 delay: const Duration(milliseconds: 360),
                 child: Text(
-                  'Attendance powered by facial recognition\nand geo-fenced location security.',
+                  'Verify your face to reset your password.\nNo OTP. No email. Just you.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 14,
-                    height: 1.5,
+                    height: 1.55,
                     color: subtitleColor,
                     fontWeight: FontWeight.w400,
                   ),
                 ),
               ),
 
-              const Spacer(flex: 1),
+              const Spacer(flex: 2),
 
-              // ── Primary CTA: Activate Account ─────────────────────────────
+              // ── Security Badge ────────────────────────────────────────────
               FadeSlideY(
                 delay: const Duration(milliseconds: 440),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: theme.primaryColor.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: theme.primaryColor.withValues(alpha: 0.18),
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.shield_rounded,
+                          size: 14,
+                          color: theme.primaryColor,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Biometric — no admin required',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: theme.primaryColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // ── Primary CTA: Verify Face ───────────────────────────────────
+              FadeSlideY(
+                delay: const Duration(milliseconds: 500),
                 child: Container(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(14),
@@ -206,80 +265,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ],
                   ),
                   child: AnimatedButton(
-                    onPressed: () =>
-                        Navigator.of(context).pushNamed('/activate'),
+                    onPressed: () => Navigator.of(context).pushNamed(
+                      '/face_verification',
+                      arguments: 'password_reset',
+                    ),
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 20),
-                      elevation: 0, // shadow from Container
+                      elevation: 0,
                     ),
                     child: const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.person_add_alt_1_rounded, size: 20),
+                        Icon(Icons.face_retouching_natural_rounded, size: 20),
                         SizedBox(width: 8),
-                        Text(
-                          'Activate Account',
-                          style: TextStyle(fontSize: 16),
-                        ),
+                        Text('Verify Face', style: TextStyle(fontSize: 16)),
                       ],
                     ),
                   ),
                 ),
               ),
+
               const SizedBox(height: 12),
 
-              // ── Secondary CTA: Sign In ────────────────────────────────────
+              // ── Back to Sign In ───────────────────────────────────────────
               FadeSlideY(
-                delay: const Duration(milliseconds: 520),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () =>
-                        Navigator.of(context).pushNamed('/sign_in'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 13),
-                      side: BorderSide(
-                        color: theme.primaryColor.withValues(alpha: 0.55),
-                        width: 1.5,
-                      ),
-                      elevation: 0,
-                    ),
-                    child: const Text(
-                      'Sign In',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                delay: const Duration(milliseconds: 560),
+                child: TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text(
+                    '← Back to Sign In',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: subtitleColor,
                     ),
                   ),
                 ),
               ),
-              // Flexible so tagline gracefully disappears under pressure on tiny screens
-              Flexible(
-                fit: FlexFit.loose,
-                child: FadeSlideY(
-                  delay: const Duration(milliseconds: 600),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 14.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.lock_outline_rounded,
-                          size: 13,
-                          color: subtitleColor.withValues(alpha: 0.6),
-                        ),
-                        const SizedBox(width: 5),
-                        Text(
-                          'Secure face & location-based attendance',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: subtitleColor.withValues(alpha: 0.6),
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+
+              const Spacer(flex: 1),
             ],
           ),
         ),
@@ -288,14 +312,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 }
 
-// ─── Face Scan Ring Painter ────────────────────────────────────────────────────
-class _FaceScanPainter extends CustomPainter {
+// ─── Security Scan Painter ──────────────────────────────────────────────────
+class _SecurityScanPainter extends CustomPainter {
   final double progress;
+  final double pulse;
   final Color primaryColor;
   final bool isDark;
 
-  _FaceScanPainter({
+  _SecurityScanPainter({
     required this.progress,
+    required this.pulse,
     required this.primaryColor,
     required this.isDark,
   });
@@ -306,13 +332,13 @@ class _FaceScanPainter extends CustomPainter {
     final outerRadius = size.width / 2;
     final midRadius = outerRadius * 0.78;
 
-    // Static outer glow ring
+    // Pulsing outer glow
     final glowPaint = Paint()
-      ..color = primaryColor.withValues(alpha: 0.07)
+      ..color = primaryColor.withValues(alpha: 0.04 + pulse * 0.06)
       ..style = PaintingStyle.fill;
     canvas.drawCircle(center, outerRadius, glowPaint);
 
-    // Static mid ring (subtle border)
+    // Mid ring
     final ringPaint = Paint()
       ..color = primaryColor.withValues(alpha: isDark ? 0.18 : 0.12)
       ..style = PaintingStyle.stroke
@@ -327,7 +353,7 @@ class _FaceScanPainter extends CustomPainter {
         endAngle: math.pi * 2,
         colors: [
           primaryColor.withValues(alpha: 0.0),
-          primaryColor.withValues(alpha: 0.55),
+          primaryColor.withValues(alpha: 0.6),
           primaryColor.withValues(alpha: 0.0),
         ],
         stops: const [0.0, 0.5, 1.0],
@@ -340,27 +366,27 @@ class _FaceScanPainter extends CustomPainter {
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: midRadius),
       progress * math.pi * 2,
-      math.pi * 2 * 0.35, // 35% arc sweep
+      math.pi * 2 * 0.35,
       false,
       sweepPaint,
     );
 
-    // Corner bracket accents (top-left, top-right, bottom-left, bottom-right)
-    _drawBracket(canvas, center, midRadius * 0.88, primaryColor);
+    // Corner brackets
+    _drawBrackets(canvas, center, midRadius * 0.88, primaryColor);
   }
 
-  void _drawBracket(Canvas canvas, Offset center, double r, Color color) {
-    final bracketPaint = Paint()
-      ..color = color.withValues(alpha: 0.6)
+  void _drawBrackets(Canvas canvas, Offset center, double r, Color color) {
+    final paint = Paint()
+      ..color = color.withValues(alpha: 0.55)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.2
       ..strokeCap = StrokeCap.round;
-    const arcLen = 0.25; // in radians
+    const arcLen = 0.25;
     const offsets = [
-      -math.pi * 3 / 4, // top-left
-      -math.pi / 4, // top-right
-      math.pi / 4, // bottom-right
-      math.pi * 3 / 4, // bottom-left
+      -math.pi * 3 / 4,
+      -math.pi / 4,
+      math.pi / 4,
+      math.pi * 3 / 4,
     ];
     for (final start in offsets) {
       canvas.drawArc(
@@ -368,12 +394,12 @@ class _FaceScanPainter extends CustomPainter {
         start - arcLen / 2,
         arcLen,
         false,
-        bracketPaint,
+        paint,
       );
     }
   }
 
   @override
-  bool shouldRepaint(_FaceScanPainter old) =>
-      old.progress != progress || old.isDark != isDark;
+  bool shouldRepaint(_SecurityScanPainter old) =>
+      old.progress != progress || old.pulse != pulse || old.isDark != isDark;
 }

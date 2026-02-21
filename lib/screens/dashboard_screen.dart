@@ -43,8 +43,11 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -56,8 +59,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               'Hello, Student 👋',
               style: TextStyle(
                 color:
-                    Theme.of(context).textTheme.displayLarge?.color ??
-                    AppStyles.textDark,
+                    theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
                 fontWeight: FontWeight.bold,
                 fontSize: 24,
               ),
@@ -85,45 +87,23 @@ class _DashboardScreenState extends State<DashboardScreen>
         child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
           children: [
+            // ── System Readiness Card (merged Face + Location) ──────────────
             FadeSlideY(
               delay: const Duration(milliseconds: 100),
-              child: _StatusCard(
-                title: 'Face Status',
-                value: 'Active',
-                icon: Icons.face_retouching_natural_rounded,
-                statusColor: AppStyles.successGreen,
-                valueColor:
-                    Theme.of(context).textTheme.displayLarge?.color ??
-                    AppStyles.textDark,
-              ),
+              child: _SystemStatusCard(isDark: isDark),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 20),
+
+            // ── Hero: Last Attendance ────────────────────────────────────────
             FadeSlideY(
-              delay: const Duration(milliseconds: 250),
-              child: _StatusCard(
-                title: 'Location Status',
-                value: 'Set',
-                icon: Icons.location_on_rounded,
-                statusColor: AppStyles.successGreen,
-                valueColor:
-                    Theme.of(context).textTheme.displayLarge?.color ??
-                    AppStyles.textDark,
-              ),
+              delay: const Duration(milliseconds: 220),
+              child: _HeroAttendanceCard(theme: theme),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 32),
+
+            // ── Primary Action: Verify Face ──────────────────────────────────
             FadeSlideY(
-              delay: const Duration(milliseconds: 400),
-              child: _StatusCard(
-                title: 'Last Attendance',
-                value: '09:00 AM',
-                icon: Icons.access_time_rounded,
-                statusColor: Colors.transparent,
-                valueColor: Theme.of(context).primaryColor,
-              ),
-            ),
-            const SizedBox(height: 48),
-            FadeSlideY(
-              delay: const Duration(milliseconds: 550),
+              delay: const Duration(milliseconds: 340),
               child: AnimatedBuilder(
                 animation: _pulseAnimation,
                 builder: (context, child) {
@@ -133,9 +113,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                       decoration: BoxDecoration(
                         boxShadow: [
                           BoxShadow(
-                            color: Theme.of(
-                              context,
-                            ).primaryColor.withValues(alpha: 0.3),
+                            color: theme.primaryColor.withValues(alpha: 0.3),
                             blurRadius: 20,
                             spreadRadius: 2,
                           ),
@@ -164,29 +142,28 @@ class _DashboardScreenState extends State<DashboardScreen>
               ),
             ),
             const SizedBox(height: 16),
-            const FadeSlideY(
-              delay: Duration(milliseconds: 650),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: _ActionButton(
-                      label: 'Set Location',
-                      icon: Icons.my_location_rounded,
-                      isDestructive: false,
-                    ),
-                  ),
-                  SizedBox(width: 16),
-                  Expanded(
-                    child: _ActionButton(
-                      label: 'Delete Face',
-                      icon: Icons.delete_outline_rounded,
-                      isDestructive:
-                          false, // Changed to false to force primaryBlue styling
-                    ),
-                  ),
-                ],
+
+            // ── Secondary Action Tiles ───────────────────────────────────────
+            FadeSlideY(
+              delay: const Duration(milliseconds: 460),
+              child: _ActionTile(
+                label: 'Set Location',
+                subtitle: 'Update your attendance location',
+                icon: Icons.my_location_rounded,
+                isDestructive: false,
               ),
             ),
+            const SizedBox(height: 10),
+            FadeSlideY(
+              delay: const Duration(milliseconds: 560),
+              child: _ActionTile(
+                label: 'Reset Face Data',
+                subtitle: 'Re-register your face securely',
+                icon: Icons.lock_reset_rounded,
+                isDestructive: false,
+              ),
+            ),
+            const SizedBox(height: 16),
           ],
         ),
       ),
@@ -195,79 +172,51 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 }
 
-class _StatusCard extends StatelessWidget {
-  final String title;
-  final String value;
-  final IconData icon;
-  final Color statusColor;
-  final Color valueColor;
-
-  const _StatusCard({
-    required this.title,
-    required this.value,
-    required this.icon,
-    required this.statusColor,
-    required this.valueColor,
-  });
+// ─── System Status Card (Face + Location Combined) ────────────────────────────
+class _SystemStatusCard extends StatelessWidget {
+  final bool isDark;
+  const _SystemStatusCard({required this.isDark});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(20.0),
+        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 14.0),
         child: Row(
           children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: theme.primaryColor.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
+            // Label
+            Text(
+              'System',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                letterSpacing: 0.3,
               ),
-              child: Icon(icon, color: theme.primaryColor),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color:
-                          Theme.of(context).textTheme.bodyMedium?.color ??
-                          AppStyles.textGray,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      if (statusColor != Colors.transparent) ...[
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: statusColor,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      Text(
-                        value,
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: valueColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+            const Spacer(),
+            // Face Status
+            _StatusPill(
+              icon: Icons.face_retouching_natural_rounded,
+              label: 'Active',
+              color: AppStyles.successGreen,
+            ),
+            const SizedBox(width: 10),
+            // Divider
+            Container(
+              width: 1,
+              height: 20,
+              color: (isDark ? Colors.white : Colors.black).withValues(
+                alpha: 0.1,
               ),
+            ),
+            const SizedBox(width: 10),
+            // Location Status
+            _StatusPill(
+              icon: Icons.location_on_rounded,
+              label: 'Set',
+              color: AppStyles.successGreen,
             ),
           ],
         ),
@@ -276,46 +225,213 @@ class _StatusCard extends StatelessWidget {
   }
 }
 
-class _ActionButton extends StatelessWidget {
+class _StatusPill extends StatelessWidget {
+  final IconData icon;
   final String label;
+  final Color color;
+  const _StatusPill({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: color, size: 16),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Hero Attendance Card ──────────────────────────────────────────────────────
+class _HeroAttendanceCard extends StatelessWidget {
+  final ThemeData theme;
+  const _HeroAttendanceCard({required this.theme});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = theme.brightness == Brightness.dark;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 24),
+      decoration: BoxDecoration(
+        color: theme.primaryColor,
+        borderRadius: BorderRadius.circular(20),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            theme.primaryColor,
+            theme.primaryColor.withValues(alpha: 0.75),
+          ],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: theme.primaryColor.withValues(alpha: isDark ? 0.3 : 0.25),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.access_time_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Text(
+                'Last Attendance',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.white70,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            '09:00 AM',
+            style: TextStyle(
+              fontSize: 42,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+              letterSpacing: -1,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Container(
+                width: 7,
+                height: 7,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white70,
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Text(
+                'Oct 24, 2024 • Present',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Premium Action Tile ───────────────────────────────────────────────────────
+class _ActionTile extends StatelessWidget {
+  final String label;
+  final String subtitle;
   final IconData icon;
   final bool isDestructive;
 
-  const _ActionButton({
+  const _ActionTile({
     required this.label,
+    required this.subtitle,
     required this.icon,
     required this.isDestructive,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Determine content color (white for contrast over filled button backgrounds)
-    final color = isDestructive ? Colors.white : Colors.white;
+    final theme = Theme.of(context);
+    final color = isDestructive ? AppStyles.errorRed : theme.primaryColor;
 
-    return AnimatedButton(
-      onPressed: () {},
-      style: ElevatedButton.styleFrom(
-        // Override background color if destructive
-        backgroundColor: isDestructive
-            ? AppStyles.errorRed
-            : Theme.of(context).primaryColor,
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4.0),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 20, color: color),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 14,
-                color: color,
-                fontWeight: FontWeight.bold,
-              ),
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: () {},
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          decoration: BoxDecoration(
+            color: theme.cardTheme.color ?? Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isDestructive
+                  ? AppStyles.errorRed.withValues(alpha: 0.2)
+                  : color.withValues(alpha: 0.1),
+              width: 1,
             ),
-          ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: color, size: 20),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color:
+                            theme.textTheme.displayLarge?.color ??
+                            AppStyles.textDark,
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color:
+                            theme.textTheme.bodyMedium?.color ??
+                            AppStyles.textGray,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                size: 20,
+              ),
+            ],
+          ),
         ),
       ),
     );

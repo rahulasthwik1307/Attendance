@@ -50,8 +50,10 @@ class _HistoryScreenState extends State<HistoryScreen>
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -63,8 +65,7 @@ class _HistoryScreenState extends State<HistoryScreen>
               'History',
               style: TextStyle(
                 color:
-                    Theme.of(context).textTheme.displayLarge?.color ??
-                    AppStyles.textDark,
+                    theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
                 fontWeight: FontWeight.bold,
                 fontSize: 24,
               ),
@@ -83,8 +84,9 @@ class _HistoryScreenState extends State<HistoryScreen>
       body: SafeArea(
         child: Column(
           children: [
+            // ── Summary Cards ───────────────────────────────────────────────
             Padding(
-              padding: const EdgeInsets.all(24.0),
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 4),
               child: FadeSlideY(
                 delay: const Duration(milliseconds: 100),
                 child: Row(
@@ -96,7 +98,7 @@ class _HistoryScreenState extends State<HistoryScreen>
                         dotColor: AppStyles.successGreen,
                       ),
                     ),
-                    const SizedBox(width: 16),
+                    const SizedBox(width: 14),
                     Expanded(
                       child: _SummaryCard(
                         label: 'Rejected',
@@ -108,67 +110,46 @@ class _HistoryScreenState extends State<HistoryScreen>
                 ),
               ),
             ),
+
+            // ── Day-Grouped History List ─────────────────────────────────────
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
                 children: [
+                  // Today group
                   FadeSlideY(
                     delay: const Duration(milliseconds: 200),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8.0),
-                      child: Text(
-                        'Today',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color:
-                              Theme.of(context).textTheme.displayLarge?.color ??
-                              AppStyles.textDark,
+                    child: _DayGroup(
+                      label: 'Today',
+                      items: const [
+                        _AttendanceRecord(
+                          isSuccess: true,
+                          time: '09:05 AM',
+                          status: 'Present',
                         ),
-                      ),
+                      ],
                     ),
                   ),
+                  const SizedBox(height: 14),
+                  // Yesterday group (multiple attempts)
                   FadeSlideY(
-                    delay: const Duration(milliseconds: 300),
-                    child: const _HistoryItem(
-                      isSuccess: true,
-                      time: '09:05 AM',
-                      status: 'Present',
-                    ),
-                  ),
-                  FadeSlideY(
-                    delay: const Duration(milliseconds: 400),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8.0),
-                      child: Text(
-                        'Yesterday',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color:
-                              Theme.of(context).textTheme.displayLarge?.color ??
-                              AppStyles.textDark,
+                    delay: const Duration(milliseconds: 340),
+                    child: _DayGroup(
+                      label: 'Yesterday',
+                      items: const [
+                        _AttendanceRecord(
+                          isSuccess: false,
+                          time: '08:55 AM',
+                          status: 'Failed',
                         ),
-                      ),
+                        _AttendanceRecord(
+                          isSuccess: true,
+                          time: '09:15 AM',
+                          status: 'Present',
+                        ),
+                      ],
                     ),
                   ),
-                  FadeSlideY(
-                    delay: const Duration(milliseconds: 500),
-                    child: const _HistoryItem(
-                      isSuccess: false,
-                      time: '08:55 AM',
-                      status: 'Failed',
-                    ),
-                  ),
-                  FadeSlideY(
-                    delay: const Duration(milliseconds: 600),
-                    child: const _HistoryItem(
-                      isSuccess: true,
-                      time: '09:15 AM',
-                      status: 'Present',
-                    ),
-                  ),
-                  const SizedBox(height: 24),
                 ],
               ),
             ),
@@ -180,6 +161,7 @@ class _HistoryScreenState extends State<HistoryScreen>
   }
 }
 
+// ─── Summary Card (Animated count) ────────────────────────────────────────────
 class _SummaryCard extends AnimatedWidget {
   final String label;
   final Color dotColor;
@@ -193,17 +175,15 @@ class _SummaryCard extends AnimatedWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cardBase = Theme.of(context).cardTheme.color;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
       decoration: BoxDecoration(
-        color: Theme.of(context).cardTheme.color != null
-            ? Color.alphaBlend(
-                dotColor.withValues(alpha: 0.05),
-                Theme.of(context).cardTheme.color!,
-              )
+        color: cardBase != null
+            ? Color.alphaBlend(dotColor.withValues(alpha: 0.06), cardBase)
             : Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: dotColor.withValues(alpha: 0.1), width: 1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: dotColor.withValues(alpha: 0.15), width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.05),
@@ -225,12 +205,12 @@ class _SummaryCard extends AnimatedWidget {
                   color: dotColor,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 7),
               Text(
                 label,
                 style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
                   color: AppStyles.textGray,
                 ),
               ),
@@ -240,11 +220,12 @@ class _SummaryCard extends AnimatedWidget {
           Text(
             countAnimation.value.toString(),
             style: TextStyle(
-              fontSize: 34, // Slightly larger to emphasize numbers
-              fontWeight: FontWeight.w800, // Heavier weight
+              fontSize: 36,
+              fontWeight: FontWeight.w800,
               color:
                   Theme.of(context).textTheme.displayLarge?.color ??
                   AppStyles.textDark,
+              height: 1,
             ),
           ),
         ],
@@ -253,126 +234,186 @@ class _SummaryCard extends AnimatedWidget {
   }
 }
 
-class _HistoryItem extends StatelessWidget {
-  final bool isSuccess;
-  final String time;
-  final String status;
+// ─── Day Group Container ───────────────────────────────────────────────────────
+class _DayGroup extends StatelessWidget {
+  final String label;
+  final List<_AttendanceRecord> items;
 
-  const _HistoryItem({
-    required this.isSuccess,
-    required this.time,
-    required this.status,
-  });
+  const _DayGroup({required this.label, required this.items});
 
   @override
   Widget build(BuildContext context) {
-    final iconColor = isSuccess ? AppStyles.successGreen : AppStyles.errorRed;
-    final iconData = isSuccess
-        ? Icons.check_circle_rounded
-        : Icons.cancel_rounded;
-    final title = isSuccess ? 'Face Verified' : 'Verification Failed';
+    final theme = Theme.of(context);
+    final cardColor = theme.cardTheme.color ?? Colors.white;
+    final isDark = theme.brightness == Brightness.dark;
+    final dividerColor = isDark ? Colors.white12 : const Color(0xFFE8EDF2);
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12.0),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Row(
-          children: [
-            Icon(iconData, color: iconColor, size: 28),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color:
-                          Theme.of(context).textTheme.displayLarge?.color ??
-                          AppStyles.textDark,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    time,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color:
-                          Theme.of(context).textTheme.bodyMedium?.color ??
-                          AppStyles.textGray,
-                    ),
-                  ),
-                ],
-              ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Day label
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10.0, left: 2),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+              letterSpacing: 0.5,
             ),
-            _StatusBadge(status: status, isSuccess: isSuccess),
-          ],
+          ),
         ),
-      ),
+        // All attempts in one unified card
+        Container(
+          decoration: BoxDecoration(
+            color: cardColor,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.06),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              for (int i = 0; i < items.length; i++) ...[
+                _HistoryRow(record: items[i]),
+                if (i < items.length - 1)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Divider(height: 1, color: dividerColor),
+                  ),
+              ],
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
 
-class _StatusBadge extends StatefulWidget {
-  final String status;
+// Internal record data class
+class _AttendanceRecord {
   final bool isSuccess;
-
-  const _StatusBadge({required this.status, required this.isSuccess});
-
-  @override
-  State<_StatusBadge> createState() => _StatusBadgeState();
+  final String time;
+  final String status;
+  const _AttendanceRecord({
+    required this.isSuccess,
+    required this.time,
+    required this.status,
+  });
 }
 
-class _StatusBadgeState extends State<_StatusBadge>
+// ─── History Row (inside a Day Group) ─────────────────────────────────────────
+class _HistoryRow extends StatefulWidget {
+  final _AttendanceRecord record;
+  const _HistoryRow({required this.record});
+
+  @override
+  State<_HistoryRow> createState() => _HistoryRowState();
+}
+
+class _HistoryRowState extends State<_HistoryRow>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _scaleAnimation;
+  late AnimationController _badgeController;
+  late Animation<double> _badgeScale;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
+    _badgeController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 400),
+      duration: const Duration(milliseconds: 350),
     );
-    _scaleAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.elasticOut));
-    Future.delayed(const Duration(milliseconds: 600), () {
-      if (mounted) _controller.forward();
+    _badgeScale = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _badgeController, curve: Curves.easeOutBack),
+    );
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) _badgeController.forward();
     });
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _badgeController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final color = widget.isSuccess
-        ? AppStyles.successGreen
-        : AppStyles.errorRed;
-    return ScaleTransition(
-      scale: _scaleAnimation,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(
-          widget.status,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-            color: color, // The vibrant pure color is preferred for both modes
+    final theme = Theme.of(context);
+    final isSuccess = widget.record.isSuccess;
+    final color = isSuccess ? AppStyles.successGreen : AppStyles.errorRed;
+    final title = isSuccess ? 'Face Verified' : 'Verification Failed';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
+      child: Row(
+        children: [
+          // Status icon
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isSuccess ? Icons.check_circle_rounded : Icons.cancel_rounded,
+              color: color,
+              size: 20,
+            ),
           ),
-        ),
+          const SizedBox(width: 14),
+          // Title + time
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color:
+                        theme.textTheme.displayLarge?.color ??
+                        AppStyles.textDark,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  widget.record.time,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color:
+                        theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Animated status badge
+          ScaleTransition(
+            scale: _badgeScale,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                widget.record.status,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
