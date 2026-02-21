@@ -196,8 +196,14 @@ class _SummaryCard extends AnimatedWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
       decoration: BoxDecoration(
-        color: Theme.of(context).cardTheme.color ?? Colors.white,
+        color: Theme.of(context).cardTheme.color != null
+            ? Color.alphaBlend(
+                dotColor.withValues(alpha: 0.05),
+                Theme.of(context).cardTheme.color!,
+              )
+            : Colors.white,
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: dotColor.withValues(alpha: 0.1), width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.05),
@@ -234,8 +240,8 @@ class _SummaryCard extends AnimatedWidget {
           Text(
             countAnimation.value.toString(),
             style: TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
+              fontSize: 34, // Slightly larger to emphasize numbers
+              fontWeight: FontWeight.w800, // Heavier weight
               color:
                   Theme.of(context).textTheme.displayLarge?.color ??
                   AppStyles.textDark,

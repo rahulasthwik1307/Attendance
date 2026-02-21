@@ -209,10 +209,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: theme.primaryColor.withValues(alpha: 0.1),
+              color: theme.primaryColor.withValues(
+                alpha: 0.15,
+              ), // Slightly more opaque
               shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: theme.primaryColor.withValues(
+                    alpha: 0.2,
+                  ), // Subtle glow
+                  blurRadius: 12,
+                  spreadRadius: 2,
+                ),
+              ],
             ),
-            child: Icon(icon, color: theme.primaryColor),
+            child: Icon(
+              icon,
+              color: theme.primaryColor,
+              size: 26,
+            ), // Slightly larger icon
           ),
           const SizedBox(width: 16),
           Expanded(

@@ -91,8 +91,10 @@ class AppStyles {
         surface: surfaceDark,
       ),
       textTheme: GoogleFonts.poppinsTextTheme().apply(
-        bodyColor: Colors.white.withValues(alpha: 0.95),
-        displayColor: Colors.white,
+        bodyColor: Colors.grey.shade400, // Softer light-gray for subtitles/body
+        displayColor: Colors.white.withValues(
+          alpha: 0.95,
+        ), // Near-white for headings
       ),
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.transparent,
