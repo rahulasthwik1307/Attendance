@@ -299,7 +299,7 @@ class _SignInScreenState extends State<SignInScreen> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             return SingleChildScrollView(
-              physics: const ClampingScrollPhysics(),
+              physics: const NeverScrollableScrollPhysics(),
               child: ConstrainedBox(
                 constraints: BoxConstraints(minHeight: constraints.maxHeight),
                 child: Padding(
@@ -415,90 +415,80 @@ class _SignInFieldState extends State<_SignInField> {
     // Soft muted red — calmer than AppStyles.errorRed
     const softErrorColor = Color(0xFFD05050);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          widget.label,
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w600,
-            color: widget.isDark ? Colors.grey.shade300 : AppStyles.textDark,
-            letterSpacing: 0.1,
-          ),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: _isFocused
+            ? [
+                BoxShadow(
+                  color: theme.primaryColor.withValues(alpha: 0.18),
+                  blurRadius: 10,
+                ),
+              ]
+            : [],
+      ),
+      child: TextFormField(
+        focusNode: _focusNode,
+        controller: widget.controller,
+        obscureText: widget.obscureText,
+        textInputAction: widget.textInputAction,
+        onFieldSubmitted: widget.onFieldSubmitted,
+        validator: widget.validator,
+        style: TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w500,
+          color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
         ),
-        const SizedBox(height: 7),
-        AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-          decoration: BoxDecoration(
+        decoration: InputDecoration(
+          labelText: widget.label,
+          hintText: widget.hint,
+          labelStyle: const TextStyle(
+            color: AppStyles.textGray,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
+          hintStyle: TextStyle(
+            color: AppStyles.textGray.withValues(alpha: 0.45),
+            fontSize: 14,
+          ),
+          prefixIcon: Icon(
+            widget.prefixIcon,
+            size: 20,
+            color: AppStyles.textGray.withValues(alpha: 0.65),
+          ),
+          suffixIcon: widget.suffixIcon,
+          filled: true,
+          fillColor: widget.fillColor,
+          // Keep error text small and calm
+          errorStyle: const TextStyle(
+            fontSize: 11.5,
+            color: softErrorColor,
+            fontWeight: FontWeight.w500,
+          ),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 16,
+          ),
+          enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            boxShadow: _isFocused
-                ? [
-                    BoxShadow(
-                      color: theme.primaryColor.withValues(alpha: 0.18),
-                      blurRadius: 10,
-                    ),
-                  ]
-                : [],
+            borderSide: BorderSide(color: widget.borderColor, width: 1),
           ),
-          child: TextFormField(
-            focusNode: _focusNode,
-            controller: widget.controller,
-            obscureText: widget.obscureText,
-            textInputAction: widget.textInputAction,
-            onFieldSubmitted: widget.onFieldSubmitted,
-            validator: widget.validator,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
-              color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
-            ),
-            decoration: InputDecoration(
-              hintText: widget.hint,
-              hintStyle: TextStyle(
-                color: AppStyles.textGray.withValues(alpha: 0.45),
-                fontSize: 14,
-              ),
-              prefixIcon: Icon(
-                widget.prefixIcon,
-                size: 20,
-                color: AppStyles.textGray.withValues(alpha: 0.65),
-              ),
-              suffixIcon: widget.suffixIcon,
-              filled: true,
-              fillColor: widget.fillColor,
-              // Keep error text small and calm
-              errorStyle: const TextStyle(
-                fontSize: 11.5,
-                color: softErrorColor,
-                fontWeight: FontWeight.w500,
-              ),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 16,
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: widget.borderColor, width: 1),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: theme.primaryColor, width: 1.5),
-              ),
-              errorBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: softErrorColor, width: 1.2),
-              ),
-              focusedErrorBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: softErrorColor, width: 1.5),
-              ),
-            ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: theme.primaryColor, width: 1.5),
+          ),
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: softErrorColor, width: 1.2),
+          ),
+          focusedErrorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: softErrorColor, width: 1.5),
           ),
         ),
-      ],
+      ),
     );
   }
 }

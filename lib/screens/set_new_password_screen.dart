@@ -64,20 +64,26 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
   _Strength _strength = _Strength.empty;
   bool _isMatch = true;
   bool _confirmTouched = false;
+  bool _hasTriedSave = false;
+  bool _showWeakError = false;
 
-  // Demo mode: accept any non-empty matching pair
+  // Enforce Strong password requirement
   bool get _canSubmit =>
       _newPwController.text.isNotEmpty &&
       _confirmPwController.text.isNotEmpty &&
-      _newPwController.text == _confirmPwController.text;
+      _newPwController.text == _confirmPwController.text &&
+      _strength == _Strength.strong;
 
   void _onNewPasswordChanged(String v) => setState(() {
+    _hasTriedSave = false;
+    _showWeakError = false;
     _strength = _computeStrength(v);
     if (_confirmTouched) _isMatch = v == _confirmPwController.text;
   });
 
   void _onConfirmPasswordChanged(String v) => setState(() {
-    _confirmTouched = true;
+    _hasTriedSave = false;
+    _confirmTouched = v.isNotEmpty;
     _isMatch = _newPwController.text == v;
   });
 
@@ -85,11 +91,19 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
     if (_isSuccess) return;
 
     if (!_canSubmit) {
+      setState(() => _hasTriedSave = true);
       if (_newPwController.text.isEmpty) {
         _newPwFieldKey.currentState?.shake();
       }
       if (_confirmPwController.text.isEmpty || !_isMatch) {
         _confirmPwFieldKey.currentState?.shake();
+      }
+      if (_newPwController.text.isNotEmpty &&
+          _confirmPwController.text.isNotEmpty &&
+          _isMatch &&
+          _strength != _Strength.strong) {
+        _newPwFieldKey.currentState?.shake();
+        setState(() => _showWeakError = true);
       }
       return;
     }
@@ -216,6 +230,8 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
         isMatch: _isMatch,
         canSubmit: _canSubmit,
         isSuccess: _isSuccess,
+        hasTriedSave: _hasTriedSave,
+        showWeakError: _showWeakError,
         onSave: _onSave,
       ),
     );
@@ -238,14 +254,22 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
         : AppStyles.backgroundLight;
 
     return PopScope(
-      canPop: false,
+      canPop: true,
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
         resizeToAvoidBottomInset: true,
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
-          automaticallyImplyLeading: false,
+          automaticallyImplyLeading: true,
+          leading: IconButton(
+            icon: Icon(
+              Icons.arrow_back_ios_new_rounded,
+              size: 20,
+              color: headingColor,
+            ),
+            onPressed: () => Navigator.of(context).maybePop(),
+          ),
         ),
         body: SafeArea(
           child: LayoutBuilder(
@@ -260,6 +284,7 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        const SizedBox(height: 24),
                         _buildHeader(
                           theme,
                           headingColor,
@@ -306,6 +331,8 @@ class _PasswordCard extends StatelessWidget {
 
   final bool canSubmit;
   final bool isSuccess;
+  final bool hasTriedSave;
+  final bool showWeakError;
   final VoidCallback onSave;
 
   const _PasswordCard({
@@ -328,6 +355,8 @@ class _PasswordCard extends StatelessWidget {
     required this.isMatch,
     required this.canSubmit,
     required this.isSuccess,
+    required this.hasTriedSave,
+    required this.showWeakError,
     required this.onSave,
   });
 
@@ -368,14 +397,34 @@ class _PasswordCard extends StatelessWidget {
               fillColor: inputFill,
               isDark: isDark,
               theme: theme,
-              isError: false,
+              isError:
+                  hasTriedSave &&
+                  strength != _Strength.strong &&
+                  newController.text.isNotEmpty,
+              hasTriedSave: hasTriedSave,
+              emptyError: 'Please enter your password',
             ),
           ),
 
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
 
           // ── Strength bar ──────────────────────────────────────────────
-          _StrengthBar(strength: strength),
+          _StrengthBar(strength: strength, pwLength: newController.text.length),
+
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            child: showWeakError
+                ? const Text(
+                    'Make your password stronger to continue',
+                    style: TextStyle(
+                      color: AppStyles.errorRed,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
 
           const SizedBox(height: 18),
 
@@ -393,13 +442,15 @@ class _PasswordCard extends StatelessWidget {
               isDark: isDark,
               theme: theme,
               isError: confirmTouched && !isMatch,
+              hasTriedSave: hasTriedSave,
+              emptyError: 'Please confirm your password',
             ),
           ),
 
           // ── Match status ──────────────────────────────────────────────
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 220),
-            child: confirmTouched
+            child: (confirmTouched && confirmController.text.isNotEmpty)
                 ? Padding(
                     key: ValueKey(isMatch),
                     padding: const EdgeInsets.only(
@@ -452,16 +503,7 @@ class _PasswordCard extends StatelessWidget {
                   : [],
             ),
             child: AnimatedButton(
-              onPressed: canSubmit
-                  ? onSave
-                  : () {
-                      if (newController.text.isEmpty) {
-                        newFieldKey.currentState?.shake();
-                      }
-                      if (confirmController.text.isEmpty || !isMatch) {
-                        confirmFieldKey.currentState?.shake();
-                      }
-                    },
+              onPressed: onSave,
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 18),
                 elevation: 0,
@@ -504,6 +546,8 @@ class _CardField extends StatefulWidget {
   final bool isDark;
   final ThemeData theme;
   final bool isError;
+  final bool hasTriedSave;
+  final String? emptyError;
 
   const _CardField({
     required this.controller,
@@ -516,6 +560,8 @@ class _CardField extends StatefulWidget {
     required this.isDark,
     required this.theme,
     required this.isError,
+    required this.hasTriedSave,
+    this.emptyError,
   });
 
   @override
@@ -555,6 +601,10 @@ class _CardFieldState extends State<_CardField> {
         ? Colors.white12
         : const Color(0xFFDDE4ED);
     final errorColor = AppStyles.errorRed;
+    final explicitlyError = widget.isError;
+    final effectivelyError =
+        explicitlyError ||
+        (widget.hasTriedSave && widget.controller.text.isEmpty);
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
@@ -594,9 +644,13 @@ class _CardFieldState extends State<_CardField> {
             color: AppStyles.textGray.withValues(alpha: 0.5),
             fontSize: 14,
           ),
+          errorText: (widget.hasTriedSave && widget.controller.text.isEmpty)
+              ? widget.emptyError
+              : null,
+          errorStyle: const TextStyle(color: AppStyles.errorRed, fontSize: 12),
           prefixIcon: Icon(
             Icons.lock_outline_rounded,
-            color: widget.isError ? errorColor : AppStyles.textGray,
+            color: effectivelyError ? errorColor : AppStyles.textGray,
             size: 20,
           ),
           suffixIcon: IconButton(
@@ -622,14 +676,14 @@ class _CardFieldState extends State<_CardField> {
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide(
-              color: widget.isError ? errorColor : borderColor,
-              width: widget.isError ? 1.5 : 1,
+              color: effectivelyError ? errorColor : borderColor,
+              width: effectivelyError ? 1.5 : 1,
             ),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide(
-              color: widget.isError ? errorColor : widget.theme.primaryColor,
+              color: effectivelyError ? errorColor : widget.theme.primaryColor,
               width: 1.5,
             ),
           ),
@@ -651,7 +705,8 @@ class _CardFieldState extends State<_CardField> {
 
 class _StrengthBar extends StatelessWidget {
   final _Strength strength;
-  const _StrengthBar({required this.strength});
+  final int pwLength;
+  const _StrengthBar({required this.strength, required this.pwLength});
 
   @override
   Widget build(BuildContext context) {
@@ -663,58 +718,80 @@ class _StrengthBar extends StatelessWidget {
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.06);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        LayoutBuilder(
-          builder: (_, constraints) => Stack(
-            children: [
-              // Track
-              Container(
-                height: 5,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: trackColor,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              // Animated fill
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 350),
-                curve: Curves.easeInOut,
-                height: 5,
-                width: constraints.maxWidth * fraction,
-                decoration: BoxDecoration(
-                  color: color,
-                  borderRadius: BorderRadius.circular(10),
-                  boxShadow: fraction > 0
-                      ? [
-                          BoxShadow(
-                            color: color.withValues(alpha: 0.4),
-                            blurRadius: 6,
-                            offset: const Offset(0, 2),
+    final bool isEmpty = pwLength == 0 && strength == _Strength.empty;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 0),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+        height: isEmpty ? 0.0 : 34.0, // 24 (bar/label height) + 10 (spacing)
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+          opacity: isEmpty ? 0.0 : 1.0,
+          child: SingleChildScrollView(
+            physics: const NeverScrollableScrollPhysics(),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                LayoutBuilder(
+                  builder: (_, constraints) => ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Stack(
+                      children: [
+                        // Track
+                        Container(
+                          height: 5,
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            color: trackColor,
+                            borderRadius: BorderRadius.circular(10),
                           ),
-                        ]
-                      : [],
+                        ),
+                        // Animated fill
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 350),
+                          curve: Curves.easeInOut,
+                          height: 5,
+                          width: constraints.maxWidth * fraction,
+                          decoration: BoxDecoration(
+                            color: color,
+                            borderRadius: BorderRadius.circular(10),
+                            boxShadow: fraction > 0
+                                ? [
+                                    BoxShadow(
+                                      color: color.withValues(alpha: 0.4),
+                                      blurRadius: 6,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ]
+                                : [],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            ],
+                if (label.isNotEmpty) ...[
+                  const SizedBox(height: 5),
+                  AnimatedDefaultTextStyle(
+                    duration: const Duration(milliseconds: 250),
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: color,
+                      letterSpacing: 0.3,
+                    ),
+                    child: Text(label),
+                  ),
+                ],
+                const SizedBox(height: 10),
+              ],
+            ),
           ),
         ),
-        if (label.isNotEmpty) ...[
-          const SizedBox(height: 5),
-          AnimatedDefaultTextStyle(
-            duration: const Duration(milliseconds: 250),
-            style: TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-              color: color,
-              letterSpacing: 0.3,
-            ),
-            child: Text(label),
-          ),
-        ],
-      ],
+      ),
     );
   }
 }
