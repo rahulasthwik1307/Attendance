@@ -43,31 +43,31 @@ class _AnimatedButtonState extends State<AnimatedButton>
 
   @override
   Widget build(BuildContext context) {
-    return ScaleTransition(
-      scale: _scaleAnimation,
-      child: ElevatedButton(
-        onPressed: () {
-          widget.onPressed();
-        },
-        onFocusChange: (hasFocus) {
-          if (hasFocus) {
-            _controller.forward();
-          } else {
-            _controller.reverse();
-          }
-        },
-        onHover: (isHovering) {
-          if (isHovering) {
-            _controller.forward();
-          } else {
-            _controller.reverse();
-          }
-        },
-        style: widget.style,
-        child: Listener(
-          onPointerDown: (_) => _controller.forward(),
-          onPointerUp: (_) => _controller.reverse(),
-          onPointerCancel: (_) => _controller.reverse(),
+    return Listener(
+      onPointerDown: (_) => _controller.forward(),
+      onPointerUp: (_) => _controller.reverse(),
+      onPointerCancel: (_) => _controller.reverse(),
+      child: ScaleTransition(
+        scale: _scaleAnimation,
+        child: ElevatedButton(
+          onPressed: () {
+            widget.onPressed();
+          },
+          onFocusChange: (hasFocus) {
+            if (hasFocus) {
+              _controller.forward();
+            } else {
+              _controller.reverse();
+            }
+          },
+          onHover: (isHovering) {
+            if (isHovering) {
+              _controller.forward();
+            } else {
+              _controller.reverse();
+            }
+          },
+          style: widget.style,
           child: widget.child,
         ),
       ),

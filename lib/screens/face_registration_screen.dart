@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import '../utils/app_styles.dart';
+import '../utils/auth_flow_state.dart';
 
 class FaceRegistrationScreen extends StatefulWidget {
   const FaceRegistrationScreen({super.key});
@@ -29,6 +30,13 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   @override
   void initState() {
     super.initState();
+
+    // Security Guard: Prevent access if password hasn't been set/activated
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!AuthFlowState.instance.passwordSet) {
+        Navigator.of(context).pushReplacementNamed('/sign_in');
+      }
+    });
 
     _rotationController = AnimationController(
       vsync: this,
@@ -82,178 +90,179 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     final screenSize = MediaQuery.of(context).size;
     final circleSize = screenSize.width * 0.75;
 
-    return Scaffold(
-      backgroundColor: AppStyles.backgroundLight,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Top App Bar Area
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 16.0,
-                vertical: 8.0,
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(
-                      Icons.arrow_back_ios_new_rounded,
-                      color: AppStyles.textDark,
-                    ),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                  const Spacer(),
-                  const Column(
-                    children: [
-                      Text(
-                        'Step 2 of 3',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppStyles.textGray,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      Text(
-                        'Face Registration',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: AppStyles.textDark,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
-                  const SizedBox(width: 48), // Balance for icon button
-                ],
-              ),
-            ),
-            Expanded(
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  // Simulated Camera Feed Placeholder
-                  Container(
-                    width: circleSize,
-                    height: circleSize,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.grey.shade300,
-                      image: const DecorationImage(
-                        image: NetworkImage(
-                          'https://picsum.photos/400/400?grayscale',
-                        ),
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                  ),
-                  // Frosted Glass Overlay outside circle is not easily doable with single standard ClipPath unless we invert it.
-                  // Instead we use a ColorFiltered or CustomPaint over the entire screen except the circle.
-                  ColorFiltered(
-                    colorFilter: ColorFilter.mode(
-                      Colors.white.withValues(alpha: 0.8),
-                      BlendMode.srcOut,
-                    ),
-                    child: Container(
-                      decoration: const BoxDecoration(
-                        color: Colors.transparent,
-                      ),
-                      child: Container(
-                        width: circleSize,
-                        height: circleSize,
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.black,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // Rotating Dashed Border
-                  AnimatedBuilder(
-                    animation: _rotationController,
-                    builder: (context, child) {
-                      return Transform.rotate(
-                        angle: _rotationController.value * 2 * math.pi,
-                        child: CustomPaint(
-                          size: Size(circleSize, circleSize),
-                          painter: _DashedCirclePainter(),
-                        ),
-                      );
-                    },
-                  ),
-
-                  // Scanning Line
-                  AnimatedBuilder(
-                    animation: _scanLineController,
-                    builder: (context, child) {
-                      return Positioned(
-                        top:
-                            (screenSize.height / 2 - circleSize / 2) -
-                            80 +
-                            (_scanLineController.value * circleSize),
-                        child: Container(
-                          width: circleSize * 0.9,
-                          height: 3,
-                          decoration: BoxDecoration(
-                            color: AppStyles.primaryBlue,
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppStyles.primaryBlue.withValues(
-                                  alpha: 0.8,
-                                ),
-                                blurRadius: 10,
-                                spreadRadius: 2,
-                              ),
-                            ],
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: AppStyles.backgroundLight,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // Top App Bar Area
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16.0,
+                  vertical: 8.0,
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 48), // Balance for icon button
+                    const Spacer(),
+                    const Column(
+                      children: [
+                        Text(
+                          'Step 2 of 3',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppStyles.textGray,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                      );
-                    },
-                  ),
-                ],
+                        Text(
+                          'Face Registration',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: AppStyles.textDark,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Spacer(),
+                    const SizedBox(width: 48), // Balance for icon button
+                  ],
+                ),
               ),
-            ),
-            // Instructions
-            Padding(
-              padding: const EdgeInsets.only(bottom: 48.0),
-              child: FadeTransition(
-                opacity: _textFadeController,
-                child: Column(
+              Expanded(
+                child: Stack(
+                  alignment: Alignment.center,
                   children: [
-                    Text(
-                      _instructions[_instructionIndex],
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: AppStyles.primaryBlue,
+                    // Simulated Camera Feed Placeholder
+                    Container(
+                      width: circleSize,
+                      height: circleSize,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.grey.shade300,
+                        image: const DecorationImage(
+                          image: NetworkImage(
+                            'https://picsum.photos/400/400?grayscale',
+                          ),
+                          fit: BoxFit.cover,
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Position your face within the circle',
-                      style: TextStyle(fontSize: 14, color: AppStyles.textGray),
+                    // Frosted Glass Overlay outside circle is not easily doable with single standard ClipPath unless we invert it.
+                    // Instead we use a ColorFiltered or CustomPaint over the entire screen except the circle.
+                    ColorFiltered(
+                      colorFilter: ColorFilter.mode(
+                        Colors.white.withValues(alpha: 0.8),
+                        BlendMode.srcOut,
+                      ),
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          color: Colors.transparent,
+                        ),
+                        child: Container(
+                          width: circleSize,
+                          height: circleSize,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.black,
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    // Rotating Dashed Border
+                    AnimatedBuilder(
+                      animation: _rotationController,
+                      builder: (context, child) {
+                        return Transform.rotate(
+                          angle: _rotationController.value * 2 * math.pi,
+                          child: CustomPaint(
+                            size: Size(circleSize, circleSize),
+                            painter: _DashedCirclePainter(),
+                          ),
+                        );
+                      },
+                    ),
+
+                    // Scanning Line
+                    AnimatedBuilder(
+                      animation: _scanLineController,
+                      builder: (context, child) {
+                        return Positioned(
+                          top:
+                              (screenSize.height / 2 - circleSize / 2) -
+                              80 +
+                              (_scanLineController.value * circleSize),
+                          child: Container(
+                            width: circleSize * 0.9,
+                            height: 3,
+                            decoration: BoxDecoration(
+                              color: AppStyles.primaryBlue,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppStyles.primaryBlue.withValues(
+                                    alpha: 0.8,
+                                  ),
+                                  blurRadius: 10,
+                                  spreadRadius: 2,
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),
               ),
-            ),
-            // Cancel Button
-            Padding(
-              padding: const EdgeInsets.only(bottom: 24.0),
-              child: TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text(
-                  'Cancel Registration',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: AppStyles.textGray,
+              // Instructions
+              Padding(
+                padding: const EdgeInsets.only(bottom: 48.0),
+                child: FadeTransition(
+                  opacity: _textFadeController,
+                  child: Column(
+                    children: [
+                      Text(
+                        _instructions[_instructionIndex],
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: AppStyles.primaryBlue,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Position your face within the circle',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppStyles.textGray,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-            ),
-          ],
+              // Cancel Button
+              Padding(
+                padding: const EdgeInsets.only(bottom: 24.0),
+                child: TextButton(
+                  onPressed: () =>
+                      Navigator.of(context).pushReplacementNamed('/home'),
+                  child: const Text(
+                    'Cancel Registration',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: AppStyles.textGray,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

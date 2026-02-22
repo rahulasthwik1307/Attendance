@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../utils/app_styles.dart';
 import '../widgets/animated_button.dart';
 import '../widgets/fade_slide_y.dart';
+import '../utils/auth_flow_state.dart';
 
 class FaceCapturePreviewScreen extends StatelessWidget {
   const FaceCapturePreviewScreen({super.key});
@@ -93,8 +94,12 @@ class FaceCapturePreviewScreen extends StatelessWidget {
               FadeSlideY(
                 delay: const Duration(milliseconds: 400),
                 child: AnimatedButton(
-                  onPressed: () =>
-                      Navigator.of(context).pushReplacementNamed('/dashboard'),
+                  onPressed: () {
+                    AuthFlowState.instance.faceRegistered = true;
+                    Navigator.of(
+                      context,
+                    ).pushNamedAndRemoveUntil('/dashboard', (route) => false);
+                  },
                   child: const Text('Save & Verify'),
                 ),
               ),

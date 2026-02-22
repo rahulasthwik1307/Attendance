@@ -2,56 +2,47 @@ import 'package:flutter/material.dart';
 import '../utils/app_styles.dart';
 import '../widgets/animated_button.dart';
 import '../widgets/fade_slide_y.dart';
+import '../utils/auth_flow_state.dart';
 
-// ─── Strength levels ─────────────────────────────────────────────────────────
-enum _PasswordStrength { empty, weak, medium, strong }
+// ─── Strength helpers ─────────────────────────────────────────────────────────
 
-_PasswordStrength _computeStrength(String password) {
-  if (password.isEmpty) return _PasswordStrength.empty;
+enum _Strength { empty, weak, medium, strong }
+
+_Strength _computeStrength(String pw) {
+  if (pw.isEmpty) return _Strength.empty;
   int score = 0;
-  if (password.length >= 8) score++;
-  if (RegExp(r'[A-Z]').hasMatch(password) &&
-      RegExp(r'[a-z]').hasMatch(password)) {
-    score++;
-  }
-  if (RegExp(r'[0-9]').hasMatch(password)) {
-    score++;
-  }
-  if (RegExp(r'[!@#\$&*~%^()_\-+=\[\]{};:,.<>?/\\|`]').hasMatch(password)) {
-    score++;
-  }
-  if (score <= 1) return _PasswordStrength.weak;
-  if (score <= 2) return _PasswordStrength.medium;
-  return _PasswordStrength.strong;
+  if (pw.length >= 8) score++;
+  if (RegExp(r'[A-Z]').hasMatch(pw) && RegExp(r'[a-z]').hasMatch(pw)) score++;
+  if (RegExp(r'[0-9]').hasMatch(pw)) score++;
+  if (RegExp(r'[!@#\$&*~%^()_\-+=\[\]{};:,.<>?/\\|`]').hasMatch(pw)) score++;
+  if (score <= 1) return _Strength.weak;
+  if (score <= 2) return _Strength.medium;
+  return _Strength.strong;
 }
 
-Color _strengthColor(_PasswordStrength s) {
-  switch (s) {
-    case _PasswordStrength.weak:
-      return AppStyles.errorRed;
-    case _PasswordStrength.medium:
-      return AppStyles.warningYellow;
-    case _PasswordStrength.strong:
-      return AppStyles.successGreen;
-    case _PasswordStrength.empty:
-      return Colors.transparent;
-  }
-}
+Color _strengthColor(_Strength s) => switch (s) {
+  _Strength.weak => AppStyles.errorRed,
+  _Strength.medium => AppStyles.warningYellow,
+  _Strength.strong => AppStyles.successGreen,
+  _Strength.empty => Colors.transparent,
+};
 
-String _strengthLabel(_PasswordStrength s) {
-  switch (s) {
-    case _PasswordStrength.weak:
-      return 'Weak';
-    case _PasswordStrength.medium:
-      return 'Medium';
-    case _PasswordStrength.strong:
-      return 'Strong';
-    case _PasswordStrength.empty:
-      return '';
-  }
-}
+String _strengthLabel(_Strength s) => switch (s) {
+  _Strength.weak => 'Weak',
+  _Strength.medium => 'Medium',
+  _Strength.strong => 'Strong',
+  _Strength.empty => '',
+};
 
-// ─── Screen ──────────────────────────────────────────────────────────────────
+double _strengthFraction(_Strength s) => switch (s) {
+  _Strength.empty => 0.0,
+  _Strength.weak => 0.30,
+  _Strength.medium => 0.65,
+  _Strength.strong => 1.0,
+};
+
+// ─── Screen ───────────────────────────────────────────────────────────────────
+
 class SetNewPasswordScreen extends StatefulWidget {
   const SetNewPasswordScreen({super.key});
 
@@ -63,41 +54,53 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
   final _newPwController = TextEditingController();
   final _confirmPwController = TextEditingController();
 
+  final _newPwFieldKey = GlobalKey<_ShakeWidgetState>();
+  final _confirmPwFieldKey = GlobalKey<_ShakeWidgetState>();
+
   bool _obscureNew = true;
   bool _obscureConfirm = true;
+  bool _isSuccess = false;
 
-  _PasswordStrength _strength = _PasswordStrength.empty;
-  bool _isMatch = true; // true = no error shown yet
+  _Strength _strength = _Strength.empty;
+  bool _isMatch = true;
   bool _confirmTouched = false;
 
+  // Demo mode: accept any non-empty matching pair
   bool get _canSubmit =>
       _newPwController.text.isNotEmpty &&
       _confirmPwController.text.isNotEmpty &&
-      _newPwController.text == _confirmPwController.text &&
-      _strength != _PasswordStrength.weak;
+      _newPwController.text == _confirmPwController.text;
 
-  void _onNewPasswordChanged(String value) {
-    setState(() {
-      _strength = _computeStrength(value);
-      if (_confirmTouched) {
-        _isMatch = value == _confirmPwController.text;
+  void _onNewPasswordChanged(String v) => setState(() {
+    _strength = _computeStrength(v);
+    if (_confirmTouched) _isMatch = v == _confirmPwController.text;
+  });
+
+  void _onConfirmPasswordChanged(String v) => setState(() {
+    _confirmTouched = true;
+    _isMatch = _newPwController.text == v;
+  });
+
+  void _onSave() async {
+    if (_isSuccess) return;
+
+    if (!_canSubmit) {
+      if (_newPwController.text.isEmpty) {
+        _newPwFieldKey.currentState?.shake();
       }
-    });
-  }
+      if (_confirmPwController.text.isEmpty || !_isMatch) {
+        _confirmPwFieldKey.currentState?.shake();
+      }
+      return;
+    }
 
-  void _onConfirmPasswordChanged(String value) {
-    setState(() {
-      _confirmTouched = true;
-      _isMatch = _newPwController.text == value;
-    });
-  }
+    setState(() => _isSuccess = true);
+    await Future.delayed(const Duration(milliseconds: 600));
+    if (!mounted) return;
 
-  void _onSave() {
-    if (!_canSubmit) return;
-    Navigator.of(context).pushReplacementNamed('/home');
+    AuthFlowState.instance.passwordSet = true;
+    Navigator.of(context).pushReplacementNamed('/register');
   }
-
-  // ── Building ──────────────────────────────────────────────────────────────
 
   @override
   void dispose() {
@@ -106,231 +109,171 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
     super.dispose();
   }
 
+  Widget _buildHeader(
+    ThemeData theme,
+    Color headingColor,
+    Color subtitleColor,
+    Color cardColor,
+  ) {
+    return Column(
+      children: [
+        FadeSlideY(
+          delay: const Duration(milliseconds: 60),
+          child: Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: theme.primaryColor.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Icon(
+                  Icons.lock_reset_rounded,
+                  color: theme.primaryColor.withValues(alpha: 0.35),
+                  size: 44,
+                ),
+                Positioned(
+                  bottom: 10,
+                  right: 10,
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: cardColor,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.check_rounded,
+                      color: theme.primaryColor,
+                      size: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 20),
+        FadeSlideY(
+          delay: const Duration(milliseconds: 140),
+          child: Text(
+            'Set a New Password',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              color: headingColor,
+              height: 1.15,
+              letterSpacing: -0.4,
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        FadeSlideY(
+          delay: const Duration(milliseconds: 220),
+          child: Text(
+            'Choose something strong and memorable.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.5,
+              color: subtitleColor,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFormCard(
+    ThemeData theme,
+    Color cardColor,
+    Color inputFill,
+    bool isDark,
+  ) {
+    return FadeSlideY(
+      delay: const Duration(milliseconds: 340),
+      child: _PasswordCard(
+        cardColor: cardColor,
+        inputFill: inputFill,
+        isDark: isDark,
+        theme: theme,
+        newController: _newPwController,
+        newFieldKey: _newPwFieldKey,
+        obscureNew: _obscureNew,
+        onToggleNew: () => setState(() => _obscureNew = !_obscureNew),
+        onChangedNew: _onNewPasswordChanged,
+        strength: _strength,
+        confirmController: _confirmPwController,
+        confirmFieldKey: _confirmPwFieldKey,
+        obscureConfirm: _obscureConfirm,
+        onToggleConfirm: () =>
+            setState(() => _obscureConfirm = !_obscureConfirm),
+        onChangedConfirm: _onConfirmPasswordChanged,
+        confirmTouched: _confirmTouched,
+        isMatch: _isMatch,
+        canSubmit: _canSubmit,
+        isSuccess: _isSuccess,
+        onSave: _onSave,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final headingColor = isDark
-        ? Colors.white.withValues(alpha: 0.95)
-        : AppStyles.textDark;
-    final subtitleColor = isDark ? Colors.grey.shade400 : AppStyles.textGray;
-    final surfaceColor = isDark ? AppStyles.surfaceDark : Colors.white;
-    final borderColor = isDark
-        ? Colors.white.withValues(alpha: 0.12)
-        : Colors.black.withValues(alpha: 0.09);
 
-    final strengthFraction = switch (_strength) {
-      _PasswordStrength.empty => 0.0,
-      _PasswordStrength.weak => 0.3,
-      _PasswordStrength.medium => 0.65,
-      _PasswordStrength.strong => 1.0,
-    };
+    final headingColor =
+        theme.textTheme.displayLarge?.color ?? AppStyles.textDark;
+    final subtitleColor =
+        theme.textTheme.bodyMedium?.color ?? AppStyles.textGray;
+    final cardColor =
+        theme.cardTheme.color ??
+        (isDark ? AppStyles.surfaceDark : Colors.white);
+    final inputFill = isDark
+        ? AppStyles.surfaceDark.withValues(alpha: 0.6)
+        : AppStyles.backgroundLight;
 
-    return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(
-        leading: IconButton(
-          icon: Icon(
-            Icons.arrow_back_ios_new_rounded,
-            size: 20,
-            color: isDark ? Colors.white : AppStyles.textDark,
-          ),
-          onPressed: () => Navigator.of(context).maybePop(),
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        resizeToAvoidBottomInset: true,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          automaticallyImplyLeading: false,
         ),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-      ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 28.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Spacer(flex: 1),
-
-              // ── Icon Hero ───────────────────────────────────────────
-              FadeSlideY(
-                delay: const Duration(milliseconds: 60),
-                child: Center(
-                  child: Container(
-                    width: 72,
-                    height: 72,
-                    decoration: BoxDecoration(
-                      color: theme.primaryColor.withValues(alpha: 0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons.lock_reset_rounded,
-                      size: 36,
-                      color: theme.primaryColor,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // ── Title ─────────────────────────────────────────────
-              FadeSlideY(
-                delay: const Duration(milliseconds: 130),
-                child: Text(
-                  'Set a New Password',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w800,
-                    height: 1.2,
-                    color: headingColor,
-                    letterSpacing: -0.4,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-
-              // ── Subtitle ──────────────────────────────────────────
-              FadeSlideY(
-                delay: const Duration(milliseconds: 200),
-                child: Text(
-                  'Choose something strong and memorable.\nYou\'ve got this!',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
-                    height: 1.55,
-                    color: subtitleColor,
-                    fontWeight: FontWeight.w400,
-                  ),
-                ),
-              ),
-
-              const Spacer(flex: 1),
-
-              // ── New Password Field ────────────────────────────────
-              FadeSlideY(
-                delay: const Duration(milliseconds: 280),
-                child: _buildPasswordField(
-                  controller: _newPwController,
-                  label: 'New Password',
-                  hint: 'Enter new password',
-                  obscure: _obscureNew,
-                  onToggle: () => setState(() => _obscureNew = !_obscureNew),
-                  onChanged: _onNewPasswordChanged,
-                  surfaceColor: surfaceColor,
-                  borderColor: borderColor,
-                  primaryColor: theme.primaryColor,
-                  isDark: isDark,
-                  isError: false,
-                ),
-              ),
-              const SizedBox(height: 10),
-
-              // ── Strength Indicator ────────────────────────────────
-              FadeSlideY(
-                delay: const Duration(milliseconds: 320),
-                child: _StrengthBar(
-                  fraction: strengthFraction,
-                  strength: _strength,
-                ),
-              ),
-
-              const SizedBox(height: 18),
-
-              // ── Confirm Password Field ────────────────────────────
-              FadeSlideY(
-                delay: const Duration(milliseconds: 380),
-                child: _buildPasswordField(
-                  controller: _confirmPwController,
-                  label: 'Confirm Password',
-                  hint: 'Re-enter your password',
-                  obscure: _obscureConfirm,
-                  onToggle: () =>
-                      setState(() => _obscureConfirm = !_obscureConfirm),
-                  onChanged: _onConfirmPasswordChanged,
-                  surfaceColor: surfaceColor,
-                  borderColor: borderColor,
-                  primaryColor: theme.primaryColor,
-                  isDark: isDark,
-                  isError: _confirmTouched && !_isMatch,
-                ),
-              ),
-
-              // ── Match Status Row ──────────────────────────────────
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 220),
-                child: _confirmTouched
-                    ? Padding(
-                        key: ValueKey(_isMatch),
-                        padding: const EdgeInsets.only(top: 8.0, left: 4),
-                        child: Row(
-                          children: [
-                            Icon(
-                              _isMatch
-                                  ? Icons.check_circle_rounded
-                                  : Icons.cancel_rounded,
-                              size: 15,
-                              color: _isMatch
-                                  ? AppStyles.successGreen
-                                  : AppStyles.errorRed,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              _isMatch
-                                  ? 'Passwords match'
-                                  : 'Passwords don\'t match',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: _isMatch
-                                    ? AppStyles.successGreen
-                                    : AppStyles.errorRed,
-                              ),
-                            ),
-                          ],
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                physics: const ClampingScrollPhysics(),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 28.0),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildHeader(
+                          theme,
+                          headingColor,
+                          subtitleColor,
+                          cardColor,
                         ),
-                      )
-                    : const SizedBox.shrink(key: ValueKey('empty')),
-              ),
-
-              const Spacer(flex: 2),
-
-              // ── Save Password CTA ─────────────────────────────────
-              FadeSlideY(
-                delay: const Duration(milliseconds: 440),
-                child: Opacity(
-                  opacity: _canSubmit ? 1.0 : 0.45,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: _canSubmit
-                          ? [
-                              BoxShadow(
-                                color: theme.primaryColor.withValues(
-                                  alpha: 0.30,
-                                ),
-                                blurRadius: 16,
-                                offset: const Offset(0, 6),
-                              ),
-                            ]
-                          : [],
-                    ),
-                    child: AnimatedButton(
-                      onPressed: _canSubmit ? _onSave : () {},
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 18),
-                        elevation: 0,
-                      ),
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.save_rounded, size: 18),
-                          SizedBox(width: 8),
-                          Text('Save Password', style: TextStyle(fontSize: 16)),
-                        ],
-                      ),
+                        const _KeyboardGap(),
+                        _buildFormCard(theme, cardColor, inputFill, isDark),
+                      ],
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 24),
-            ],
+              );
+            },
           ),
         ),
       ),
@@ -338,112 +281,384 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
   }
 }
 
-// ── Password Text Field helper ──────────────────────────────────────────────
-Widget _buildPasswordField({
-  required TextEditingController controller,
-  required String label,
-  required String hint,
-  required bool obscure,
-  required VoidCallback onToggle,
-  required ValueChanged<String> onChanged,
-  required Color surfaceColor,
-  required Color borderColor,
-  required Color primaryColor,
-  required bool isDark,
-  required bool isError,
-}) {
-  final errorColor = AppStyles.errorRed;
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        label,
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          color: isDark ? Colors.grey.shade300 : AppStyles.textDark,
-          letterSpacing: 0.1,
-        ),
-      ),
-      const SizedBox(height: 8),
-      AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        decoration: BoxDecoration(
-          color: surfaceColor,
-          borderRadius: BorderRadius.circular(13),
-          border: Border.all(
-            color: isError ? errorColor : borderColor,
-            width: isError ? 1.8 : 1.2,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 3),
-            ),
-          ],
-        ),
-        child: TextField(
-          controller: controller,
-          obscureText: obscure,
-          onChanged: onChanged,
-          style: TextStyle(
-            fontSize: 15,
-            color: isDark
-                ? Colors.white.withValues(alpha: 0.9)
-                : AppStyles.textDark,
-          ),
-          decoration: InputDecoration(
-            hintText: hint,
-            hintStyle: TextStyle(
-              color: isDark ? Colors.grey.shade600 : Colors.grey.shade400,
-              fontSize: 14,
-            ),
-            prefixIcon: Icon(
-              Icons.lock_outline_rounded,
-              size: 20,
-              color: isError
-                  ? errorColor
-                  : (isDark ? Colors.grey.shade500 : Colors.grey.shade400),
-            ),
-            suffixIcon: IconButton(
-              onPressed: onToggle,
-              icon: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 200),
-                child: Icon(
-                  obscure
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                  key: ValueKey(obscure),
-                  size: 20,
-                  color: isDark ? Colors.grey.shade500 : Colors.grey.shade400,
-                ),
-              ),
-            ),
-            border: InputBorder.none,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 16,
-            ),
-          ),
-        ),
-      ),
-    ],
-  );
-}
+// ─── Card containing both password fields ─────────────────────────────────────
 
-// ── Animated Strength Bar ───────────────────────────────────────────────────
-class _StrengthBar extends StatelessWidget {
-  final double fraction; // 0.0 – 1.0
-  final _PasswordStrength strength;
+class _PasswordCard extends StatelessWidget {
+  final Color cardColor;
+  final Color inputFill;
+  final bool isDark;
+  final ThemeData theme;
 
-  const _StrengthBar({required this.fraction, required this.strength});
+  final TextEditingController newController;
+  final GlobalKey<_ShakeWidgetState> newFieldKey;
+  final bool obscureNew;
+  final VoidCallback onToggleNew;
+  final ValueChanged<String> onChangedNew;
+  final _Strength strength;
+
+  final TextEditingController confirmController;
+  final GlobalKey<_ShakeWidgetState> confirmFieldKey;
+  final bool obscureConfirm;
+  final VoidCallback onToggleConfirm;
+  final ValueChanged<String> onChangedConfirm;
+  final bool confirmTouched;
+  final bool isMatch;
+
+  final bool canSubmit;
+  final bool isSuccess;
+  final VoidCallback onSave;
+
+  const _PasswordCard({
+    required this.cardColor,
+    required this.inputFill,
+    required this.isDark,
+    required this.theme,
+    required this.newController,
+    required this.newFieldKey,
+    required this.obscureNew,
+    required this.onToggleNew,
+    required this.onChangedNew,
+    required this.strength,
+    required this.confirmController,
+    required this.confirmFieldKey,
+    required this.obscureConfirm,
+    required this.onToggleConfirm,
+    required this.onChangedConfirm,
+    required this.confirmTouched,
+    required this.isMatch,
+    required this.canSubmit,
+    required this.isSuccess,
+    required this.onSave,
+  });
 
   @override
   Widget build(BuildContext context) {
+    // Card shadow matches Activate Account card elevation feel
+    final shadowColor = isDark
+        ? Colors.black.withValues(alpha: 0.35)
+        : Colors.black.withValues(alpha: 0.08);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: shadowColor,
+            blurRadius: 24,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── New Password ──────────────────────────────────────────────
+          _ShakeWidget(
+            key: newFieldKey,
+            child: _CardField(
+              controller: newController,
+              label: 'New Password',
+              hint: '••••••••',
+              obscure: obscureNew,
+              onToggle: onToggleNew,
+              onChanged: onChangedNew,
+              fillColor: inputFill,
+              isDark: isDark,
+              theme: theme,
+              isError: false,
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          // ── Strength bar ──────────────────────────────────────────────
+          _StrengthBar(strength: strength),
+
+          const SizedBox(height: 18),
+
+          // ── Confirm Password ──────────────────────────────────────────
+          _ShakeWidget(
+            key: confirmFieldKey,
+            child: _CardField(
+              controller: confirmController,
+              label: 'Confirm Password',
+              hint: '••••••••',
+              obscure: obscureConfirm,
+              onToggle: onToggleConfirm,
+              onChanged: onChangedConfirm,
+              fillColor: inputFill,
+              isDark: isDark,
+              theme: theme,
+              isError: confirmTouched && !isMatch,
+            ),
+          ),
+
+          // ── Match status ──────────────────────────────────────────────
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            child: confirmTouched
+                ? Padding(
+                    key: ValueKey(isMatch),
+                    padding: const EdgeInsets.only(
+                      top: 8.0,
+                      left: 2,
+                      bottom: 8.0,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          isMatch
+                              ? Icons.check_circle_rounded
+                              : Icons.cancel_rounded,
+                          size: 14,
+                          color: isMatch
+                              ? AppStyles.successGreen
+                              : AppStyles.errorRed,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          isMatch ? 'Passwords match' : "Passwords don't match",
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: isMatch
+                                ? AppStyles.successGreen
+                                : AppStyles.errorRed,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : const SizedBox(height: 16, key: ValueKey('none')),
+          ),
+
+          const SizedBox(height: 12),
+
+          // ── Save CTA ───────────────────────────────────────────────────
+          Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: canSubmit
+                  ? [
+                      BoxShadow(
+                        color: theme.primaryColor.withValues(alpha: 0.28),
+                        blurRadius: 16,
+                        offset: const Offset(0, 6),
+                      ),
+                    ]
+                  : [],
+            ),
+            child: AnimatedButton(
+              onPressed: canSubmit
+                  ? onSave
+                  : () {
+                      if (newController.text.isEmpty) {
+                        newFieldKey.currentState?.shake();
+                      }
+                      if (confirmController.text.isEmpty || !isMatch) {
+                        confirmFieldKey.currentState?.shake();
+                      }
+                    },
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 18),
+                elevation: 0,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text('Save Password', style: TextStyle(fontSize: 16)),
+                  const SizedBox(width: 8),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    child: Icon(
+                      isSuccess
+                          ? Icons.check_rounded
+                          : Icons.arrow_forward_rounded,
+                      key: ValueKey(isSuccess),
+                      size: 18,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Single password field inside the card ────────────────────────────────────
+
+class _CardField extends StatefulWidget {
+  final TextEditingController controller;
+  final String label;
+  final String hint;
+  final bool obscure;
+  final VoidCallback onToggle;
+  final ValueChanged<String> onChanged;
+  final Color fillColor;
+  final bool isDark;
+  final ThemeData theme;
+  final bool isError;
+
+  const _CardField({
+    required this.controller,
+    required this.label,
+    required this.hint,
+    required this.obscure,
+    required this.onToggle,
+    required this.onChanged,
+    required this.fillColor,
+    required this.isDark,
+    required this.theme,
+    required this.isError,
+  });
+
+  @override
+  State<_CardField> createState() => _CardFieldState();
+}
+
+class _CardFieldState extends State<_CardField> {
+  late FocusNode _focusNode;
+  bool _isFocused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode();
+    _focusNode.addListener(_handleFocus);
+  }
+
+  void _handleFocus() {
+    if (mounted) {
+      setState(() {
+        _isFocused = _focusNode.hasFocus;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _focusNode.removeListener(_handleFocus);
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Exact border color token matching ActivateAccountScreen._InputField
+    final borderColor = widget.isDark
+        ? Colors.white12
+        : const Color(0xFFDDE4ED);
+    final errorColor = AppStyles.errorRed;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: _isFocused
+            ? [
+                BoxShadow(
+                  color: widget.theme.primaryColor.withValues(alpha: 0.18),
+                  blurRadius: 10,
+                ),
+              ]
+            : [],
+      ),
+      child: TextFormField(
+        focusNode: _focusNode,
+        controller: widget.controller,
+        obscureText: widget.obscure,
+        onChanged: widget.onChanged,
+        textInputAction: TextInputAction.next,
+        style: TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w500,
+          color:
+              widget.theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
+        ),
+        decoration: InputDecoration(
+          labelText: widget.label,
+          hintText: widget.hint,
+          labelStyle: const TextStyle(
+            color: AppStyles.textGray,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
+          hintStyle: TextStyle(
+            color: AppStyles.textGray.withValues(alpha: 0.5),
+            fontSize: 14,
+          ),
+          prefixIcon: Icon(
+            Icons.lock_outline_rounded,
+            color: widget.isError ? errorColor : AppStyles.textGray,
+            size: 20,
+          ),
+          suffixIcon: IconButton(
+            onPressed: widget.onToggle,
+            icon: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: Icon(
+                widget.obscure
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+                key: ValueKey(widget.obscure),
+                size: 20,
+                color: AppStyles.textGray,
+              ),
+            ),
+          ),
+          filled: true,
+          fillColor: widget.fillColor,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 16,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(
+              color: widget.isError ? errorColor : borderColor,
+              width: widget.isError ? 1.5 : 1,
+            ),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(
+              color: widget.isError ? errorColor : widget.theme.primaryColor,
+              width: 1.5,
+            ),
+          ),
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: AppStyles.errorRed, width: 1.5),
+          ),
+          focusedErrorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: AppStyles.errorRed, width: 1.5),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Animated strength bar ────────────────────────────────────────────────────
+
+class _StrengthBar extends StatelessWidget {
+  final _Strength strength;
+  const _StrengthBar({required this.strength});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final color = _strengthColor(strength);
     final label = _strengthLabel(strength);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final fraction = _strengthFraction(strength);
     final trackColor = isDark
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.06);
@@ -451,47 +666,43 @@ class _StrengthBar extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Track + animated fill
         LayoutBuilder(
-          builder: (context, constraints) {
-            return Stack(
-              children: [
-                // Background track
-                Container(
-                  height: 5,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: trackColor,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
+          builder: (_, constraints) => Stack(
+            children: [
+              // Track
+              Container(
+                height: 5,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: trackColor,
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                // Animated fill
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 350),
-                  curve: Curves.easeInOut,
-                  height: 5,
-                  width: constraints.maxWidth * fraction,
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: fraction > 0
-                        ? [
-                            BoxShadow(
-                              color: color.withValues(alpha: 0.45),
-                              blurRadius: 6,
-                              offset: const Offset(0, 2),
-                            ),
-                          ]
-                        : [],
-                  ),
+              ),
+              // Animated fill
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 350),
+                curve: Curves.easeInOut,
+                height: 5,
+                width: constraints.maxWidth * fraction,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: fraction > 0
+                      ? [
+                          BoxShadow(
+                            color: color.withValues(alpha: 0.4),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
+                          ),
+                        ]
+                      : [],
                 ),
-              ],
-            );
-          },
+              ),
+            ],
+          ),
         ),
-        // Label
         if (label.isNotEmpty) ...[
-          const SizedBox(height: 6),
+          const SizedBox(height: 5),
           AnimatedDefaultTextStyle(
             duration: const Duration(milliseconds: 250),
             style: TextStyle(
@@ -504,6 +715,75 @@ class _StrengthBar extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _KeyboardGap extends StatelessWidget {
+  const _KeyboardGap();
+
+  @override
+  Widget build(BuildContext context) {
+    final isKeyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+      height: isKeyboardOpen ? 8.0 : 24.0,
+    );
+  }
+}
+
+class _ShakeWidget extends StatefulWidget {
+  final Widget child;
+  const _ShakeWidget({super.key, required this.child});
+
+  @override
+  State<_ShakeWidget> createState() => _ShakeWidgetState();
+}
+
+class _ShakeWidgetState extends State<_ShakeWidget>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _offsetAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+
+    _offsetAnimation = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: -6.0), weight: 1),
+      TweenSequenceItem(tween: Tween(begin: -6.0, end: 6.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: 6.0, end: -6.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: -6.0, end: 6.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: 6.0, end: 0.0), weight: 1),
+    ]).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+  }
+
+  void shake() {
+    _controller.forward(from: 0.0);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _offsetAnimation,
+      builder: (context, child) {
+        return Transform.translate(
+          offset: Offset(_offsetAnimation.value, 0),
+          child: child,
+        );
+      },
+      child: widget.child,
     );
   }
 }

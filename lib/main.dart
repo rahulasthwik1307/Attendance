@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'utils/app_styles.dart';
+import 'utils/auth_flow_state.dart';
 
 import 'screens/splash_screen.dart' as splash;
 import 'screens/home_screen.dart' as home;
@@ -58,7 +59,11 @@ class SmartAttendanceApp extends StatelessWidget {
                 page = const home.HomeScreen();
                 break;
               case '/register':
-                page = const face_reg.FaceRegistrationScreen();
+                if (AuthFlowState.instance.passwordSet) {
+                  page = const face_reg.FaceRegistrationScreen();
+                } else {
+                  page = const sign_in.SignInScreen();
+                }
                 break;
               case '/registration_success':
                 page = const reg_success.RegistrationSuccessScreen();
@@ -70,7 +75,11 @@ class SmartAttendanceApp extends StatelessWidget {
                 page = const preview.FaceCapturePreviewScreen();
                 break;
               case '/dashboard':
-                page = const dashboard.DashboardScreen();
+                if (AuthFlowState.instance.canAccessDashboard) {
+                  page = const dashboard.DashboardScreen();
+                } else {
+                  page = const home.HomeScreen();
+                }
                 break;
               case '/history':
                 page = const history.HistoryScreen();
