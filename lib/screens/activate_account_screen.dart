@@ -20,6 +20,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
 
   bool _obscurePassword = true;
   bool _hasTried = false;
+  bool _isLoading = false;
   bool _isSuccess = false;
 
   @override
@@ -30,7 +31,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
   }
 
   void _onContinue() async {
-    if (_isSuccess) return;
+    if (_isLoading || _isSuccess) return;
     setState(() => _hasTried = true);
 
     bool rollValid = _rollController.text.trim().isNotEmpty;
@@ -42,7 +43,14 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
     if (_formKey.currentState?.validate() ?? false) {
       if (!rollValid || !passValid) return; // double check
 
-      setState(() => _isSuccess = true);
+      setState(() => _isLoading = true);
+      await Future.delayed(const Duration(milliseconds: 800));
+      if (!mounted) return;
+
+      setState(() {
+        _isLoading = false;
+        _isSuccess = true;
+      });
       await Future.delayed(const Duration(milliseconds: 600));
       if (!mounted) return;
 
@@ -58,7 +66,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
     return Column(
       children: [
         FadeSlideY(
-          delay: const Duration(milliseconds: 60),
+          delay: const Duration(milliseconds: 180),
           child: Container(
             width: 64,
             height: 64,
@@ -75,7 +83,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
         ),
         const SizedBox(height: 20),
         FadeSlideY(
-          delay: const Duration(milliseconds: 140),
+          delay: const Duration(milliseconds: 260),
           child: Text(
             'Activate Account',
             textAlign: TextAlign.center,
@@ -90,7 +98,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
         ),
         const SizedBox(height: 8),
         FadeSlideY(
-          delay: const Duration(milliseconds: 220),
+          delay: const Duration(milliseconds: 340),
           child: Text(
             'Enter your details to securely activate your profile.',
             textAlign: TextAlign.center,
@@ -108,7 +116,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
     bool isDark,
   ) {
     return FadeSlideY(
-      delay: const Duration(milliseconds: 340),
+      delay: const Duration(milliseconds: 460),
       child: Container(
         decoration: BoxDecoration(
           color: cardColor,
@@ -196,30 +204,43 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 18),
                     elevation: 0,
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          'Continue',
-                          style: TextStyle(fontSize: 16),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 200),
-                        child: Icon(
-                          _isSuccess
-                              ? Icons.check_rounded
-                              : Icons.arrow_forward_rounded,
-                          key: ValueKey(_isSuccess),
-                          size: 18,
-                        ),
-                      ),
-                    ],
+                  child: Center(
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      child: _isLoading
+                          ? const SizedBox(
+                              key: ValueKey('loading'),
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: Colors.white,
+                              ),
+                            )
+                          : _isSuccess
+                          ? const Icon(
+                              Icons.check_rounded,
+                              size: 22,
+                              key: ValueKey('success'),
+                              color: Colors.white,
+                            )
+                          : Row(
+                              key: const ValueKey('default'),
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: const [
+                                SizedBox(width: 18),
+                                Expanded(
+                                  child: Text(
+                                    'Continue',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(fontSize: 16),
+                                  ),
+                                ),
+                                Icon(Icons.arrow_forward_rounded, size: 18),
+                                SizedBox(width: 12),
+                              ],
+                            ),
+                    ),
                   ),
                 ),
               ),
@@ -249,7 +270,14 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        automaticallyImplyLeading: true,
+        leading: IconButton(
+          icon: const Icon(
+            Icons.chevron_left,
+            size: 28,
+            color: AppStyles.textDark,
+          ),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
       ),
       body: SafeArea(
         child: LayoutBuilder(

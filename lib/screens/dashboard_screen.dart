@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../utils/app_styles.dart';
 import '../widgets/animated_button.dart';
 import '../widgets/custom_bottom_nav.dart';
@@ -46,128 +47,235 @@ class _DashboardScreenState extends State<DashboardScreen>
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        automaticallyImplyLeading: false,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hello, Student 👋',
-              style: TextStyle(
-                color:
-                    theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
-                fontWeight: FontWeight.bold,
-                fontSize: 24,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        showGeneralDialog(
+          context: context,
+          barrierDismissible: true,
+          barrierLabel: 'Dismiss',
+          transitionDuration: const Duration(milliseconds: 250),
+          pageBuilder: (context, animation, secondaryAnimation) {
+            return Dialog(
+              backgroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
               ),
-            ),
-            Text(
-              'Oct 24, 2024',
-              style: TextStyle(
-                color: AppStyles.textGray.withValues(alpha: 0.8),
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Exit App',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: AppStyles.textDark,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Are you sure you want to exit?',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: AppStyles.textGray,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        OutlinedButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(
+                              color: AppStyles.textGray.withValues(alpha: 0.3),
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 28,
+                              vertical: 12,
+                            ),
+                          ),
+                          child: const Text(
+                            'Cancel',
+                            style: TextStyle(
+                              color: AppStyles.textGray,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        ElevatedButton(
+                          onPressed: () => SystemNavigator.pop(),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red.shade600,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 28,
+                              vertical: 12,
+                            ),
+                            elevation: 0,
+                          ),
+                          child: const Text(
+                            'Exit',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
+            );
+          },
+          transitionBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.85, end: 1.0).animate(
+                  CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
+                ),
+                child: child,
+              ),
+            );
+          },
+        );
+      },
+      child: Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          automaticallyImplyLeading: false,
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Hello, Student 👋',
+                style: TextStyle(
+                  color:
+                      theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 24,
+                ),
+              ),
+              Text(
+                'Oct 24, 2024',
+                style: TextStyle(
+                  color: AppStyles.textGray.withValues(alpha: 0.8),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.logout_rounded, color: AppStyles.errorRed),
+              onPressed: () =>
+                  Navigator.of(context).pushReplacementNamed('/home'),
             ),
+            const SizedBox(width: 8),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout_rounded, color: AppStyles.errorRed),
-            onPressed: () =>
-                Navigator.of(context).pushReplacementNamed('/home'),
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
-          children: [
-            // ── System Readiness Card (merged Face + Location) ──────────────
-            FadeSlideY(
-              delay: const Duration(milliseconds: 100),
-              child: _SystemStatusCard(isDark: isDark),
+        body: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24.0,
+              vertical: 16.0,
             ),
-            const SizedBox(height: 20),
+            children: [
+              // ── System Readiness Card (merged Face + Location) ──────────────
+              FadeSlideY(
+                delay: const Duration(milliseconds: 100),
+                child: _SystemStatusCard(isDark: isDark),
+              ),
+              const SizedBox(height: 20),
 
-            // ── Hero: Last Attendance ────────────────────────────────────────
-            FadeSlideY(
-              delay: const Duration(milliseconds: 220),
-              child: _HeroAttendanceCard(theme: theme),
-            ),
-            const SizedBox(height: 32),
+              // ── Hero: Last Attendance ────────────────────────────────────────
+              FadeSlideY(
+                delay: const Duration(milliseconds: 220),
+                child: _HeroAttendanceCard(theme: theme),
+              ),
+              const SizedBox(height: 32),
 
-            // ── Primary Action: Verify Face ──────────────────────────────────
-            FadeSlideY(
-              delay: const Duration(milliseconds: 340),
-              child: AnimatedBuilder(
-                animation: _pulseAnimation,
-                builder: (context, child) {
-                  return Transform.scale(
-                    scale: _pulseAnimation.value,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        boxShadow: [
-                          BoxShadow(
-                            color: theme.primaryColor.withValues(alpha: 0.3),
-                            blurRadius: 20,
-                            spreadRadius: 2,
-                          ),
-                        ],
-                        borderRadius: BorderRadius.circular(14),
+              // ── Primary Action: Verify Face ──────────────────────────────────
+              FadeSlideY(
+                delay: const Duration(milliseconds: 340),
+                child: AnimatedBuilder(
+                  animation: _pulseAnimation,
+                  builder: (context, child) {
+                    return Transform.scale(
+                      scale: _pulseAnimation.value,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          boxShadow: [
+                            BoxShadow(
+                              color: theme.primaryColor.withValues(alpha: 0.3),
+                              blurRadius: 20,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: child,
                       ),
-                      child: child,
-                    ),
-                  );
-                },
-                child: AnimatedButton(
-                  onPressed: () =>
-                      Navigator.of(context).pushNamed('/face_verification'),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.camera_alt_rounded),
-                        SizedBox(width: 12),
-                        Text('Verify Face'),
-                      ],
+                    );
+                  },
+                  child: AnimatedButton(
+                    onPressed: () =>
+                        Navigator.of(context).pushNamed('/face_verification'),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.camera_alt_rounded),
+                          SizedBox(width: 12),
+                          Text('Verify Face'),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
+              const SizedBox(height: 16),
 
-            // ── Secondary Action Tiles ───────────────────────────────────────
-            FadeSlideY(
-              delay: const Duration(milliseconds: 460),
-              child: _ActionTile(
-                label: 'Set Location',
-                subtitle: 'Update your attendance location',
-                icon: Icons.my_location_rounded,
-                isDestructive: false,
+              // ── Secondary Action Tiles ───────────────────────────────────────
+              FadeSlideY(
+                delay: const Duration(milliseconds: 460),
+                child: _ActionTile(
+                  label: 'Set Location',
+                  subtitle: 'Update your attendance location',
+                  icon: Icons.my_location_rounded,
+                  isDestructive: false,
+                ),
               ),
-            ),
-            const SizedBox(height: 10),
-            FadeSlideY(
-              delay: const Duration(milliseconds: 560),
-              child: _ActionTile(
-                label: 'Reset Face Data',
-                subtitle: 'Re-register your face securely',
-                icon: Icons.lock_reset_rounded,
-                isDestructive: false,
+              const SizedBox(height: 10),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 560),
+                child: _ActionTile(
+                  label: 'Reset Face Data',
+                  subtitle: 'Re-register your face securely',
+                  icon: Icons.lock_reset_rounded,
+                  isDestructive: false,
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-          ],
+              const SizedBox(height: 16),
+            ],
+          ),
         ),
+        bottomNavigationBar: CustomBottomNav(currentIndex: 0, onTap: _onNavTap),
       ),
-      bottomNavigationBar: CustomBottomNav(currentIndex: 0, onTap: _onNavTap),
     );
   }
 }

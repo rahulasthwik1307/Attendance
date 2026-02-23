@@ -59,6 +59,7 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
 
   bool _obscureNew = true;
   bool _obscureConfirm = true;
+  bool _isLoading = false;
   bool _isSuccess = false;
 
   _Strength _strength = _Strength.empty;
@@ -88,7 +89,7 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
   });
 
   void _onSave() async {
-    if (_isSuccess) return;
+    if (_isLoading || _isSuccess) return;
 
     if (!_canSubmit) {
       setState(() => _hasTriedSave = true);
@@ -108,12 +109,21 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
       return;
     }
 
-    setState(() => _isSuccess = true);
+    setState(() => _isLoading = true);
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = false;
+      _isSuccess = true;
+    });
     await Future.delayed(const Duration(milliseconds: 600));
     if (!mounted) return;
 
     AuthFlowState.instance.passwordSet = true;
-    Navigator.of(context).pushReplacementNamed('/register');
+    if (mounted) {
+      Navigator.of(context).pushReplacementNamed('/register');
+    }
   }
 
   @override
@@ -132,12 +142,12 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
     return Column(
       children: [
         FadeSlideY(
-          delay: const Duration(milliseconds: 60),
+          delay: const Duration(milliseconds: 180),
           child: Container(
             width: 72,
             height: 72,
             decoration: BoxDecoration(
-              color: theme.primaryColor.withValues(alpha: 0.08),
+              color: theme.primaryColor.withValues(alpha: 0.09),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Stack(
@@ -145,7 +155,7 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
               children: [
                 Icon(
                   Icons.lock_reset_rounded,
-                  color: theme.primaryColor.withValues(alpha: 0.35),
+                  color: theme.primaryColor,
                   size: 44,
                 ),
                 Positioned(
@@ -170,7 +180,7 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
         ),
         const SizedBox(height: 20),
         FadeSlideY(
-          delay: const Duration(milliseconds: 140),
+          delay: const Duration(milliseconds: 260),
           child: Text(
             'Set a New Password',
             textAlign: TextAlign.center,
@@ -185,7 +195,7 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
         ),
         const SizedBox(height: 8),
         FadeSlideY(
-          delay: const Duration(milliseconds: 220),
+          delay: const Duration(milliseconds: 340),
           child: Text(
             'Choose something strong and memorable.',
             textAlign: TextAlign.center,
@@ -208,7 +218,7 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
     bool isDark,
   ) {
     return FadeSlideY(
-      delay: const Duration(milliseconds: 340),
+      delay: const Duration(milliseconds: 460),
       child: _PasswordCard(
         cardColor: cardColor,
         inputFill: inputFill,
@@ -229,6 +239,7 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
         confirmTouched: _confirmTouched,
         isMatch: _isMatch,
         canSubmit: _canSubmit,
+        isLoading: _isLoading,
         isSuccess: _isSuccess,
         hasTriedSave: _hasTriedSave,
         showWeakError: _showWeakError,
@@ -254,22 +265,14 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
         : AppStyles.backgroundLight;
 
     return PopScope(
-      canPop: true,
+      canPop: false,
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
         resizeToAvoidBottomInset: true,
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
-          automaticallyImplyLeading: true,
-          leading: IconButton(
-            icon: Icon(
-              Icons.arrow_back_ios_new_rounded,
-              size: 20,
-              color: headingColor,
-            ),
-            onPressed: () => Navigator.of(context).maybePop(),
-          ),
+          automaticallyImplyLeading: false,
         ),
         body: SafeArea(
           child: LayoutBuilder(
@@ -330,6 +333,7 @@ class _PasswordCard extends StatelessWidget {
   final bool isMatch;
 
   final bool canSubmit;
+  final bool isLoading;
   final bool isSuccess;
   final bool hasTriedSave;
   final bool showWeakError;
@@ -354,6 +358,7 @@ class _PasswordCard extends StatelessWidget {
     required this.confirmTouched,
     required this.isMatch,
     required this.canSubmit,
+    required this.isLoading,
     required this.isSuccess,
     required this.hasTriedSave,
     required this.showWeakError,
@@ -508,22 +513,43 @@ class _PasswordCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 18),
                 elevation: 0,
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Text('Save Password', style: TextStyle(fontSize: 16)),
-                  const SizedBox(width: 8),
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    child: Icon(
-                      isSuccess
-                          ? Icons.check_rounded
-                          : Icons.arrow_forward_rounded,
-                      key: ValueKey(isSuccess),
-                      size: 18,
-                    ),
-                  ),
-                ],
+              child: Center(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  child: isLoading
+                      ? const SizedBox(
+                          key: ValueKey('loading'),
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Colors.white,
+                          ),
+                        )
+                      : isSuccess
+                      ? const Icon(
+                          Icons.check_rounded,
+                          size: 22,
+                          color: Colors.white,
+                          key: ValueKey('success'),
+                        )
+                      : Row(
+                          key: const ValueKey('default'),
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: const [
+                            SizedBox(width: 18),
+                            Expanded(
+                              child: Text(
+                                'Save Password',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(fontSize: 16),
+                              ),
+                            ),
+                            Icon(Icons.arrow_forward_rounded, size: 18),
+                            SizedBox(width: 12),
+                          ],
+                        ),
+                ),
               ),
             ),
           ),

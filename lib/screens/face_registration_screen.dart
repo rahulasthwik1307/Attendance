@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'dart:math' as math;
 import '../utils/app_styles.dart';
 import '../utils/auth_flow_state.dart';
 
@@ -12,9 +11,18 @@ class FaceRegistrationScreen extends StatefulWidget {
 
 class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     with TickerProviderStateMixin {
-  late AnimationController _rotationController;
-  late AnimationController _scanLineController;
+  late AnimationController _pulseController;
   late AnimationController _textFadeController;
+
+  final Map<String, String> _subtitles = {
+    "Fit your face in the circle": "Make sure your full face is visible",
+    "Move closer": "Step a little closer to the camera",
+    "Move back": "You are too close, step back slightly",
+    "Move left": "Shift your position slightly to the left",
+    "Move right": "Shift your position slightly to the right",
+    "Hold still…": "Almost done, stay steady",
+    "Blink to verify": "Blink naturally to confirm you are present",
+  };
 
   final List<String> _instructions = [
     "Fit your face in the circle",
@@ -38,14 +46,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       }
     });
 
-    _rotationController = AnimationController(
+    _pulseController = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 4),
-    )..repeat();
-
-    _scanLineController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
+      duration: const Duration(milliseconds: 1500),
     )..repeat(reverse: true);
 
     _textFadeController = AnimationController(
@@ -79,8 +82,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
   @override
   void dispose() {
-    _rotationController.dispose();
-    _scanLineController.dispose();
+    _pulseController.dispose();
     _textFadeController.dispose();
     super.dispose();
   }
@@ -95,206 +97,177 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       child: Scaffold(
         backgroundColor: AppStyles.backgroundLight,
         body: SafeArea(
-          child: Column(
-            children: [
-              // Top App Bar Area
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16.0,
-                  vertical: 8.0,
-                ),
-                child: Row(
-                  children: [
-                    const SizedBox(width: 48), // Balance for icon button
-                    const Spacer(),
-                    const Column(
-                      children: [
-                        Text(
-                          'Step 2 of 3',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppStyles.textGray,
-                            fontWeight: FontWeight.w600,
+          child: SingleChildScrollView(
+            physics: const NeverScrollableScrollPhysics(),
+            child: Column(
+              children: [
+                // Top App Bar Area
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16.0,
+                    vertical: 16.0,
+                  ),
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 48), // Balance for icon button
+                      const Spacer(),
+                      Column(
+                        children: [
+                          Text(
+                            'Step 2 of 3',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF4A5568),
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.2,
+                            ),
                           ),
-                        ),
-                        Text(
-                          'Face Registration',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppStyles.textDark,
+                          Text(
+                            'Face Registration',
+                            style: TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF1A202C),
+                              letterSpacing: -0.3,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                    const Spacer(),
-                    const SizedBox(width: 48), // Balance for icon button
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    // Simulated Camera Feed Placeholder
-                    Container(
-                      width: circleSize,
-                      height: circleSize,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.grey.shade300,
-                        image: const DecorationImage(
-                          image: NetworkImage(
-                            'https://picsum.photos/400/400?grayscale',
-                          ),
-                          fit: BoxFit.cover,
-                        ),
+                        ],
                       ),
-                    ),
-                    // Frosted Glass Overlay outside circle is not easily doable with single standard ClipPath unless we invert it.
-                    // Instead we use a ColorFiltered or CustomPaint over the entire screen except the circle.
-                    ColorFiltered(
-                      colorFilter: ColorFilter.mode(
-                        Colors.white.withValues(alpha: 0.8),
-                        BlendMode.srcOut,
-                      ),
-                      child: Container(
-                        decoration: const BoxDecoration(
-                          color: Colors.transparent,
-                        ),
+                      const Spacer(),
+                      const SizedBox(width: 48), // Balance for icon button
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 24.0),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      // Simulated Camera Feed Placeholder
+                      ClipOval(
                         child: Container(
                           width: circleSize,
                           height: circleSize,
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.black,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade200,
+                            image: const DecorationImage(
+                              image: NetworkImage(
+                                'https://picsum.photos/400/400?grayscale',
+                              ),
+                              fit: BoxFit.cover,
+                            ),
                           ),
                         ),
                       ),
-                    ),
 
-                    // Rotating Dashed Border
-                    AnimatedBuilder(
-                      animation: _rotationController,
-                      builder: (context, child) {
-                        return Transform.rotate(
-                          angle: _rotationController.value * 2 * math.pi,
-                          child: CustomPaint(
-                            size: Size(circleSize, circleSize),
-                            painter: _DashedCirclePainter(),
+                      // Frosted Glass Overlay outside circle is not easily doable with single standard ClipPath unless we invert it.
+                      // Instead we use a ColorFiltered or CustomPaint over the entire screen except the circle.
+                      ColorFiltered(
+                        colorFilter: ColorFilter.mode(
+                          Colors.white.withValues(alpha: 0.8),
+                          BlendMode.srcOut,
+                        ),
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            color: Colors.transparent,
                           ),
-                        );
-                      },
-                    ),
-
-                    // Scanning Line
-                    AnimatedBuilder(
-                      animation: _scanLineController,
-                      builder: (context, child) {
-                        return Positioned(
-                          top:
-                              (screenSize.height / 2 - circleSize / 2) -
-                              80 +
-                              (_scanLineController.value * circleSize),
                           child: Container(
-                            width: circleSize * 0.9,
-                            height: 3,
+                            width: circleSize,
+                            height: circleSize,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.black,
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      // Pulsing Glow Border
+                      AnimatedBuilder(
+                        animation: _pulseController,
+                        builder: (context, child) {
+                          return Container(
+                            width: circleSize,
+                            height: circleSize,
                             decoration: BoxDecoration(
-                              color: AppStyles.primaryBlue,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: AppStyles.primaryBlue,
+                                width: 2.5,
+                              ),
                               boxShadow: [
                                 BoxShadow(
-                                  color: AppStyles.primaryBlue.withValues(
-                                    alpha: 0.8,
+                                  color: AppStyles.primaryBlue.withAlpha(
+                                    (_pulseController.value * 255 * 0.5)
+                                        .toInt(),
                                   ),
-                                  blurRadius: 10,
-                                  spreadRadius: 2,
+                                  blurRadius: 8 + (_pulseController.value * 12),
+                                ),
+                                BoxShadow(
+                                  color: Colors.black.withAlpha(
+                                    (0.1 * 255).toInt(),
+                                  ),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 10),
                                 ),
                               ],
                             ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              // Instructions
-              Padding(
-                padding: const EdgeInsets.only(bottom: 48.0),
-                child: FadeTransition(
-                  opacity: _textFadeController,
-                  child: Column(
-                    children: [
-                      Text(
-                        _instructions[_instructionIndex],
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: AppStyles.primaryBlue,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        'Position your face within the circle',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: AppStyles.textGray,
-                        ),
+                          );
+                        },
                       ),
                     ],
                   ),
                 ),
-              ),
-              // Cancel Button
-              Padding(
-                padding: const EdgeInsets.only(bottom: 24.0),
-                child: TextButton(
-                  onPressed: () =>
-                      Navigator.of(context).pushReplacementNamed('/home'),
-                  child: const Text(
-                    'Cancel Registration',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppStyles.textGray,
+                const SizedBox(height: 16),
+                // Instructions
+                Padding(
+                  padding: const EdgeInsets.only(
+                    bottom: 24.0,
+                    left: 24.0,
+                    right: 24.0,
+                  ),
+                  child: FadeTransition(
+                    opacity: _textFadeController,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: AppStyles.primaryBlue.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 14,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _instructions[_instructionIndex],
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: AppStyles.primaryBlue,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _subtitles[_instructions[_instructionIndex]] ?? '',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w400,
+                              color: AppStyles.textDark.withValues(alpha: 0.65),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
     );
   }
-}
-
-class _DashedCirclePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final double radius = size.width / 2;
-    final center = Offset(size.width / 2, size.height / 2);
-
-    final paint = Paint()
-      ..color = AppStyles.primaryBlue
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4;
-
-    const int dashCount = 30;
-    const double dashLength = (math.pi * 2) / (dashCount * 2);
-
-    for (int i = 0; i < dashCount; i++) {
-      final double startAngle = (i * 2) * dashLength;
-      canvas.drawArc(
-        Rect.fromCircle(center: center, radius: radius),
-        startAngle,
-        dashLength,
-        false,
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

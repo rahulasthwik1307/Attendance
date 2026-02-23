@@ -66,42 +66,33 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+        leading: IconButton(
+          icon: const Icon(
+            Icons.arrow_back_ios_new_rounded,
+            color: AppStyles.textDark,
+            size: 20,
+          ),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: const Text(
+          'Forgot Password',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+            color: AppStyles.textDark,
+          ),
+        ),
+      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 28.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Spacer(flex: 2),
-
-              // ── Back + Title ───────────────────────────────────────────────
-              FadeSlideY(
-                delay: const Duration(milliseconds: 60),
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: Icon(
-                        Icons.arrow_back_ios_new_rounded,
-                        color: theme.primaryColor,
-                        size: 20,
-                      ),
-                      onPressed: () => Navigator.of(context).pop(),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Forgot Password',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        color: theme.primaryColor,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
               const Spacer(flex: 1),
 
               // ── Hero: Face Scan Visual ─────────────────────────────────────
@@ -265,10 +256,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                     ],
                   ),
                   child: AnimatedButton(
-                    onPressed: () => Navigator.of(context).pushNamed(
-                      '/face_verification',
-                      arguments: 'password_reset',
-                    ),
+                    onPressed: () => Navigator.of(
+                      context,
+                    ).pushReplacementNamed('/set_new_password'),
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 20),
                       elevation: 0,
@@ -285,63 +275,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                 ),
               ),
 
-              const SizedBox(height: 12),
-
-              // ── Back to Sign In ───────────────────────────────────────────
-              FadeSlideY(
-                delay: const Duration(milliseconds: 560),
-                child: Center(
-                  child: Material(
-                    color: Colors.transparent,
-                    borderRadius: BorderRadius.circular(30),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(30),
-                      onTap: () => Navigator.of(
-                        context,
-                      ).pushReplacementNamed('/sign_in'),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Theme.of(
-                            context,
-                          ).primaryColor.withValues(alpha: 0.07),
-                          borderRadius: BorderRadius.circular(30),
-                          border: Border.all(
-                            color: Theme.of(
-                              context,
-                            ).primaryColor.withValues(alpha: 0.15),
-                            width: 1,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.arrow_back_ios_new_rounded,
-                              size: 13,
-                              color: subtitleColor,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              'Back to Sign In',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: subtitleColor,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-              const Spacer(flex: 1),
+              const Spacer(flex: 2),
             ],
           ),
         ),

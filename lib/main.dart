@@ -48,10 +48,11 @@ class SmartAttendanceApp extends StatelessWidget {
           themeMode: currentMode,
           themeAnimationDuration: const Duration(milliseconds: 400),
           themeAnimationCurve: Curves.easeInOut,
-          initialRoute: '/splash',
+          home: const splash.SplashScreen(),
           onGenerateRoute: (routeSettings) {
             Widget page;
             switch (routeSettings.name) {
+              case '/':
               case '/splash':
                 page = const splash.SplashScreen();
                 break;
@@ -125,10 +126,48 @@ class SmartAttendanceApp extends StatelessWidget {
                 page = const splash.SplashScreen();
             }
 
+            if (routeSettings.name == '/activate' ||
+                routeSettings.name == '/sign_in' ||
+                routeSettings.name == '/forgot_password' ||
+                routeSettings.name == '/set_new_password') {
+              return AuthPageRoute(page: page);
+            }
+
             return AppStyles.buildPageTransition(page);
           },
         );
       },
     );
   }
+}
+
+class AuthPageRoute extends PageRouteBuilder {
+  final Widget page;
+
+  AuthPageRoute({required this.page})
+    : super(
+        pageBuilder: (context, animation, secondaryAnimation) => page,
+        transitionDuration: const Duration(milliseconds: 320),
+        reverseTransitionDuration: const Duration(milliseconds: 320),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return SlideTransition(
+            position:
+                Tween<Offset>(
+                  begin: const Offset(0, 0.06),
+                  end: Offset.zero,
+                ).animate(
+                  CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ),
+                ),
+            child: FadeTransition(
+              opacity: Tween<double>(begin: 0.0, end: 1.0).animate(
+                CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+              ),
+              child: child,
+            ),
+          );
+        },
+      );
 }

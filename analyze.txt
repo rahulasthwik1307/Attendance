@@ -1,0 +1,4 @@
+Analyzing face_capture_preview_screen.dart...                   
+
+   info - Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check - lib\screens\face_capture_preview_screen.dart:186:38 - use_build_context_synchronously
+

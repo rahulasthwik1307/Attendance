@@ -47,8 +47,9 @@ class _SignInScreenState extends State<SignInScreen> {
 
     setState(() => _isLoading = true);
     // Simulate auth — replace with real call.
-    await Future.delayed(const Duration(milliseconds: 900));
+    await Future.delayed(const Duration(milliseconds: 800));
     if (!mounted) return;
+
     setState(() {
       _isLoading = false;
       _isSuccess = true;
@@ -60,12 +61,14 @@ class _SignInScreenState extends State<SignInScreen> {
     // Set password as set (since they signed in successfully with one)
     AuthFlowState.instance.passwordSet = true;
 
-    // Check if face registration is actually complete
-    if (AuthFlowState.instance.faceRegistered) {
-      Navigator.of(context).pushReplacementNamed('/dashboard');
-    } else {
-      // Force face registration if not done
-      Navigator.of(context).pushReplacementNamed('/register');
+    if (mounted) {
+      // Check if face registration is actually complete
+      if (AuthFlowState.instance.faceRegistered) {
+        Navigator.of(context).pushReplacementNamed('/dashboard');
+      } else {
+        // Force face registration if not done
+        Navigator.of(context).pushReplacementNamed('/register');
+      }
     }
   }
 
@@ -81,7 +84,7 @@ class _SignInScreenState extends State<SignInScreen> {
     return Column(
       children: [
         FadeSlideY(
-          delay: const Duration(milliseconds: 60),
+          delay: const Duration(milliseconds: 180),
           child: Container(
             width: 64,
             height: 64,
@@ -98,7 +101,7 @@ class _SignInScreenState extends State<SignInScreen> {
         ),
         const SizedBox(height: 20),
         FadeSlideY(
-          delay: const Duration(milliseconds: 140),
+          delay: const Duration(milliseconds: 260),
           child: Text(
             'Sign In',
             textAlign: TextAlign.center,
@@ -113,7 +116,7 @@ class _SignInScreenState extends State<SignInScreen> {
         ),
         const SizedBox(height: 8),
         FadeSlideY(
-          delay: const Duration(milliseconds: 220),
+          delay: const Duration(milliseconds: 340),
           child: Text(
             'Welcome back. Enter your credentials to continue.',
             textAlign: TextAlign.center,
@@ -132,7 +135,7 @@ class _SignInScreenState extends State<SignInScreen> {
     bool isDark,
   ) {
     return FadeSlideY(
-      delay: const Duration(milliseconds: 340),
+      delay: const Duration(milliseconds: 460),
       child: Container(
         padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
         decoration: BoxDecoration(
@@ -215,47 +218,63 @@ class _SignInScreenState extends State<SignInScreen> {
                 ),
               ),
               const SizedBox(height: 20),
-              _isLoading
-                  ? _LoadingButton(theme: theme)
-                  : Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(14),
-                        boxShadow: [
-                          BoxShadow(
-                            color: theme.primaryColor.withValues(alpha: 0.28),
-                            blurRadius: 14,
-                            offset: const Offset(0, 5),
-                          ),
-                        ],
-                      ),
-                      child: AnimatedButton(
-                        onPressed: _onSignIn,
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 18),
-                          elevation: 0,
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Text(
-                              'Sign In',
-                              style: TextStyle(fontSize: 16),
-                            ),
-                            const SizedBox(width: 8),
-                            AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 200),
-                              child: Icon(
-                                _isSuccess
-                                    ? Icons.check_rounded
-                                    : Icons.arrow_forward_rounded,
-                                key: ValueKey(_isSuccess),
-                                size: 18,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+              Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [
+                    BoxShadow(
+                      color: theme.primaryColor.withValues(alpha: 0.28),
+                      blurRadius: 14,
+                      offset: const Offset(0, 5),
                     ),
+                  ],
+                ),
+                child: AnimatedButton(
+                  onPressed: _onSignIn,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    elevation: 0,
+                  ),
+                  child: Center(
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      child: _isLoading
+                          ? const SizedBox(
+                              key: ValueKey('loading'),
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: Colors.white,
+                              ),
+                            )
+                          : _isSuccess
+                          ? const Icon(
+                              Icons.check_rounded,
+                              size: 22,
+                              color: Colors.white,
+                              key: ValueKey('success'),
+                            )
+                          : Row(
+                              key: const ValueKey('default'),
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: const [
+                                SizedBox(width: 18),
+                                Expanded(
+                                  child: Text(
+                                    'Sign In',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(fontSize: 16),
+                                  ),
+                                ),
+                                Icon(Icons.arrow_forward_rounded, size: 18),
+                                SizedBox(width: 12),
+                              ],
+                            ),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -487,32 +506,6 @@ class _SignInFieldState extends State<_SignInField> {
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: softErrorColor, width: 1.5),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Inline loading state (same height as the button) ─────────────────────────
-class _LoadingButton extends StatelessWidget {
-  final ThemeData theme;
-  const _LoadingButton({required this.theme});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 56,
-      decoration: BoxDecoration(
-        color: theme.primaryColor,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      alignment: Alignment.center,
-      child: const SizedBox(
-        width: 22,
-        height: 22,
-        child: CircularProgressIndicator(
-          strokeWidth: 2.5,
-          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
         ),
       ),
     );
