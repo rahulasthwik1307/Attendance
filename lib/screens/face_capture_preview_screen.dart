@@ -190,10 +190,9 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
                         await Future.delayed(const Duration(milliseconds: 600));
                         if (!context.mounted) return;
                         AuthFlowState.instance.faceRegistered = true;
-                        Navigator.of(context).pushNamedAndRemoveUntil(
-                          '/dashboard',
-                          (route) => false,
-                        );
+                        Navigator.of(
+                          context,
+                        ).pushReplacementNamed('/registration_success');
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppStyles.primaryBlue,

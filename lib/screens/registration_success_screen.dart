@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../utils/app_styles.dart';
 import '../widgets/fade_slide_y.dart';
@@ -12,6 +13,7 @@ class RegistrationSuccessScreen extends StatefulWidget {
 
 class _RegistrationSuccessScreenState extends State<RegistrationSuccessScreen>
     with TickerProviderStateMixin {
+  late Timer _timer;
   late AnimationController _checkController;
   late Animation<double> _scaleAnimation;
   late AnimationController _rippleController;
@@ -36,16 +38,18 @@ class _RegistrationSuccessScreenState extends State<RegistrationSuccessScreen>
 
     _checkController.forward();
 
-    // Auto redirect to Preview screen after 2 seconds
-    Future.delayed(const Duration(milliseconds: 2000), () {
+    _timer = Timer(const Duration(seconds: 3), () {
       if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/face_preview');
+        Navigator.of(
+          context,
+        ).pushNamedAndRemoveUntil('/dashboard', (route) => false);
       }
     });
   }
 
   @override
   void dispose() {
+    _timer.cancel();
     _checkController.dispose();
     _rippleController.dispose();
     super.dispose();

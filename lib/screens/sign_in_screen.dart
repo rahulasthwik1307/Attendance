@@ -33,6 +33,7 @@ class _SignInScreenState extends State<SignInScreen> {
   }
 
   void _onSignIn() async {
+    if (!mounted) return;
     if (_isSuccess || _isLoading) return;
     setState(() => _hasTried = true);
 
@@ -60,10 +61,9 @@ class _SignInScreenState extends State<SignInScreen> {
 
     // Set password as set (since they signed in successfully with one)
     AuthFlowState.instance.passwordSet = true;
+    AuthFlowState.instance.faceRegistered = true;
 
-    if (mounted) {
-      Navigator.of(context).pushReplacementNamed('/dashboard');
-    }
+    Navigator.of(context).pushReplacementNamed('/dashboard');
   }
 
   void _onForgotPassword() {

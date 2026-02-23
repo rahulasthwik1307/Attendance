@@ -23,6 +23,7 @@ import 'screens/forgot_password_screen.dart' as forgot_pw;
 import 'screens/password_reset_face_success_screen.dart' as pw_reset_success;
 import 'screens/forgot_password_face_verify_screen.dart' as forgot_pw_verify;
 import 'screens/set_new_password_screen.dart' as set_new_pw;
+import 'screens/password_updated_screen.dart' as pw_updated;
 import 'screens/password_change_success_screen.dart' as pw_change_success;
 
 final ValueNotifier<ThemeMode> appThemeNotifier = ValueNotifier(
@@ -122,6 +123,9 @@ class SmartAttendanceApp extends StatelessWidget {
                 break;
               case '/set_new_password':
                 page = const set_new_pw.SetNewPasswordScreen();
+                break;
+              case '/password_updated':
+                page = const pw_updated.PasswordUpdatedScreen();
                 break;
               case '/password_change_success':
                 page = const pw_change_success.PasswordChangeSuccessScreen();

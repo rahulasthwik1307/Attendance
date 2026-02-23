@@ -16,6 +16,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   late AnimationController _textFadeController;
   late AnimationController _locationCardController;
   late Animation<double> _locationFade;
+  bool _locationVerified = false;
 
   final Map<String, String> _subtitles = {
     "Align your face": "Center your face within the circle",
@@ -64,7 +65,16 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
     _locationCardController.forward();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await Future.delayed(const Duration(milliseconds: 2500));
+      if (!mounted) return;
+
+      setState(() => _locationVerified = true);
+
+      await Future.delayed(const Duration(milliseconds: 1000));
+      if (!mounted) return;
+
+      await _locationCardController.reverse();
       _cycleInstructions();
     });
   }
@@ -149,137 +159,153 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                 ),
                 child: Row(
                   children: [
-                    const Icon(
-                      Icons.location_searching_rounded,
-                      color: AppStyles.primaryBlue,
+                    Icon(
+                      _locationVerified
+                          ? Icons.check_circle_rounded
+                          : Icons.location_searching_rounded,
+                      color: _locationVerified
+                          ? AppStyles.successGreen
+                          : AppStyles.primaryBlue,
                     ),
                     const SizedBox(width: 12),
-                    const Expanded(
+                    Expanded(
                       child: Text(
-                        'Checking your location…',
-                        style: TextStyle(
+                        _locationVerified
+                            ? 'Location verified'
+                            : 'Checking your location…',
+                        style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.bold,
                           color: AppStyles.textDark,
                         ),
                       ),
                     ),
-                    SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: AppStyles.primaryBlue.withValues(alpha: 0.5),
+                    if (!_locationVerified)
+                      SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppStyles.primaryBlue.withValues(alpha: 0.5),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
             ),
             // Circle Stack
-            Padding(
-              padding: const EdgeInsets.only(top: 24.0),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  ClipOval(
-                    child: Stack(
-                      children: [
-                        Container(
+            AnimatedOpacity(
+              duration: const Duration(milliseconds: 400),
+              opacity: _locationVerified ? 1.0 : 0.0,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 24.0),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    ClipOval(
+                      child: Stack(
+                        children: [
+                          Container(
+                            width: circleSize,
+                            height: circleSize,
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade200,
+                              image: const DecorationImage(
+                                image: NetworkImage(
+                                  'https://picsum.photos/400/400?grayscale',
+                                ),
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                          AnimatedBuilder(
+                            animation: _scanLineController,
+                            builder: (context, child) {
+                              return CustomPaint(
+                                size: Size(circleSize, circleSize),
+                                painter: _ScanLinePainter(
+                                  scanValue: _scanLineController.value,
+                                  circleSize: circleSize,
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    AnimatedBuilder(
+                      animation: _pulseController,
+                      builder: (context, child) {
+                        return Container(
                           width: circleSize,
                           height: circleSize,
                           decoration: BoxDecoration(
-                            color: Colors.grey.shade200,
-                            image: const DecorationImage(
-                              image: NetworkImage(
-                                'https://picsum.photos/400/400?grayscale',
-                              ),
-                              fit: BoxFit.cover,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: AppStyles.primaryBlue,
+                              width: 2.5,
                             ),
-                          ),
-                        ),
-                        AnimatedBuilder(
-                          animation: _scanLineController,
-                          builder: (context, child) {
-                            return CustomPaint(
-                              size: Size(circleSize, circleSize),
-                              painter: _ScanLinePainter(
-                                scanValue: _scanLineController.value,
-                                circleSize: circleSize,
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppStyles.primaryBlue.withValues(
+                                  alpha: _pulseController.value * 0.5,
+                                ),
+                                blurRadius: 8 + (_pulseController.value * 12),
                               ),
-                            );
-                          },
-                        ),
-                      ],
+                            ],
+                          ),
+                        );
+                      },
                     ),
-                  ),
-                  AnimatedBuilder(
-                    animation: _pulseController,
-                    builder: (context, child) {
-                      return Container(
-                        width: circleSize,
-                        height: circleSize,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: AppStyles.primaryBlue,
-                            width: 2.5,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppStyles.primaryBlue.withValues(
-                                alpha: _pulseController.value * 0.5,
-                              ),
-                              blurRadius: 8 + (_pulseController.value * 12),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 16),
             // Instruction card
             Expanded(
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                  child: FadeTransition(
-                    opacity: _textFadeController,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: AppStyles.primaryBlue.withValues(alpha: 0.06),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 14,
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _instructions[_instructionIndex],
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              color: AppStyles.primaryBlue,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 400),
+                opacity: _locationVerified ? 1.0 : 0.0,
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                    child: FadeTransition(
+                      opacity: _textFadeController,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: AppStyles.primaryBlue.withValues(alpha: 0.06),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _instructions[_instructionIndex],
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                color: AppStyles.primaryBlue,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _subtitles[_instructions[_instructionIndex]] ?? '',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w400,
-                              color: Color(0xFF4A5568),
+                            const SizedBox(height: 6),
+                            Text(
+                              _subtitles[_instructions[_instructionIndex]] ??
+                                  '',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w400,
+                                color: Color(0xFF4A5568),
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),

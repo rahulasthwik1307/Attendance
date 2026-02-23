@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../utils/app_styles.dart';
+import '../utils/auth_flow_state.dart';
 import '../widgets/animated_button.dart';
 import '../widgets/fade_slide_y.dart';
 
@@ -54,6 +55,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
       await Future.delayed(const Duration(milliseconds: 600));
       if (!mounted) return;
 
+      AuthFlowState.instance.isFirstTimeUser = true;
       Navigator.pushReplacementNamed(context, '/set_new_password');
     }
   }

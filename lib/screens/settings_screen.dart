@@ -204,6 +204,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Column(
                     children: [
                       _buildSettingsItem(
+                        icon: Icons.lock_reset_rounded,
+                        title: 'Change Password',
+                        subtitle: 'Update your account password',
+                        isDestructive: false,
+                        onTap: () => Navigator.of(
+                          context,
+                        ).pushNamed('/forgot_password_face_verify'),
+                      ),
+                      const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                      _buildSettingsItem(
                         icon: Icons.info_outline_rounded,
                         title: 'About App',
                         subtitle: 'Learn more about this application',
