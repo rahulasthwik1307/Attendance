@@ -56,6 +56,8 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
       if (!mounted) return;
 
       AuthFlowState.instance.isFirstTimeUser = true;
+      AuthFlowState.instance.faceRegistered = false;
+      AuthFlowState.instance.passwordSet = false;
       Navigator.pushReplacementNamed(context, '/set_new_password');
     }
   }
