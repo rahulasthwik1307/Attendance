@@ -1,50 +1,43 @@
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
 import '../utils/app_styles.dart';
-import '../utils/auth_flow_state.dart';
 
-class FaceRegistrationScreen extends StatefulWidget {
-  const FaceRegistrationScreen({super.key});
+class ForgotPasswordFaceVerifyScreen extends StatefulWidget {
+  const ForgotPasswordFaceVerifyScreen({super.key});
 
   @override
-  State<FaceRegistrationScreen> createState() => _FaceRegistrationScreenState();
+  State<ForgotPasswordFaceVerifyScreen> createState() =>
+      _ForgotPasswordFaceVerifyScreenState();
 }
 
-class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
+class _ForgotPasswordFaceVerifyScreenState
+    extends State<ForgotPasswordFaceVerifyScreen>
     with TickerProviderStateMixin {
   late AnimationController _pulseController;
   late AnimationController _textFadeController;
+  late AnimationController _scanLineController;
 
   final Map<String, String> _subtitles = {
-    "Fit your face in the circle": "Make sure your full face is visible",
+    "Fit your face in the circle":
+        "Make sure your full face is clearly visible",
     "Move closer": "Step a little closer to the camera",
     "Move back": "You are too close, step back slightly",
-    "Move left": "Shift your position slightly to the left",
-    "Move right": "Shift your position slightly to the right",
     "Hold still…": "Almost done, stay steady",
-    "Blink to verify": "Blink naturally to confirm you are present",
+    "Verifying identity…": "Confirming it is really you",
   };
 
   final List<String> _instructions = [
     "Fit your face in the circle",
     "Move closer",
     "Move back",
-    "Move left",
-    "Move right",
     "Hold still…",
-    "Blink to verify",
+    "Verifying identity…",
   ];
   int _instructionIndex = 0;
 
   @override
   void initState() {
     super.initState();
-
-    // Security Guard: Prevent access if password hasn't been set/activated
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!AuthFlowState.instance.passwordSet) {
-        Navigator.of(context).pushReplacementNamed('/sign_in');
-      }
-    });
 
     _pulseController = AnimationController(
       vsync: this,
@@ -55,6 +48,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       vsync: this,
       duration: const Duration(milliseconds: 500),
     )..forward();
+
+    _scanLineController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2000),
+    )..repeat(reverse: true);
 
     _cycleInstructions();
   }
@@ -70,11 +68,10 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       });
       await _textFadeController.forward();
 
-      // After final instruction, auto-simulate capture and go to success screen
       if (i == _instructions.length - 1) {
         await Future.delayed(const Duration(seconds: 1));
         if (mounted) {
-          Navigator.of(context).pushReplacementNamed('/registration_success');
+          Navigator.of(context).pushReplacementNamed('/set_new_password');
         }
       }
     }
@@ -84,6 +81,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   void dispose() {
     _pulseController.dispose();
     _textFadeController.dispose();
+    _scanLineController.dispose();
     super.dispose();
   }
 
@@ -101,51 +99,32 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
             physics: const NeverScrollableScrollPhysics(),
             child: Column(
               children: [
-                // Top App Bar Area
-                Theme(
-                  data: Theme.of(context).copyWith(
-                    textTheme: Theme.of(context).textTheme.apply(
-                      bodyColor: const Color(0xFF1A202C),
-                      displayColor: const Color(0xFF1A202C),
-                    ),
+                // Header
+                const Padding(
+                  padding: EdgeInsets.symmetric(
+                    vertical: 16.0,
+                    horizontal: 16.0,
                   ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16.0,
-                      vertical: 16.0,
-                    ),
-                    child: Row(
-                      children: [
-                        const SizedBox(width: 48), // Balance for icon button
-                        const Spacer(),
-                        const Column(
-                          children: [
-                            Text(
-                              'Step 2 of 3',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Color(0xFF4A5568),
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.2,
-                                inherit: false,
-                              ),
+                  child: Row(
+                    children: [
+                      SizedBox(width: 48), // Balance for centering
+                      Spacer(),
+                      Column(
+                        children: [
+                          Text(
+                            'Verify Your Identity',
+                            style: TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF1A202C),
+                              letterSpacing: -0.3,
                             ),
-                            Text(
-                              'Face Registration',
-                              style: TextStyle(
-                                fontSize: 19,
-                                fontWeight: FontWeight.w800,
-                                color: Color(0xFF1A202C),
-                                letterSpacing: -0.3,
-                                inherit: false,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const Spacer(),
-                        const SizedBox(width: 48), // Balance for icon button
-                      ],
-                    ),
+                          ),
+                        ],
+                      ),
+                      Spacer(),
+                      SizedBox(width: 48), // Balance for centering
+                    ],
                   ),
                 ),
                 Padding(
@@ -153,25 +132,41 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
-                      // Simulated Camera Feed Placeholder
+                      // Camera Placeholder inside ClipOval
                       ClipOval(
-                        child: Container(
-                          width: circleSize,
-                          height: circleSize,
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade200,
-                            image: const DecorationImage(
-                              image: NetworkImage(
-                                'https://picsum.photos/400/400?grayscale',
+                        child: Stack(
+                          children: [
+                            Container(
+                              width: circleSize,
+                              height: circleSize,
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade200,
+                                image: const DecorationImage(
+                                  image: NetworkImage(
+                                    'https://picsum.photos/400/400?grayscale',
+                                  ),
+                                  fit: BoxFit.cover,
+                                ),
                               ),
-                              fit: BoxFit.cover,
                             ),
-                          ),
+                            // Scan Line
+                            AnimatedBuilder(
+                              animation: _scanLineController,
+                              builder: (context, child) {
+                                return CustomPaint(
+                                  size: Size(circleSize, circleSize),
+                                  painter: _ScanLinePainter(
+                                    scanValue: _scanLineController.value,
+                                    circleSize: circleSize,
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
                         ),
                       ),
 
-                      // Frosted Glass Overlay outside circle is not easily doable with single standard ClipPath unless we invert it.
-                      // Instead we use a ColorFiltered or CustomPaint over the entire screen except the circle.
+                      // Invert mask using ColorFiltered
                       ColorFiltered(
                         colorFilter: ColorFilter.mode(
                           Colors.white.withValues(alpha: 0.8),
@@ -279,5 +274,50 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         ),
       ),
     );
+  }
+}
+
+class _ScanLinePainter extends CustomPainter {
+  final double scanValue;
+  final double circleSize;
+
+  _ScanLinePainter({required this.scanValue, required this.circleSize});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double radius = circleSize / 2;
+    final double yOffset = (scanValue - 0.5) * circleSize;
+    final double halfWidth = math.sqrt(
+      math.max(0.0, radius * radius - yOffset * yOffset),
+    );
+
+    final paint = Paint()
+      ..color = AppStyles.primaryBlue
+      ..strokeWidth = 2.5
+      ..shader = LinearGradient(
+        colors: [
+          AppStyles.primaryBlue.withValues(alpha: 0),
+          AppStyles.primaryBlue,
+          AppStyles.primaryBlue.withValues(alpha: 0),
+        ],
+      ).createShader(Rect.fromLTWH(radius - halfWidth, 0, halfWidth * 2, 1));
+
+    final Offset start = Offset(radius - halfWidth, radius + yOffset);
+    final Offset end = Offset(radius + halfWidth, radius + yOffset);
+
+    canvas.drawLine(start, end, paint);
+
+    final glowPaint = Paint()
+      ..color = AppStyles.primaryBlue
+      ..strokeWidth = 2.5
+      ..shader = paint.shader
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
+
+    canvas.drawLine(start, end, glowPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScanLinePainter oldDelegate) {
+    return true;
   }
 }

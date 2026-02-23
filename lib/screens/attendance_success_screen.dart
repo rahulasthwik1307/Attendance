@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../utils/app_styles.dart';
 import '../widgets/animated_button.dart';
@@ -16,6 +17,9 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
   late AnimationController _checkController;
   late Animation<double> _scaleAnimation;
   late AnimationController _rippleController;
+
+  int _countdown = 4;
+  late Timer _timer;
 
   @override
   void initState() {
@@ -37,9 +41,13 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
 
     _checkController.forward();
 
-    // Auto redirect after 3 seconds
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) {
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+      setState(() {
+        _countdown--;
+      });
+      if (_countdown <= 0) {
+        timer.cancel();
         Navigator.of(context).pushReplacementNamed('/dashboard');
       }
     });
@@ -47,6 +55,7 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
 
   @override
   void dispose() {
+    _timer.cancel();
     _checkController.dispose();
     _rippleController.dispose();
     super.dispose();
@@ -252,12 +261,24 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
               FadeSlideY(
                 delay: const Duration(milliseconds: 800),
                 child: AnimatedButton(
-                  onPressed: () =>
-                      Navigator.of(context).pushReplacementNamed('/dashboard'),
+                  onPressed: () {
+                    _timer.cancel();
+                    Navigator.of(context).pushReplacementNamed('/dashboard');
+                  },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppStyles.successGreen,
                   ),
                   child: const Text('Go to Dashboard →'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Redirecting in ${_countdown}s…',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppStyles.textGray,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
               const SizedBox(height: 16),

@@ -48,6 +48,8 @@ class _AttendanceFailedScreenState extends State<AttendanceFailedScreen>
 
   @override
   Widget build(BuildContext context) {
+    final String? mode = ModalRoute.of(context)?.settings.arguments as String?;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -124,6 +126,18 @@ class _AttendanceFailedScreenState extends State<AttendanceFailedScreen>
                   ),
                 ),
               ),
+              if (mode == 'forgot_password')
+                const FadeSlideY(
+                  delay: Duration(milliseconds: 350),
+                  child: Padding(
+                    padding: EdgeInsets.only(top: 8.0, left: 16.0, right: 16.0),
+                    child: Text(
+                      'We could not verify your identity. Please try again in good lighting.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 14, color: AppStyles.textGray),
+                    ),
+                  ),
+                ),
               const SizedBox(height: 32),
               FadeSlideY(
                 delay: const Duration(milliseconds: 400),
@@ -168,9 +182,17 @@ class _AttendanceFailedScreenState extends State<AttendanceFailedScreen>
               FadeSlideY(
                 delay: const Duration(milliseconds: 500),
                 child: AnimatedButton(
-                  onPressed: () => Navigator.of(
-                    context,
-                  ).pushReplacementNamed('/face_verification'),
+                  onPressed: () {
+                    if (mode == 'forgot_password') {
+                      Navigator.of(
+                        context,
+                      ).pushReplacementNamed('/forgot_password_face_verify');
+                    } else {
+                      Navigator.of(
+                        context,
+                      ).pushReplacementNamed('/face_verification');
+                    }
+                  },
                   child: const Text('Try Again'),
                 ),
               ),

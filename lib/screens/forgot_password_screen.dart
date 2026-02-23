@@ -258,7 +258,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                   child: AnimatedButton(
                     onPressed: () => Navigator.of(
                       context,
-                    ).pushReplacementNamed('/set_new_password'),
+                    ).pushNamed('/forgot_password_face_verify'),
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 20),
                       elevation: 0,

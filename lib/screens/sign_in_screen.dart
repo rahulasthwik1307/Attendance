@@ -62,13 +62,7 @@ class _SignInScreenState extends State<SignInScreen> {
     AuthFlowState.instance.passwordSet = true;
 
     if (mounted) {
-      // Check if face registration is actually complete
-      if (AuthFlowState.instance.faceRegistered) {
-        Navigator.of(context).pushReplacementNamed('/dashboard');
-      } else {
-        // Force face registration if not done
-        Navigator.of(context).pushReplacementNamed('/register');
-      }
+      Navigator.of(context).pushReplacementNamed('/dashboard');
     }
   }
 

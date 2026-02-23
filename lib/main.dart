@@ -21,6 +21,7 @@ import 'screens/activate_account_screen.dart' as activate;
 import 'screens/sign_in_screen.dart' as sign_in;
 import 'screens/forgot_password_screen.dart' as forgot_pw;
 import 'screens/password_reset_face_success_screen.dart' as pw_reset_success;
+import 'screens/forgot_password_face_verify_screen.dart' as forgot_pw_verify;
 import 'screens/set_new_password_screen.dart' as set_new_pw;
 import 'screens/password_change_success_screen.dart' as pw_change_success;
 
@@ -112,6 +113,9 @@ class SmartAttendanceApp extends StatelessWidget {
                 break;
               case '/forgot_password':
                 page = const forgot_pw.ForgotPasswordScreen();
+                break;
+              case '/forgot_password_face_verify':
+                page = const forgot_pw_verify.ForgotPasswordFaceVerifyScreen();
                 break;
               case '/password_reset_face_success':
                 page = const pw_reset_success.PasswordResetFaceSuccessScreen();
