@@ -125,11 +125,14 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
       if (AuthFlowState.instance.isFirstTimeUser) {
         AuthFlowState.instance.isFirstTimeUser = false;
         Navigator.of(context).pushReplacementNamed('/register');
+      } else if (AuthFlowState.instance.faceRegistered) {
+        Navigator.of(
+          context,
+        ).pushReplacementNamed('/password_updated', arguments: 'settings');
       } else {
-        Navigator.of(context).pushReplacementNamed(
-          '/password_updated',
-          arguments: AuthFlowState.instance.faceRegistered ? 'settings' : null,
-        );
+        Navigator.of(
+          context,
+        ).pushReplacementNamed('/password_updated', arguments: 'forgot');
       }
     }
   }

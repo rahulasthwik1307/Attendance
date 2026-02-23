@@ -18,7 +18,13 @@ class _PasswordUpdatedScreenState extends State<PasswordUpdatedScreen> {
     super.initState();
     _timer = Timer(const Duration(seconds: 3), () {
       if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/dashboard');
+        final String? mode =
+            ModalRoute.of(context)?.settings.arguments as String?;
+        if (mode == 'settings') {
+          Navigator.of(context).pushReplacementNamed('/dashboard');
+        } else {
+          Navigator.of(context).pushReplacementNamed('/sign_in');
+        }
       }
     });
   }
@@ -90,12 +96,14 @@ class _PasswordUpdatedScreenState extends State<PasswordUpdatedScreen> {
                 ),
               ),
               const SizedBox(height: 40),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 400),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 400),
                 child: Text(
-                  'Redirecting to dashboard…',
+                  mode == 'settings'
+                      ? 'Redirecting to dashboard…'
+                      : 'Redirecting to sign in…',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 12,
                     color: AppStyles.textGray,
                     fontWeight: FontWeight.w500,
