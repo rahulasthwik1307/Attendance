@@ -16,16 +16,15 @@ class _PasswordUpdatedScreenState extends State<PasswordUpdatedScreen> {
   @override
   void initState() {
     super.initState();
+    _startTimer();
+  }
+
+  void _startTimer() {
     _timer = Timer(const Duration(seconds: 3), () {
-      if (mounted) {
-        final String? mode =
-            ModalRoute.of(context)?.settings.arguments as String?;
-        if (mode == 'settings') {
-          Navigator.of(context).pushReplacementNamed('/dashboard');
-        } else {
-          Navigator.of(context).pushReplacementNamed('/sign_in');
-        }
-      }
+      if (!mounted) return;
+      Navigator.of(
+        context,
+      ).pushNamedAndRemoveUntil('/sign_in', (route) => false);
     });
   }
 
@@ -37,8 +36,6 @@ class _PasswordUpdatedScreenState extends State<PasswordUpdatedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final String? mode = ModalRoute.of(context)?.settings.arguments as String?;
-
     return Scaffold(
       backgroundColor: AppStyles.backgroundLight,
       body: SafeArea(
@@ -81,14 +78,12 @@ class _PasswordUpdatedScreenState extends State<PasswordUpdatedScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 300),
+              const FadeSlideY(
+                delay: Duration(milliseconds: 300),
                 child: Text(
-                  mode == 'settings'
-                      ? 'Your new password is now active.'
-                      : 'You can now sign in with your new password.',
+                  'Your password has been reset. Please sign in again.',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     color: Color(0xFF4A5568),
                     height: 1.6,
@@ -96,14 +91,12 @@ class _PasswordUpdatedScreenState extends State<PasswordUpdatedScreen> {
                 ),
               ),
               const SizedBox(height: 40),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 400),
+              const FadeSlideY(
+                delay: Duration(milliseconds: 400),
                 child: Text(
-                  mode == 'settings'
-                      ? 'Redirecting to dashboard…'
-                      : 'Redirecting to sign in…',
+                  'Redirecting to sign in…',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
                     color: AppStyles.textGray,
                     fontWeight: FontWeight.w500,

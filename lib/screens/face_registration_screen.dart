@@ -74,7 +74,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       if (i == _instructions.length - 1) {
         await Future.delayed(const Duration(seconds: 1));
         if (mounted) {
-          Navigator.of(context).pushReplacementNamed('/registration_success');
+          Navigator.of(context).pushReplacementNamed('/face_preview');
         }
       }
     }

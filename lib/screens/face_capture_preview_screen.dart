@@ -3,7 +3,6 @@ import '../utils/app_styles.dart';
 import '../widgets/animated_button.dart';
 import '../widgets/fade_slide_y.dart';
 import '../utils/auth_flow_state.dart';
-import 'face_registration_screen.dart';
 
 class FaceCapturePreviewScreen extends StatefulWidget {
   const FaceCapturePreviewScreen({super.key});
@@ -48,10 +47,9 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
         AuthFlowState.instance.passwordSet = true;
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const FaceRegistrationScreen()),
-          (route) => false,
-        );
+        Navigator.of(
+          context,
+        ).pushNamedAndRemoveUntil('/register', (route) => false);
       },
       child: Scaffold(
         backgroundColor: Colors.white,
@@ -136,10 +134,8 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
                     child: AnimatedButton(
                       onPressed: () {
                         AuthFlowState.instance.passwordSet = true;
-                        Navigator.of(context).pushAndRemoveUntil(
-                          MaterialPageRoute(
-                            builder: (_) => const FaceRegistrationScreen(),
-                          ),
+                        Navigator.of(context).pushNamedAndRemoveUntil(
+                          '/register',
                           (route) => false,
                         );
                       },
@@ -190,9 +186,16 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
                         await Future.delayed(const Duration(milliseconds: 600));
                         if (!context.mounted) return;
                         AuthFlowState.instance.faceRegistered = true;
-                        Navigator.of(
-                          context,
-                        ).pushReplacementNamed('/registration_success');
+                        if (AuthFlowState.instance.isFaceReset) {
+                          AuthFlowState.instance.isFaceReset = false;
+                          Navigator.of(
+                            context,
+                          ).pushReplacementNamed('/face_updated_success');
+                        } else {
+                          Navigator.of(
+                            context,
+                          ).pushReplacementNamed('/registration_success');
+                        }
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppStyles.primaryBlue,

@@ -125,10 +125,91 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
       if (AuthFlowState.instance.isFirstTimeUser) {
         AuthFlowState.instance.isFirstTimeUser = false;
         Navigator.of(context).pushReplacementNamed('/register');
-      } else if (AuthFlowState.instance.faceRegistered) {
-        Navigator.of(
-          context,
-        ).pushReplacementNamed('/password_updated', arguments: 'settings');
+      } else if (AuthFlowState.instance.faceRegistered &&
+          !AuthFlowState.instance.isFaceReset) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => PopScope(
+            canPop: false,
+            child: Dialog(
+              backgroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppStyles.primaryBlue.withValues(alpha: 0.09),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.lock_person_rounded,
+                        color: AppStyles.primaryBlue,
+                        size: 32,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Password Updated',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1A202C),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'For your security, please sign in again with your new password.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF4A5568),
+                        height: 1.6,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          AuthFlowState.instance.reset();
+                          Navigator.of(context).pushNamedAndRemoveUntil(
+                            '/sign_in',
+                            (route) => false,
+                          );
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppStyles.primaryBlue,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text(
+                          'Sign In Now',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
       } else {
         Navigator.of(
           context,

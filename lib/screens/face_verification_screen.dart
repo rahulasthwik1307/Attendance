@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import '../utils/app_styles.dart';
+import '../utils/auth_flow_state.dart';
 
 class FaceVerificationScreen extends StatefulWidget {
   const FaceVerificationScreen({super.key});
@@ -93,7 +94,22 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       if (i == _instructions.length - 1) {
         await Future.delayed(const Duration(seconds: 1));
         if (mounted) {
-          Navigator.of(context).pushReplacementNamed('/attendance_success');
+          final String? mode =
+              ModalRoute.of(context)?.settings.arguments as String?;
+          if (mode == 'password_reset') {
+            Navigator.of(
+              context,
+            ).pushReplacementNamed('/password_reset_face_success');
+          } else if (mode == 'face_reset') {
+            Navigator.of(
+              context,
+            ).pushNamedAndRemoveUntil('/register', (route) => false);
+            AuthFlowState.instance.passwordSet = true;
+            AuthFlowState.instance.faceRegistered = false;
+            AuthFlowState.instance.isFirstTimeUser = false;
+          } else {
+            Navigator.of(context).pushReplacementNamed('/attendance_success');
+          }
         }
       }
     }

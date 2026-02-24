@@ -22,9 +22,11 @@ import 'screens/sign_in_screen.dart' as sign_in;
 import 'screens/forgot_password_screen.dart' as forgot_pw;
 import 'screens/password_reset_face_success_screen.dart' as pw_reset_success;
 import 'screens/forgot_password_face_verify_screen.dart' as forgot_pw_verify;
+import 'screens/reset_face_verify_screen.dart' as reset_face_verify;
 import 'screens/set_new_password_screen.dart' as set_new_pw;
 import 'screens/password_updated_screen.dart' as pw_updated;
 import 'screens/password_change_success_screen.dart' as pw_change_success;
+import 'screens/face_updated_success_screen.dart' as face_updated_success;
 
 final ValueNotifier<ThemeMode> appThemeNotifier = ValueNotifier(
   ThemeMode.light,
@@ -118,6 +120,9 @@ class SmartAttendanceApp extends StatelessWidget {
               case '/forgot_password_face_verify':
                 page = const forgot_pw_verify.ForgotPasswordFaceVerifyScreen();
                 break;
+              case '/reset_face_verify':
+                page = const reset_face_verify.ResetFaceVerifyScreen();
+                break;
               case '/password_reset_face_success':
                 page = const pw_reset_success.PasswordResetFaceSuccessScreen();
                 break;
@@ -129,6 +134,9 @@ class SmartAttendanceApp extends StatelessWidget {
                 break;
               case '/password_change_success':
                 page = const pw_change_success.PasswordChangeSuccessScreen();
+                break;
+              case '/face_updated_success':
+                page = const face_updated_success.FaceUpdatedSuccessScreen();
                 break;
               default:
                 page = const splash.SplashScreen();
