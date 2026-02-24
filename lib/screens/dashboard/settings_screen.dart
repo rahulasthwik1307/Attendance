@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../utils/app_styles.dart';
-import '../widgets/custom_bottom_nav.dart';
-import '../widgets/fade_slide_y.dart';
-import '../main.dart';
+import '../../utils/app_styles.dart';
+import '../../widgets/custom_bottom_nav.dart';
+import '../../widgets/fade_slide_y.dart';
+import '../../main.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});

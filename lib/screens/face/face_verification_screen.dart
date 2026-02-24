@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
-import '../utils/app_styles.dart';
-import '../utils/auth_flow_state.dart';
+import '../../utils/app_styles.dart';
+import '../../utils/auth_flow_state.dart';
 
 class FaceVerificationScreen extends StatefulWidget {
   const FaceVerificationScreen({super.key});

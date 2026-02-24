@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import '../utils/app_styles.dart';
-import '../utils/auth_flow_state.dart';
-import '../widgets/animated_button.dart';
-import '../widgets/fade_slide_y.dart';
+import '../../utils/app_styles.dart';
+import '../../utils/auth_flow_state.dart';
+import '../../widgets/animated_button.dart';
+import '../../widgets/fade_slide_y.dart';
 
 class ActivateAccountScreen extends StatefulWidget {
   const ActivateAccountScreen({super.key});

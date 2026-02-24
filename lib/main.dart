@@ -2,31 +2,31 @@ import 'package:flutter/material.dart';
 import 'utils/app_styles.dart';
 import 'utils/auth_flow_state.dart';
 
-import 'screens/splash_screen.dart' as splash;
-import 'screens/home_screen.dart' as home;
-import 'screens/face_registration_screen.dart' as face_reg;
-import 'screens/registration_success_screen.dart' as reg_success;
-import 'screens/registration_failed_screen.dart' as reg_fail;
-import 'screens/face_capture_preview_screen.dart' as preview;
-import 'screens/dashboard_screen.dart' as dashboard;
-import 'screens/history_screen.dart' as history;
-import 'screens/face_verification_screen.dart' as verify;
-import 'screens/attendance_success_screen.dart' as att_success;
-import 'screens/attendance_failed_screen.dart' as att_fail;
-import 'screens/location_error_screen.dart' as loc_error;
-import 'screens/profile_screen.dart' as profile;
-import 'screens/settings_screen.dart' as settings_screen;
-import 'screens/activate_account_screen.dart' as activate;
+import 'screens/auth/splash_screen.dart' as splash;
+import 'screens/auth/home_screen.dart' as home;
+import 'screens/face/face_registration_screen.dart' as face_reg;
+import 'screens/registration/registration_success_screen.dart' as reg_success;
+import 'screens/registration/registration_failed_screen.dart' as reg_fail;
+import 'screens/face/face_capture_preview_screen.dart' as preview;
+import 'screens/dashboard/dashboard_screen.dart' as dashboard;
+import 'screens/dashboard/history_screen.dart' as history;
+import 'screens/face/face_verification_screen.dart' as verify;
+import 'screens/attendance/attendance_success_screen.dart' as att_success;
+import 'screens/attendance/attendance_failed_screen.dart' as att_fail;
+import 'screens/attendance/location_error_screen.dart' as loc_error;
+import 'screens/dashboard/profile_screen.dart' as profile;
+import 'screens/dashboard/settings_screen.dart' as settings_screen;
+import 'screens/auth/activate_account_screen.dart' as activate;
 // Auth & password reset flow
-import 'screens/sign_in_screen.dart' as sign_in;
-import 'screens/forgot_password_screen.dart' as forgot_pw;
-import 'screens/password_reset_face_success_screen.dart' as pw_reset_success;
-import 'screens/forgot_password_face_verify_screen.dart' as forgot_pw_verify;
-import 'screens/reset_face_verify_screen.dart' as reset_face_verify;
-import 'screens/set_new_password_screen.dart' as set_new_pw;
-import 'screens/password_updated_screen.dart' as pw_updated;
-import 'screens/password_change_success_screen.dart' as pw_change_success;
-import 'screens/face_updated_success_screen.dart' as face_updated_success;
+import 'screens/auth/sign_in_screen.dart' as sign_in;
+import 'screens/auth/forgot_password_screen.dart' as forgot_pw;
+import 'screens/auth/password_reset_face_success_screen.dart' as pw_reset_success;
+import 'screens/auth/forgot_password_face_verify_screen.dart' as forgot_pw_verify;
+import 'screens/face/reset_face_verify_screen.dart' as reset_face_verify;
+import 'screens/auth/set_new_password_screen.dart' as set_new_pw;
+import 'screens/auth/password_updated_screen.dart' as pw_updated;
+import 'screens/auth/password_change_success_screen.dart' as pw_change_success;
+import 'screens/face/face_updated_success_screen.dart' as face_updated_success;
 
 final ValueNotifier<ThemeMode> appThemeNotifier = ValueNotifier(
   ThemeMode.light,

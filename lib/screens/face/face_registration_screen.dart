@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../utils/app_styles.dart';
-import '../utils/auth_flow_state.dart';
+import '../../utils/app_styles.dart';
+import '../../utils/auth_flow_state.dart';
 
 class FaceRegistrationScreen extends StatefulWidget {
   const FaceRegistrationScreen({super.key});

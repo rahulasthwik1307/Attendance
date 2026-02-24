@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
-import '../utils/app_styles.dart';
-import '../widgets/animated_button.dart';
-import '../widgets/fade_slide_y.dart';
+import '../../utils/app_styles.dart';
+import '../../widgets/animated_button.dart';
+import '../../widgets/fade_slide_y.dart';
 
 class RegistrationFailedScreen extends StatefulWidget {
   const RegistrationFailedScreen({super.key});

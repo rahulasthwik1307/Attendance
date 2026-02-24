@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../utils/app_styles.dart';
-import '../widgets/fade_slide_y.dart';
+import '../../utils/app_styles.dart';
+import '../../widgets/fade_slide_y.dart';
 
 class FaceUpdatedSuccessScreen extends StatefulWidget {
   const FaceUpdatedSuccessScreen({super.key});

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
-import '../utils/app_styles.dart';
-import '../widgets/fade_slide_y.dart';
+import '../../utils/app_styles.dart';
+import '../../widgets/fade_slide_y.dart';
 
 class PasswordUpdatedScreen extends StatefulWidget {
   const PasswordUpdatedScreen({super.key});

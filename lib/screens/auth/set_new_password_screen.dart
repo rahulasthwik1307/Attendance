@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import '../utils/app_styles.dart';
-import '../widgets/animated_button.dart';
-import '../widgets/fade_slide_y.dart';
-import '../utils/auth_flow_state.dart';
+import '../../utils/app_styles.dart';
+import '../../widgets/animated_button.dart';
+import '../../widgets/fade_slide_y.dart';
+import '../../utils/auth_flow_state.dart';
 
 // ─── Strength helpers ─────────────────────────────────────────────────────────
 

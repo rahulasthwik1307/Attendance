@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../utils/app_styles.dart';
-import '../widgets/animated_button.dart';
-import '../widgets/custom_bottom_nav.dart';
-import '../widgets/fade_slide_y.dart';
+import '../../utils/app_styles.dart';
+import '../../widgets/animated_button.dart';
+import '../../widgets/custom_bottom_nav.dart';
+import '../../widgets/fade_slide_y.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
-import '../utils/app_styles.dart';
+import '../../utils/app_styles.dart';
 
 class ForgotPasswordFaceVerifyScreen extends StatefulWidget {
   const ForgotPasswordFaceVerifyScreen({super.key});

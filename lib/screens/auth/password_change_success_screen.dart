@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../utils/app_styles.dart';
-import '../widgets/fade_slide_y.dart';
+import '../../utils/app_styles.dart';
+import '../../widgets/fade_slide_y.dart';
 
 class PasswordChangeSuccessScreen extends StatefulWidget {
   const PasswordChangeSuccessScreen({super.key});

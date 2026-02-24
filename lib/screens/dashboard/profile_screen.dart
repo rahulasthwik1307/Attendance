@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:math' as math;
-import '../utils/app_styles.dart';
-import '../widgets/custom_bottom_nav.dart';
-import '../widgets/fade_slide_y.dart';
+import '../../utils/app_styles.dart';
+import '../../widgets/custom_bottom_nav.dart';
+import '../../widgets/fade_slide_y.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
