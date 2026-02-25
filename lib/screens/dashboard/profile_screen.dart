@@ -16,6 +16,14 @@ class _ProfileScreenState extends State<ProfileScreen>
     with TickerProviderStateMixin {
   late AnimationController _borderRotationController;
 
+  static const String _name = 'Rahul Sharma';
+  static const String _rollNumber = '2021CS047';
+  static const String _department = 'CSE — Computer Science';
+  static const String _year = '3rd Year';
+  static const double _attendancePct = 0.78;
+  static const int _attendanceDays = 18;
+  static const int _totalDays = 23;
+
   @override
   void initState() {
     super.initState();
@@ -204,30 +212,20 @@ class _ProfileScreenState extends State<ProfileScreen>
                         height: 120,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: cardColor,
+                          color: theme.primaryColor.withValues(alpha: 0.12),
                           border: Border.all(color: cardColor, width: 4),
-                          image: const DecorationImage(
-                            image: NetworkImage(
-                              'https://picsum.photos/200/200?people',
-                            ),
-                            fit: BoxFit.cover,
-                          ),
                         ),
-                      ),
-                      Positioned(
-                        bottom: 0,
-                        right: 0,
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: AppStyles.primaryBlue,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: cardColor, width: 3),
-                          ),
-                          child: const Icon(
-                            Icons.camera_alt_rounded,
-                            color: Colors.white,
-                            size: 16,
+                        child: ClipOval(
+                          child: Center(
+                            child: Text(
+                              'RS',
+                              style: TextStyle(
+                                fontSize: 36,
+                                fontWeight: FontWeight.w800,
+                                color: theme.primaryColor,
+                                letterSpacing: -1,
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -240,7 +238,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                 delay: const Duration(milliseconds: 200),
                 child: Center(
                   child: Text(
-                    'John Doe',
+                    _name,
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
@@ -249,16 +247,61 @@ class _ProfileScreenState extends State<ProfileScreen>
                   ),
                 ),
               ),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 300),
+              const SizedBox(height: 4),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 260),
                 child: Center(
                   child: Text(
-                    '2021CS001',
-                    style: TextStyle(fontSize: 16, color: AppStyles.textGray),
+                    _rollNumber,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: AppStyles.textGray,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 12),
+              // Attendance percentage badge
+              FadeSlideY(
+                delay: const Duration(milliseconds: 320),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppStyles.successGreen.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: AppStyles.successGreen.withValues(alpha: 0.3),
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.trending_up_rounded,
+                          size: 14,
+                          color: AppStyles.successGreen,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${(_attendancePct * 100).round()}% Attendance — $_attendanceDays / $_totalDays Days',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: AppStyles.successGreen,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 28),
               FadeSlideY(
                 delay: const Duration(milliseconds: 400),
                 child: Container(
@@ -278,8 +321,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                       _buildInfoRow(
                         Icons.person_outline_rounded,
                         'Student Name',
-                        'John Doe',
+                        _name,
                         textColor,
+                        isDark,
                       ),
                       Divider(
                         height: 1,
@@ -290,8 +334,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                       _buildInfoRow(
                         Icons.badge_outlined,
                         'Roll Number',
-                        '2021CS001',
+                        _rollNumber,
                         textColor,
+                        isDark,
                       ),
                       Divider(
                         height: 1,
@@ -302,8 +347,9 @@ class _ProfileScreenState extends State<ProfileScreen>
                       _buildInfoRow(
                         Icons.domain_rounded,
                         'Department',
-                        'CSE',
+                        _department,
                         textColor,
+                        isDark,
                       ),
                       Divider(
                         height: 1,
@@ -314,48 +360,79 @@ class _ProfileScreenState extends State<ProfileScreen>
                       _buildInfoRow(
                         Icons.school_outlined,
                         'Year',
-                        '3rd Year',
+                        _year,
                         textColor,
+                        isDark,
                       ),
                     ],
                   ),
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
               FadeSlideY(
                 delay: const Duration(milliseconds: 500),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 16,
-                  ),
+                  padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: AppStyles.successGreen.withValues(alpha: 0.1),
+                    color: AppStyles.successGreen.withValues(
+                      alpha: isDark ? 0.15 : 0.08,
+                    ),
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: AppStyles.successGreen.withValues(alpha: 0.3),
+                      color: AppStyles.successGreen.withValues(alpha: 0.25),
+                      width: 1,
                     ),
                   ),
-                  child: const Row(
+                  child: Row(
                     children: [
-                      Icon(
-                        Icons.face_retouching_natural_rounded,
-                        color: AppStyles.successGreen,
-                      ),
-                      SizedBox(width: 16),
-                      Expanded(
-                        child: Text(
-                          'Face Registered — Active',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: AppStyles.successGreen,
-                          ),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppStyles.successGreen.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.face_retouching_natural_rounded,
+                          color: AppStyles.successGreen,
+                          size: 22,
                         ),
                       ),
-                      Icon(
-                        Icons.check_circle_rounded,
-                        color: AppStyles.successGreen,
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Face Registration',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: AppStyles.textGray,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            const Text(
+                              'Approved — Active',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: AppStyles.successGreen,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: AppStyles.successGreen.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.verified_rounded,
+                          color: AppStyles.successGreen,
+                          size: 20,
+                        ),
                       ),
                     ],
                   ),
@@ -375,24 +452,32 @@ class _ProfileScreenState extends State<ProfileScreen>
     String label,
     String value,
     Color textColor,
+    bool isDark,
   ) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
       child: Row(
         children: [
-          Icon(icon, color: AppStyles.textGray, size: 22),
-          const SizedBox(width: 16),
+          Icon(icon, color: AppStyles.textGray, size: 20),
+          const SizedBox(width: 14),
           Text(
             label,
-            style: const TextStyle(fontSize: 14, color: AppStyles.textGray),
+            style: const TextStyle(
+              fontSize: 13,
+              color: AppStyles.textGray,
+              fontWeight: FontWeight.w500,
+            ),
           ),
           const Spacer(),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: textColor,
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: textColor,
+              ),
             ),
           ),
         ],

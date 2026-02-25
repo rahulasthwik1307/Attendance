@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:math' as math;
 import '../../utils/app_styles.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/custom_bottom_nav.dart';
@@ -16,6 +17,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+  bool _scheduleExpanded = false;
 
   @override
   void initState() {
@@ -160,20 +162,12 @@ class _DashboardScreenState extends State<DashboardScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Hello, Student 👋',
+                'Hello, Rahul 👋',
                 style: TextStyle(
                   color:
                       theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
                   fontWeight: FontWeight.bold,
                   fontSize: 24,
-                ),
-              ),
-              Text(
-                'Oct 24, 2024',
-                style: TextStyle(
-                  color: AppStyles.textGray.withValues(alpha: 0.8),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
                 ),
               ),
             ],
@@ -194,21 +188,22 @@ class _DashboardScreenState extends State<DashboardScreen>
               vertical: 16.0,
             ),
             children: [
-              // ── System Readiness Card (merged Face + Location) ──────────────
+              const SizedBox(height: 4),
               FadeSlideY(
                 delay: const Duration(milliseconds: 100),
-                child: _SystemStatusCard(isDark: isDark),
+                child: _TodayStatusCard(isDark: isDark),
               ),
-              const SizedBox(height: 20),
-
-              // ── Hero: Last Attendance ────────────────────────────────────────
+              const SizedBox(height: 16),
               FadeSlideY(
-                delay: const Duration(milliseconds: 220),
+                delay: const Duration(milliseconds: 180),
+                child: _AttendancePercentageCard(theme: theme, isDark: isDark),
+              ),
+              const SizedBox(height: 16),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 260),
                 child: _HeroAttendanceCard(theme: theme),
               ),
-              const SizedBox(height: 32),
-
-              // ── Primary Action: Verify Face ──────────────────────────────────
+              const SizedBox(height: 20),
               FadeSlideY(
                 delay: const Duration(milliseconds: 340),
                 child: AnimatedBuilder(
@@ -248,9 +243,17 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
-
-              // ── Secondary Action Tiles ───────────────────────────────────────
+              const SizedBox(height: 10),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 400),
+                child: _ActionTile(
+                  label: 'Scan QR — Class Attendance',
+                  subtitle: 'Scan QR code to mark period attendance',
+                  icon: Icons.qr_code_scanner_rounded,
+                  isDestructive: false,
+                ),
+              ),
+              const SizedBox(height: 10),
               FadeSlideY(
                 delay: const Duration(milliseconds: 460),
                 child: _ActionTile(
@@ -262,7 +265,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               ),
               const SizedBox(height: 10),
               FadeSlideY(
-                delay: const Duration(milliseconds: 560),
+                delay: const Duration(milliseconds: 520),
                 child: _ActionTile(
                   label: 'Reset Face Data',
                   subtitle: 'Re-register your face securely',
@@ -270,7 +273,17 @@ class _DashboardScreenState extends State<DashboardScreen>
                   isDestructive: false,
                 ),
               ),
-              const SizedBox(height: 16),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 580),
+                child: _ExpandableScheduleSection(
+                  isDark: isDark,
+                  theme: theme,
+                  isExpanded: _scheduleExpanded,
+                  onToggle: () =>
+                      setState(() => _scheduleExpanded = !_scheduleExpanded),
+                ),
+              ),
+              const SizedBox(height: 24),
             ],
           ),
         ),
@@ -280,51 +293,129 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 }
 
-// ─── System Status Card (Face + Location Combined) ────────────────────────────
-class _SystemStatusCard extends StatelessWidget {
+class _TodayStatusCard extends StatefulWidget {
   final bool isDark;
-  const _SystemStatusCard({required this.isDark});
+  const _TodayStatusCard({required this.isDark});
+
+  @override
+  State<_TodayStatusCard> createState() => _TodayStatusCardState();
+}
+
+class _TodayStatusCardState extends State<_TodayStatusCard>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _cardController;
+  late Animation<double> _fadeAnim;
+  late Animation<double> _scaleAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _cardController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+
+    _fadeAnim = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _cardController, curve: Curves.easeOut));
+
+    _scaleAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _cardController,
+        curve: const Interval(0.2, 1.0, curve: Curves.easeOutBack),
+      ),
+    );
+
+    // Short delay to allow screen to build before starting
+    Future.delayed(const Duration(milliseconds: 50), () {
+      if (mounted) _cardController.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _cardController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 14.0),
+    return AnimatedBuilder(
+      animation: _cardController,
+      builder: (context, child) {
+        return Opacity(
+          opacity: _fadeAnim.value,
+          child: Transform.translate(
+            offset: Offset(0, 8 * (1 - _fadeAnim.value)),
+            child: child,
+          ),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        decoration: BoxDecoration(
+          color: AppStyles.successGreen.withValues(
+            alpha: widget.isDark ? 0.15 : 0.07,
+          ),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: AppStyles.successGreen.withValues(alpha: 0.25),
+            width: 1,
+          ),
+        ),
         child: Row(
           children: [
-            // Label
-            Text(
-              'System',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
-                letterSpacing: 0.3,
+            AnimatedBuilder(
+              animation: _scaleAnim,
+              builder: (context, child) {
+                return Transform.scale(scale: _scaleAnim.value, child: child);
+              },
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppStyles.successGreen.withValues(alpha: 0.25),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.check_rounded,
+                  color: AppStyles.successGreen,
+                  size: 24,
+                ),
               ),
             ),
-            const Spacer(),
-            // Face Status
-            _StatusPill(
-              icon: Icons.face_retouching_natural_rounded,
-              label: 'Active',
-              color: AppStyles.successGreen,
-            ),
-            const SizedBox(width: 10),
-            // Divider
-            Container(
-              width: 1,
-              height: 20,
-              color: (isDark ? Colors.white : Colors.black).withValues(
-                alpha: 0.1,
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'You are Present Today',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.2,
+                      color: AppStyles.successGreen,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      _StatusPill(
+                        icon: Icons.location_on_rounded,
+                        label: 'Campus',
+                        color: AppStyles.successGreen,
+                      ),
+                      _StatusPill(
+                        icon: Icons.face_retouching_natural_rounded,
+                        label: 'Face Verified',
+                        color: AppStyles.successGreen,
+                      ),
+                    ],
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(width: 10),
-            // Location Status
-            _StatusPill(
-              icon: Icons.location_on_rounded,
-              label: 'Set',
-              color: AppStyles.successGreen,
             ),
           ],
         ),
@@ -345,25 +436,307 @@ class _StatusPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: color, size: 16),
-        const SizedBox(width: 5),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.bold,
-            color: color,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.25), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 11),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
-// ─── Hero Attendance Card ──────────────────────────────────────────────────────
+class _AttendancePercentageCard extends StatefulWidget {
+  final ThemeData theme;
+  final bool isDark;
+  const _AttendancePercentageCard({required this.theme, required this.isDark});
+
+  @override
+  State<_AttendancePercentageCard> createState() =>
+      _AttendancePercentageCardState();
+}
+
+class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _progressAnim;
+  late Animation<int> _counterAnim;
+
+  static const double _pct = 0.78;
+  static const int _present = 18;
+  static const int _total = 23;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    );
+    _progressAnim = Tween<double>(
+      begin: 0,
+      end: _pct,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+    _counterAnim = IntTween(
+      begin: 0,
+      end: 78,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) _controller.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = widget.theme;
+    final isDark = widget.isDark;
+    final Color pctColor = AppStyles.successGreen;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 20, 26, 20),
+      decoration: BoxDecoration(
+        color: (theme.cardTheme.color ?? Colors.white).withValues(alpha: 0.96),
+        border: Border.all(
+          color: pctColor.withValues(alpha: isDark ? 0.08 : 0.04),
+          width: 1,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: pctColor.withValues(alpha: isDark ? 0.08 : 0.05),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) {
+              return SizedBox(
+                width: 100,
+                height: 100,
+                child: CustomPaint(
+                  painter: _ArcPainter(
+                    progress: _progressAnim.value,
+                    isDark: isDark,
+                    color: pctColor,
+                  ),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        RichText(
+                          text: TextSpan(
+                            children: [
+                              TextSpan(
+                                text: '${_counterAnim.value}',
+                                style: TextStyle(
+                                  fontSize: 26,
+                                  fontWeight: FontWeight.w800,
+                                  color: pctColor,
+                                  letterSpacing: -1,
+                                  height: 1,
+                                ),
+                              ),
+                              TextSpan(
+                                text: '%',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: pctColor.withValues(alpha: 0.7),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          'Overall',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color:
+                                theme.textTheme.bodyMedium?.color ??
+                                AppStyles.textGray,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(width: 20),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Attendance',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color:
+                        theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                RichText(
+                  text: TextSpan(
+                    children: [
+                      TextSpan(
+                        text: '$_present',
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
+                          color:
+                              theme.textTheme.displayLarge?.color ??
+                              AppStyles.textDark,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      TextSpan(
+                        text: ' / $_total',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color:
+                              theme.textTheme.bodyMedium?.color ??
+                              AppStyles.textGray,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  'Days Present',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color:
+                        theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: pctColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.trending_up_rounded,
+                        size: 13,
+                        color: pctColor,
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          'Above 75% — Good Standing',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: pctColor,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ArcPainter extends CustomPainter {
+  final double progress;
+  final bool isDark;
+  final Color color;
+  const _ArcPainter({
+    required this.progress,
+    required this.isDark,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.width - 16) / 2;
+
+    final trackPaint = Paint()
+      ..color = isDark
+          ? Colors.white.withValues(alpha: 0.08)
+          : Colors.black.withValues(alpha: 0.06)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 8
+      ..strokeCap = StrokeCap.round;
+
+    final arcPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 8
+      ..strokeCap = StrokeCap.round;
+
+    const startAngle = -math.pi / 2;
+    const fullSweep = 2 * math.pi;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      startAngle,
+      fullSweep,
+      false,
+      trackPaint,
+    );
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      startAngle,
+      fullSweep * progress,
+      false,
+      arcPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ArcPainter old) => old.progress != progress;
+}
+
 class _HeroAttendanceCard extends StatelessWidget {
   final ThemeData theme;
   const _HeroAttendanceCard({required this.theme});
@@ -459,7 +832,6 @@ class _HeroAttendanceCard extends StatelessWidget {
   }
 }
 
-// ─── Premium Action Tile ───────────────────────────────────────────────────────
 class _ActionTile extends StatelessWidget {
   final String label;
   final String subtitle;
@@ -483,6 +855,10 @@ class _ActionTile extends StatelessWidget {
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         onTap: () {
+          if (label == 'Scan QR — Class Attendance') {
+            // QR scanner will be implemented with backend
+            return;
+          }
           if (label == 'Reset Face Data') {
             showGeneralDialog(
               context: context,
@@ -669,6 +1045,355 @@ class _ActionTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ExpandableScheduleSection extends StatefulWidget {
+  final bool isDark;
+  final ThemeData theme;
+  final bool isExpanded;
+  final VoidCallback onToggle;
+
+  const _ExpandableScheduleSection({
+    required this.isDark,
+    required this.theme,
+    required this.isExpanded,
+    required this.onToggle,
+  });
+
+  @override
+  State<_ExpandableScheduleSection> createState() =>
+      _ExpandableScheduleSectionState();
+}
+
+class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _expandController;
+  late Animation<double> _expandAnimation;
+  late Animation<double> _rotateAnimation;
+
+  static const List<Map<String, dynamic>> _periods = [
+    {
+      'period': '1st',
+      'time': '09:15',
+      'subject': 'Data Structures',
+      'room': 'Room 201',
+      'status': 'done',
+    },
+    {
+      'period': '2nd',
+      'time': '10:10',
+      'subject': 'Operating Systems',
+      'room': 'Room 105',
+      'status': 'done',
+    },
+    {
+      'period': '3rd',
+      'time': '11:10',
+      'subject': 'DBMS',
+      'room': 'Room 301',
+      'status': 'current',
+    },
+    {
+      'period': '4th',
+      'time': '12:00',
+      'subject': 'Computer Networks',
+      'room': 'Room 202',
+      'status': 'upcoming',
+    },
+    {
+      'period': '5th',
+      'time': '01:30',
+      'subject': 'Software Engg',
+      'room': 'Room 104',
+      'status': 'upcoming',
+    },
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _expandController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+    );
+    _expandAnimation = CurvedAnimation(
+      parent: _expandController,
+      curve: Curves.easeOutCubic,
+    );
+    _rotateAnimation = Tween<double>(begin: 0, end: 0.5).animate(
+      CurvedAnimation(parent: _expandController, curve: Curves.easeOutCubic),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _ExpandableScheduleSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isExpanded != oldWidget.isExpanded) {
+      if (widget.isExpanded) {
+        _expandController.forward();
+      } else {
+        _expandController.reverse();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _expandController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = widget.theme;
+    final isDark = widget.isDark;
+
+    return Column(
+      children: [
+        // Header — always visible, tappable
+        GestureDetector(
+          onTap: widget.onToggle,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            decoration: BoxDecoration(
+              color: theme.cardTheme.color ?? Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: theme.primaryColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.calendar_today_rounded,
+                    color: theme.primaryColor,
+                    size: 18,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "Today's Schedule",
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color:
+                              theme.textTheme.displayLarge?.color ??
+                              AppStyles.textDark,
+                        ),
+                      ),
+                      Text(
+                        widget.isExpanded
+                            ? 'Wednesday • 5 periods'
+                            : 'Tap to view your classes',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color:
+                              theme.textTheme.bodyMedium?.color ??
+                              AppStyles.textGray,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                RotationTransition(
+                  turns: _rotateAnimation,
+                  child: Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    color:
+                        theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                    size: 24,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Expandable content
+        SizeTransition(
+          sizeFactor: _expandAnimation,
+          child: FadeTransition(
+            opacity: _expandAnimation,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: widget.theme.cardTheme.color ?? Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(
+                        alpha: widget.isDark ? 0.2 : 0.05,
+                      ),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: SizedBox(
+                  height: 118,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    physics: const BouncingScrollPhysics(),
+                    itemCount: _periods.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 10),
+                    itemBuilder: (context, index) {
+                      final period = _periods[index];
+                      final status = period['status'] as String;
+                      final bool isDone = status == 'done';
+                      final bool isCurrent = status == 'current';
+                      final theme = widget.theme;
+                      final isDark = widget.isDark;
+
+                      final Color cardColor = isCurrent
+                          ? theme.primaryColor
+                          : (isDark
+                                ? Colors.white.withValues(alpha: 0.06)
+                                : AppStyles.backgroundLight);
+
+                      final Color textPrimary = isCurrent
+                          ? Colors.white
+                          : (theme.textTheme.displayLarge?.color ??
+                                AppStyles.textDark);
+
+                      final Color textSecondary = isCurrent
+                          ? Colors.white.withValues(alpha: 0.75)
+                          : (theme.textTheme.bodyMedium?.color ??
+                                AppStyles.textGray);
+
+                      return Container(
+                        width: 120,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: cardColor,
+                          borderRadius: BorderRadius.circular(12),
+                          border: isCurrent
+                              ? null
+                              : Border.all(
+                                  color: isDark
+                                      ? Colors.white.withValues(alpha: 0.08)
+                                      : Colors.black.withValues(alpha: 0.07),
+                                  width: 1,
+                                ),
+                          boxShadow: isCurrent
+                              ? [
+                                  BoxShadow(
+                                    color: theme.primaryColor.withValues(
+                                      alpha: 0.3,
+                                    ),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 3),
+                                  ),
+                                ]
+                              : [],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  period['period'] as String,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: textSecondary,
+                                  ),
+                                ),
+                                if (isDone)
+                                  Icon(
+                                    Icons.check_circle_rounded,
+                                    size: 13,
+                                    color: AppStyles.successGreen.withValues(
+                                      alpha: 0.7,
+                                    ),
+                                  )
+                                else if (isCurrent)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 5,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(
+                                        alpha: 0.2,
+                                      ),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: const Text(
+                                      'Now',
+                                      style: TextStyle(
+                                        fontSize: 8,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              period['time'] as String,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                                color: textPrimary,
+                                letterSpacing: -0.3,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Expanded(
+                              child: Text(
+                                period['subject'] as String,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: textPrimary,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              period['room'] as String,
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: textSecondary,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
