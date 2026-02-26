@@ -140,9 +140,10 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
   @override
   Widget build(BuildContext context) {
-    final bool isUrgent = _secondsRemaining <= 60;
-    final Color timerColor = isUrgent
+    final Color timerColor = _secondsRemaining <= 30
         ? AppStyles.errorRed
+        : _secondsRemaining <= 60
+        ? AppStyles.amberWarning
         : AppStyles.successGreen;
     final String mm = (_secondsRemaining ~/ 60).toString().padLeft(2, '0');
     final String ss = (_secondsRemaining % 60).toString().padLeft(2, '0');
@@ -200,7 +201,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                       ),
                     ),
                     const SizedBox(width: 10),
-                    const Expanded(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -214,10 +215,18 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                           ),
                           SizedBox(height: 1),
                           Text(
-                            'Dr. P. Sharma • Room 301',
+                            'Room 301',
                             style: TextStyle(
                               color: Colors.white54,
                               fontSize: 11,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'This code expires shortly',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.35),
+                              fontSize: 10,
                             ),
                           ),
                         ],

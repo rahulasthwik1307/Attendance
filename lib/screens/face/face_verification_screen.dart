@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'dart:math' as math;
 import '../../utils/app_styles.dart';
 import '../../utils/auth_flow_state.dart';
@@ -18,6 +19,16 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   late AnimationController _locationCardController;
   late Animation<double> _locationFade;
   bool _locationVerified = false;
+
+  // ── Timer ring (above face circle) ────────────────────────────────
+  late AnimationController _timerPulseController;
+  late Animation<double> _timerPulseAnim;
+  late AnimationController _ringController;
+  late Animation<double> _ringProgress;
+  static const int _totalSeconds = 60;
+  int _secondsRemaining = _totalSeconds;
+  Timer? _countdownTimer;
+  final int _attempt = 1;
 
   final Map<String, String> _subtitles = {
     "Align your face": "Center your face within the circle",
@@ -64,6 +75,25 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       CurvedAnimation(parent: _locationCardController, curve: Curves.easeOut),
     );
 
+    // Timer pulse every second
+    _timerPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _timerPulseAnim = Tween<double>(begin: 1.0, end: 1.05).animate(
+      CurvedAnimation(parent: _timerPulseController, curve: Curves.easeInOut),
+    );
+
+    // Ring countdown (smooth depletion over 60s)
+    _ringController = AnimationController(
+      vsync: this,
+      duration: Duration(seconds: _totalSeconds),
+    );
+    _ringProgress = Tween<double>(
+      begin: 1.0,
+      end: 0.0,
+    ).animate(CurvedAnimation(parent: _ringController, curve: Curves.linear));
+
     _locationCardController.forward();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -71,6 +101,20 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       if (!mounted) return;
 
       setState(() => _locationVerified = true);
+
+      // Start timer after location verified
+      _ringController.forward();
+      _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (_secondsRemaining > 1) {
+          setState(() => _secondsRemaining--);
+          _timerPulseController.forward().then((_) {
+            if (mounted) _timerPulseController.reverse();
+          });
+        } else {
+          setState(() => _secondsRemaining = 0);
+          timer.cancel();
+        }
+      });
 
       await Future.delayed(const Duration(milliseconds: 1000));
       if (!mounted) return;
@@ -121,6 +165,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     _scanLineController.dispose();
     _textFadeController.dispose();
     _locationCardController.dispose();
+    _timerPulseController.dispose();
+    _ringController.dispose();
+    _countdownTimer?.cancel();
     super.dispose();
   }
 
@@ -128,6 +175,13 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   Widget build(BuildContext context) {
     final screenSize = MediaQuery.of(context).size;
     final circleSize = screenSize.width * 0.75;
+
+    // Timer color: green → amber → red
+    final Color timerColor = _secondsRemaining <= 15
+        ? AppStyles.errorRed
+        : _secondsRemaining <= 30
+        ? AppStyles.amberWarning
+        : AppStyles.successGreen;
 
     return Scaffold(
       backgroundColor: AppStyles.backgroundLight,
@@ -209,12 +263,51 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                 ),
               ),
             ),
+
+            // ── Timer ring (above face circle, shown after location verified) ──
+            AnimatedOpacity(
+              duration: const Duration(milliseconds: 400),
+              opacity: _locationVerified ? 1.0 : 0.0,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 16.0),
+                child: ScaleTransition(
+                  scale: _timerPulseAnim,
+                  child: AnimatedBuilder(
+                    animation: _ringController,
+                    builder: (context, _) {
+                      return SizedBox(
+                        width: 56,
+                        height: 56,
+                        child: CustomPaint(
+                          painter: _MiniRingPainter(
+                            progress: _ringProgress.value,
+                            color: timerColor,
+                          ),
+                          child: Center(
+                            child: Text(
+                              '${_secondsRemaining}s',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: timerColor,
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+
             // Circle Stack
             AnimatedOpacity(
               duration: const Duration(milliseconds: 400),
               opacity: _locationVerified ? 1.0 : 0.0,
               child: Padding(
-                padding: const EdgeInsets.only(top: 24.0),
+                padding: const EdgeInsets.only(top: 4.0),
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
@@ -249,26 +342,32 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                         ],
                       ),
                     ),
+                    // Breathing border with pulse glow
                     AnimatedBuilder(
                       animation: _pulseController,
                       builder: (context, child) {
-                        return Container(
-                          width: circleSize,
-                          height: circleSize,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: AppStyles.primaryBlue,
-                              width: 2.5,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: AppStyles.primaryBlue.withValues(
-                                  alpha: _pulseController.value * 0.5,
-                                ),
-                                blurRadius: 8 + (_pulseController.value * 12),
+                        final breatheScale =
+                            1.0 + (_pulseController.value * 0.015);
+                        return Transform.scale(
+                          scale: breatheScale,
+                          child: Container(
+                            width: circleSize,
+                            height: circleSize,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: AppStyles.primaryBlue,
+                                width: 2.5,
                               ),
-                            ],
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppStyles.primaryBlue.withValues(
+                                    alpha: _pulseController.value * 0.5,
+                                  ),
+                                  blurRadius: 8 + (_pulseController.value * 12),
+                                ),
+                              ],
+                            ),
                           ),
                         );
                       },
@@ -277,7 +376,23 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
+
+            // ── Attempt text ──────────────────────────────────────
+            AnimatedOpacity(
+              duration: const Duration(milliseconds: 400),
+              opacity: _locationVerified ? 1.0 : 0.0,
+              child: Text(
+                'Attempt $_attempt of 3',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey.shade500,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+
             // Instruction card
             Expanded(
               child: AnimatedOpacity(
@@ -328,39 +443,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                 ),
               ),
             ),
-            // Cancel button
-            Padding(
-              padding: const EdgeInsets.only(bottom: 32, top: 8),
-              child: Center(
-                child: GestureDetector(
-                  onTap: () =>
-                      Navigator.of(context).pushReplacementNamed('/dashboard'),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 32,
-                      vertical: 12,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppStyles.errorRed.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(30),
-                      border: Border.all(
-                        color: AppStyles.errorRed.withValues(alpha: 0.3),
-                        width: 1.2,
-                      ),
-                    ),
-                    child: const Text(
-                      'Cancel',
-                      style: TextStyle(
-                        color: AppStyles.errorRed,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.2,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            // No cancel button — this is a mandatory flow
+            const SizedBox(height: 32),
           ],
         ),
       ),
@@ -411,4 +495,50 @@ class _ScanLinePainter extends CustomPainter {
   bool shouldRepaint(covariant _ScanLinePainter oldDelegate) {
     return true;
   }
+}
+
+/// Compact countdown ring.
+class _MiniRingPainter extends CustomPainter {
+  final double progress;
+  final Color color;
+
+  const _MiniRingPainter({required this.progress, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.width - 8) / 2;
+
+    final trackPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.08)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -math.pi / 2,
+      2 * math.pi,
+      false,
+      trackPaint,
+    );
+
+    final arcPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -math.pi / 2,
+      2 * math.pi * progress,
+      false,
+      arcPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _MiniRingPainter old) =>
+      old.progress != progress || old.color != color;
 }

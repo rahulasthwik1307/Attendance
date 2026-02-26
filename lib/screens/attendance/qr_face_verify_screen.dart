@@ -131,8 +131,10 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     final screenSize = MediaQuery.of(context).size;
     final circleSize = screenSize.width * 0.70;
     final bool isUrgent = _secondsRemaining <= 20;
-    final Color timerColor = isUrgent
+    final Color timerColor = _secondsRemaining <= 10
         ? AppStyles.errorRed
+        : isUrgent
+        ? AppStyles.amberWarning
         : AppStyles.successGreen;
     // On face detection, border briefly glows green
     final Color borderColor = _faceDetected
@@ -262,25 +264,33 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                         ],
                       ),
                     ),
-                    // Pulsing border with glow (green on detection)
+                    // Pulsing border with glow (green on detection) + breathing scale
                     AnimatedBuilder(
                       animation: _pulseController,
                       builder: (context, child) {
-                        return AnimatedContainer(
-                          duration: const Duration(milliseconds: 400),
-                          width: circleSize,
-                          height: circleSize,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(color: borderColor, width: 2.5),
-                            boxShadow: [
-                              BoxShadow(
-                                color: borderColor.withValues(
-                                  alpha: _pulseController.value * 0.5,
-                                ),
-                                blurRadius: 8 + (_pulseController.value * 12),
+                        final breatheScale =
+                            1.0 + (_pulseController.value * 0.015);
+                        return Transform.scale(
+                          scale: breatheScale,
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 400),
+                            width: circleSize,
+                            height: circleSize,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: borderColor,
+                                width: 2.5,
                               ),
-                            ],
+                              boxShadow: [
+                                BoxShadow(
+                                  color: borderColor.withValues(
+                                    alpha: _pulseController.value * 0.5,
+                                  ),
+                                  blurRadius: 8 + (_pulseController.value * 12),
+                                ),
+                              ],
+                            ),
                           ),
                         );
                       },

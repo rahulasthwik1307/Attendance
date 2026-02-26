@@ -361,13 +361,9 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
         decoration: BoxDecoration(
           color: AppStyles.successGreen.withValues(
-            alpha: widget.isDark ? 0.15 : 0.07,
+            alpha: widget.isDark ? 0.10 : 0.05,
           ),
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: AppStyles.successGreen.withValues(alpha: 0.25),
-            width: 1,
-          ),
         ),
         child: Row(
           children: [
@@ -1471,9 +1467,10 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   Widget build(BuildContext context) {
     if (!_isVisible) return const SizedBox.shrink();
 
-    final bool isUrgent = _secondsRemaining <= 60;
-    final Color themeColor = isUrgent
+    final Color themeColor = _secondsRemaining <= 30
         ? AppStyles.errorRed
+        : _secondsRemaining <= 60
+        ? AppStyles.amberWarning
         : AppStyles.successGreen;
     final String minutes = (_secondsRemaining ~/ 60).toString().padLeft(2, '0');
     final String seconds = (_secondsRemaining % 60).toString().padLeft(2, '0');
@@ -1505,7 +1502,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Attendance Window Open',
+                        'Attendance Window',
                         style: TextStyle(
                           fontWeight: FontWeight.w800,
                           fontSize: 15,
@@ -1585,14 +1582,6 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                       color: AppStyles.textGray,
                     ),
                   ),
-                  const Spacer(),
-                  Text(
-                    'Dr. P. Sharma',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppStyles.textGray.withValues(alpha: 0.55),
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -1607,7 +1596,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               },
               onTapCancel: () => setState(() => _ctaPressed = false),
               child: AnimatedScale(
-                scale: _ctaPressed ? 0.98 : 1.0,
+                scale: _ctaPressed ? 0.96 : 1.0,
                 duration: const Duration(milliseconds: 100),
                 curve: Curves.easeInOut,
                 child: SizedBox(

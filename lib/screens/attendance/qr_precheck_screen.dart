@@ -140,13 +140,16 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
                       isActive: _attendanceState == _CheckState.checking,
                       isFailed: _attendanceState == _CheckState.error,
                     ),
-                    SizedBox(
-                      width: 40,
-                      child: Divider(
-                        thickness: 1.5,
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 500),
+                      curve: Curves.easeOutCubic,
+                      width: _attendanceState == _CheckState.success ? 40 : 0,
+                      height: 1.5,
+                      decoration: BoxDecoration(
                         color: _attendanceState == _CheckState.success
-                            ? AppStyles.successGreen.withValues(alpha: 0.4)
+                            ? AppStyles.successGreen.withValues(alpha: 0.5)
                             : Colors.black.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(1),
                       ),
                     ),
                     _StepDot(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import '../../utils/app_styles.dart';
+import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
 
 class QrSuccessScreen extends StatefulWidget {
@@ -11,9 +12,10 @@ class QrSuccessScreen extends StatefulWidget {
 }
 
 class _QrSuccessScreenState extends State<QrSuccessScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late AnimationController _checkController;
   late Animation<double> _scaleAnim;
+  late AnimationController _rippleController;
   Timer? _timer;
 
   // Progress line instead of "Redirecting in X seconds..."
@@ -32,6 +34,13 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
     _scaleAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _checkController, curve: Curves.elasticOut),
     );
+
+    // Single radial glow pulse
+    _rippleController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..forward();
+
     _checkController.forward();
 
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -52,6 +61,7 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
   @override
   void dispose() {
     _checkController.dispose();
+    _rippleController.dispose();
     _timer?.cancel();
     super.dispose();
   }
@@ -72,30 +82,53 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // ── Animated checkmark ─────────────────────────────
+                  // ── Animated checkmark with radial glow ────────────
                   FadeSlideY(
                     delay: const Duration(milliseconds: 0),
-                    child: ScaleTransition(
-                      scale: _scaleAnim,
-                      child: Container(
-                        padding: const EdgeInsets.all(24),
-                        decoration: BoxDecoration(
-                          color: AppStyles.successGreen.withValues(alpha: 0.12),
-                          shape: BoxShape.circle,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        // Single radial glow pulse
+                        AnimatedBuilder(
+                          animation: _rippleController,
+                          builder: (context, child) {
+                            return Container(
+                              width: 130 + (_rippleController.value * 40),
+                              height: 130 + (_rippleController.value * 40),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: AppStyles.successGreen.withValues(
+                                  alpha: (1 - _rippleController.value) * 0.15,
+                                ),
+                              ),
+                            );
+                          },
                         ),
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: const BoxDecoration(
-                            color: AppStyles.successGreen,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.check_rounded,
-                            color: Colors.white,
-                            size: 48,
+                        ScaleTransition(
+                          scale: _scaleAnim,
+                          child: Container(
+                            padding: const EdgeInsets.all(24),
+                            decoration: BoxDecoration(
+                              color: AppStyles.successGreen.withValues(
+                                alpha: 0.12,
+                              ),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: const BoxDecoration(
+                                color: AppStyles.successGreen,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.check_rounded,
+                                color: Colors.white,
+                                size: 48,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ),
                   ),
                   const SizedBox(height: 32),
@@ -213,12 +246,12 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
                   ),
                   const SizedBox(height: 24),
 
-                  // ── Dashboard button ───────────────────────────────
+                  // ── Dashboard button with elevation & bounce ───────
                   FadeSlideY(
                     delay: const Duration(milliseconds: 700),
                     child: SizedBox(
                       width: double.infinity,
-                      child: ElevatedButton(
+                      child: AnimatedButton(
                         onPressed: _goToDashboard,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppStyles.primaryBlue,
@@ -227,7 +260,7 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
                           ),
-                          elevation: 0,
+                          elevation: 2,
                         ),
                         child: const Text(
                           'Go to Dashboard',
