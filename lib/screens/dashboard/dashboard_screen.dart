@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:async';
 import 'dart:math' as math;
 import '../../utils/app_styles.dart';
 import '../../widgets/animated_button.dart';
@@ -189,6 +190,10 @@ class _DashboardScreenState extends State<DashboardScreen>
             ),
             children: [
               const SizedBox(height: 4),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 50),
+                child: const _AttendanceBanner(),
+              ),
               FadeSlideY(
                 delay: const Duration(milliseconds: 100),
                 child: _TodayStatusCard(isDark: isDark),
@@ -652,7 +657,6 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Row(
-                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
                         Icons.trending_up_rounded,
@@ -660,7 +664,7 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
                         color: pctColor,
                       ),
                       const SizedBox(width: 4),
-                      Expanded(
+                      Flexible(
                         child: Text(
                           'Good Standing — Above 75% Requirement',
                           style: TextStyle(
@@ -1394,6 +1398,290 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
           ),
         ),
       ],
+    );
+  }
+}
+
+class _AttendanceBanner extends StatefulWidget {
+  const _AttendanceBanner();
+
+  @override
+  State<_AttendanceBanner> createState() => _AttendanceBannerState();
+}
+
+class _AttendanceBannerState extends State<_AttendanceBanner>
+    with SingleTickerProviderStateMixin {
+  int _secondsRemaining = 147;
+  Timer? _timer;
+  bool _isVisible = true;
+  bool _ctaPressed = false;
+
+  // Timer pill pulse
+  late AnimationController _timerPulseController;
+  late Animation<double> _timerPulseAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _timerPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _timerPulseAnim = Tween<double>(begin: 1.0, end: 1.06).animate(
+      CurvedAnimation(parent: _timerPulseController, curve: Curves.easeInOut),
+    );
+    _startTimer();
+  }
+
+  void _startTimer() {
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_secondsRemaining > 0) {
+        setState(() => _secondsRemaining--);
+        // Subtle pulse on each tick
+        _timerPulseController.forward().then((_) {
+          if (mounted) _timerPulseController.reverse();
+        });
+        if (_secondsRemaining == 0) {
+          _closeBanner();
+        }
+      }
+    });
+  }
+
+  void _closeBanner() {
+    _timer?.cancel();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Attendance window closed'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+    setState(() => _isVisible = false);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _timerPulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isVisible) return const SizedBox.shrink();
+
+    final bool isUrgent = _secondsRemaining <= 60;
+    final Color themeColor = isUrgent
+        ? AppStyles.errorRed
+        : AppStyles.successGreen;
+    final String minutes = (_secondsRemaining ~/ 60).toString().padLeft(2, '0');
+    final String seconds = (_secondsRemaining % 60).toString().padLeft(2, '0');
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16.0),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+        decoration: BoxDecoration(
+          color: themeColor.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: themeColor.withValues(alpha: 0.25),
+            width: 1.5,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Row 1: Status + Timer pill ─────────────────────
+            Row(
+              children: [
+                _PulsingDot(color: themeColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Attendance Window Open',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
+                          color: AppStyles.textDark,
+                          letterSpacing: -0.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Active for current period',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: themeColor.withValues(alpha: 0.8),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Pulsing timer pill
+                ScaleTransition(
+                  scale: _timerPulseAnim,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 500),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: themeColor.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.timer_outlined, size: 14, color: themeColor),
+                        const SizedBox(width: 4),
+                        Text(
+                          '$minutes:$seconds',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                            color: themeColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // ── Row 2: Period info ─────────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.03),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.menu_book_rounded,
+                    size: 15,
+                    color: AppStyles.textGray,
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    '3rd Period — DBMS',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppStyles.textGray,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    'Dr. P. Sharma',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppStyles.textGray.withValues(alpha: 0.55),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // ── CTA with press scale ──────────────────────────
+            GestureDetector(
+              onTapDown: (_) => setState(() => _ctaPressed = true),
+              onTapUp: (_) {
+                setState(() => _ctaPressed = false);
+                Navigator.of(context).pushNamed('/qr-precheck');
+              },
+              onTapCancel: () => setState(() => _ctaPressed = false),
+              child: AnimatedScale(
+                scale: _ctaPressed ? 0.98 : 1.0,
+                duration: const Duration(milliseconds: 100),
+                curve: Curves.easeInOut,
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: null, // handled by GestureDetector
+                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    label: const Text(
+                      'Scan QR Now',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: themeColor,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: themeColor,
+                      disabledForegroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 0,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PulsingDot extends StatefulWidget {
+  final Color color;
+  const _PulsingDot({required this.color});
+
+  @override
+  State<_PulsingDot> createState() => _PulsingDotState();
+}
+
+class _PulsingDotState extends State<_PulsingDot>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _opacityAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+    _opacityAnimation = Tween<double>(
+      begin: 0.4,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _opacityAnimation,
+      child: Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle),
+      ),
     );
   }
 }
