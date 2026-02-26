@@ -16,13 +16,13 @@ class _ProfileScreenState extends State<ProfileScreen>
     with TickerProviderStateMixin {
   late AnimationController _borderRotationController;
 
-  static const String _name = 'Rahul Sharma';
+  static const String _name = 'Rahul';
   static const String _rollNumber = '2021CS047';
-  static const String _department = 'CSE — Computer Science';
+  static const String _department = 'CSE';
   static const String _year = '3rd Year';
-  static const double _attendancePct = 0.78;
-  static const int _attendanceDays = 18;
-  static const int _totalDays = 23;
+  static const double _attendancePct = 0.77;
+  static const int _attendedClasses = 144;
+  static const int _totalClasses = 186;
 
   @override
   void initState() {
@@ -289,7 +289,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          '${(_attendancePct * 100).round()}% Attendance — $_attendanceDays / $_totalDays Days',
+                          '${(_attendancePct * 100).round()}% Attendance — $_attendedClasses / $_totalClasses Classes',
                           style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
@@ -469,15 +469,16 @@ class _ProfileScreenState extends State<ProfileScreen>
             ),
           ),
           const Spacer(),
-          Flexible(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: textColor,
-              ),
+          Text(
+            value,
+            textAlign: TextAlign.right,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: textColor,
             ),
           ),
         ],

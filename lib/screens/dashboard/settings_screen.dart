@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import '../../utils/app_styles.dart';
 import '../../widgets/custom_bottom_nav.dart';
 import '../../widgets/fade_slide_y.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:math' as math;
 import '../../main.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -12,7 +14,56 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends State<SettingsScreen>
+    with SingleTickerProviderStateMixin {
+  bool _notificationsEnabled = true;
+  late AnimationController _bellController;
+
+  @override
+  void initState() {
+    super.initState();
+    _bellController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _loadNotificationPref();
+  }
+
+  Future<void> _loadNotificationPref() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
+    });
+    if (_notificationsEnabled && mounted) {
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted) _playBellAnimation();
+      });
+    }
+  }
+
+  Future<void> _toggleNotification(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('notifications_enabled', value);
+    setState(() {
+      _notificationsEnabled = value;
+    });
+    if (_notificationsEnabled) {
+      _playBellAnimation();
+    }
+  }
+
+  @override
+  void dispose() {
+    _bellController.dispose();
+    super.dispose();
+  }
+
+  void _playBellAnimation() {
+    _bellController.forward(from: 0.0).then((_) {
+      _bellController.reverse();
+    });
+  }
+
   void _onNavTap(int index) {
     if (index == 0) Navigator.of(context).pushReplacementNamed('/dashboard');
     if (index == 1) Navigator.of(context).pushReplacementNamed('/history');
@@ -162,6 +213,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   child: Column(
                     children: [
+                      _buildSectionHeader('Preferences'),
+                      _buildNotificationToggle(),
+                      const Divider(height: 1, color: Color(0xFFE2E8F0)),
                       ValueListenableBuilder<ThemeMode>(
                         valueListenable: appThemeNotifier,
                         builder: (context, currentMode, _) {
@@ -188,7 +242,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(height: 24),
               FadeSlideY(
-                delay: const Duration(milliseconds: 200),
+                delay: const Duration(milliseconds: 220),
                 child: Container(
                   decoration: BoxDecoration(
                     color: Theme.of(context).cardTheme.color ?? Colors.white,
@@ -203,6 +257,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   child: Column(
                     children: [
+                      _buildSectionHeader('Account'),
                       _buildSettingsItem(
                         icon: Icons.lock_reset_rounded,
                         title: 'Change Password',
@@ -225,8 +280,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: 'Logout',
                         subtitle: 'Sign out from your account',
                         isDestructive: true,
-                        onTap: () =>
-                            Navigator.of(context).pushReplacementNamed('/home'),
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          Navigator.of(context).pushReplacementNamed('/home');
+                        },
                       ),
                     ],
                   ),
@@ -299,6 +356,107 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Icon(
               Icons.chevron_right_rounded,
               color: theme.textTheme.bodyMedium?.color ?? Colors.grey.shade400,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 20, right: 20, top: 20, bottom: 8),
+      child: Row(
+        children: [
+          Text(
+            title.toUpperCase(),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.5,
+              color: AppStyles.textGray.withValues(alpha: 0.6),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNotificationToggle() {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return InkWell(
+      onTap: () => _toggleNotification(!_notificationsEnabled),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: _notificationsEnabled
+                    ? theme.primaryColor.withValues(alpha: 0.15)
+                    : Colors.grey.withValues(alpha: isDark ? 0.2 : 0.1),
+                shape: BoxShape.circle,
+                boxShadow: _notificationsEnabled
+                    ? [
+                        BoxShadow(
+                          color: theme.primaryColor.withValues(alpha: 0.2),
+                          blurRadius: 12,
+                          spreadRadius: 2,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: AnimatedBuilder(
+                animation: _bellController,
+                builder: (context, child) {
+                  // A gentle shake oscillation
+                  final angle =
+                      math.sin(_bellController.value * math.pi * 2) * 0.2;
+                  return Transform.rotate(angle: angle, child: child);
+                },
+                child: Icon(
+                  _notificationsEnabled
+                      ? Icons.notifications_active_rounded
+                      : Icons.notifications_off_rounded,
+                  color: _notificationsEnabled
+                      ? theme.primaryColor
+                      : Colors.grey.shade500,
+                  size: 26,
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Notifications',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color:
+                          theme.textTheme.displayLarge?.color ??
+                          AppStyles.textDark,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _notificationsEnabled
+                        ? 'Push notifications enabled'
+                        : 'Push notifications disabled',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color:
+                          theme.textTheme.bodyMedium?.color ??
+                          AppStyles.textGray,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),

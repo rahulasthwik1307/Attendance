@@ -478,9 +478,9 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
   late Animation<double> _progressAnim;
   late Animation<int> _counterAnim;
 
-  static const double _pct = 0.78;
-  static const int _present = 18;
-  static const int _total = 23;
+  static const double _pct = 0.77;
+  static const int _present = 144;
+  static const int _total = 186;
 
   @override
   void initState() {
@@ -495,7 +495,7 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
     _counterAnim = IntTween(
       begin: 0,
-      end: 78,
+      end: 77,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
     Future.delayed(const Duration(milliseconds: 500), () {
       if (mounted) _controller.forward();
@@ -633,7 +633,7 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
                   ),
                 ),
                 Text(
-                  'Days Present',
+                  'Classes Attended',
                   style: TextStyle(
                     fontSize: 12,
                     color:
@@ -662,7 +662,7 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
                       const SizedBox(width: 4),
                       Expanded(
                         child: Text(
-                          'Above 75% — Good Standing',
+                          'Good Standing — Above 75% Requirement',
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
