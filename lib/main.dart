@@ -172,7 +172,7 @@ class SmartAttendanceApp extends StatelessWidget {
               return AuthPageRoute(page: page);
             }
 
-            return AppStyles.buildPageTransition(page);
+            return AppStyles.buildPageTransition(page, settings: routeSettings);
           },
         );
       },

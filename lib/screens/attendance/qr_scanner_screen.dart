@@ -15,9 +15,10 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   late AnimationController _scanLineController;
   late AnimationController _bracketGlowController;
   late Animation<double> _bracketGlowOpacity;
-  int _secondsRemaining = 180; // 3 minutes
+  int _secondsRemaining = 180; // default, overridden from route args
   Timer? _countdownTimer;
   bool _hasNavigated = false;
+  bool _timerInitialized = false;
 
   @override
   void initState() {
@@ -37,6 +38,32 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       CurvedAnimation(parent: _bracketGlowController, curve: Curves.easeInOut),
     );
 
+    // Simulate successful QR detection after 3 seconds
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted && !_hasNavigated) {
+        _hasNavigated = true;
+        Navigator.of(context).pushReplacementNamed('/qr-face-verify');
+      }
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Read route args and start timer only once
+    if (!_timerInitialized) {
+      _timerInitialized = true;
+      final DateTime? endTime =
+          ModalRoute.of(context)?.settings.arguments as DateTime?;
+      if (endTime != null) {
+        final remaining = endTime.difference(DateTime.now()).inSeconds;
+        _secondsRemaining = remaining > 0 ? remaining : 0;
+      }
+      _startCountdown();
+    }
+  }
+
+  void _startCountdown() {
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_secondsRemaining > 0) {
         setState(() => _secondsRemaining--);
@@ -44,14 +71,6 @@ class _QrScannerScreenState extends State<QrScannerScreen>
           timer.cancel();
           _showWindowClosedDialog();
         }
-      }
-    });
-
-    // Simulate successful QR detection after 3 seconds
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted && !_hasNavigated) {
-        _hasNavigated = true;
-        Navigator.of(context).pushReplacementNamed('/qr-face-verify');
       }
     });
   }
@@ -152,17 +171,21 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       backgroundColor: const Color(0xFF0D0D0D),
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.black.withValues(alpha: 0.4),
+        backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          icon: const Icon(
+            Icons.arrow_back_ios_new_rounded,
+            color: AppStyles.textDark,
+            size: 20,
+          ),
           onPressed: () => Navigator.of(context).pop(),
         ),
         centerTitle: true,
         title: const Text(
           'Scan QR Code',
           style: TextStyle(
-            color: Colors.white,
+            color: AppStyles.textDark,
             fontWeight: FontWeight.bold,
             fontSize: 18,
           ),
@@ -180,23 +203,27 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                   vertical: 10,
                 ),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.08),
-                  ),
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.06),
+                      blurRadius: 12,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
                 ),
                 child: Row(
                   children: [
                     Container(
                       padding: const EdgeInsets.all(7),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.1),
+                        color: AppStyles.primaryBlue.withValues(alpha: 0.08),
                         borderRadius: BorderRadius.circular(9),
                       ),
                       child: const Icon(
                         Icons.menu_book_rounded,
-                        color: Colors.white70,
+                        color: AppStyles.primaryBlue,
                         size: 18,
                       ),
                     ),
@@ -208,7 +235,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                           Text(
                             '3rd Period — DBMS',
                             style: TextStyle(
-                              color: Colors.white,
+                              color: AppStyles.textDark,
                               fontWeight: FontWeight.bold,
                               fontSize: 14,
                             ),
@@ -217,16 +244,17 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                           Text(
                             'Room 301',
                             style: TextStyle(
-                              color: Colors.white54,
-                              fontSize: 11,
+                              color: AppStyles.textGray,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
                           SizedBox(height: 2),
                           Text(
                             'This code expires shortly',
                             style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.35),
-                              fontSize: 10,
+                              color: AppStyles.textGray.withValues(alpha: 0.8),
+                              fontSize: 11,
                             ),
                           ),
                         ],
@@ -239,7 +267,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                         vertical: 5,
                       ),
                       decoration: BoxDecoration(
-                        color: timerColor.withValues(alpha: 0.25),
+                        color: timerColor.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Row(

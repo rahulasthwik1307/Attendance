@@ -143,8 +143,12 @@ class AppStyles {
   }
 
   // Unified premium page transition: fade + subtle upward slide.
-  static PageRouteBuilder buildPageTransition(Widget page) {
+  static PageRouteBuilder buildPageTransition(
+    Widget page, {
+    RouteSettings? settings,
+  }) {
     return PageRouteBuilder(
+      settings: settings,
       pageBuilder: (context, animation, secondaryAnimation) => page,
       transitionsBuilder: (context, animation, secondaryAnimation, child) {
         const curve = Curves.easeInOutCubic;

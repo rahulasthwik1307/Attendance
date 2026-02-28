@@ -56,8 +56,12 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
     await Future.delayed(const Duration(milliseconds: 600));
     if (!mounted) return;
 
-    // Navigate to scanner
-    Navigator.of(context).pushReplacementNamed('/qr-scanner');
+    // Forward the absolute end time from dashboard
+    final DateTime? endTime =
+        ModalRoute.of(context)?.settings.arguments as DateTime?;
+    Navigator.of(
+      context,
+    ).pushReplacementNamed('/qr-scanner', arguments: endTime);
   }
 
   void _handleFailure() {
@@ -78,7 +82,7 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
           onPressed: () => Navigator.of(context).pop(),
         ),
       ),

@@ -189,7 +189,6 @@ class _DashboardScreenState extends State<DashboardScreen>
               vertical: 16.0,
             ),
             children: [
-              const SizedBox(height: 4),
               FadeSlideY(
                 delay: const Duration(milliseconds: 50),
                 child: const _AttendanceBanner(),
@@ -198,12 +197,12 @@ class _DashboardScreenState extends State<DashboardScreen>
                 delay: const Duration(milliseconds: 100),
                 child: _TodayStatusCard(isDark: isDark),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 10),
               FadeSlideY(
                 delay: const Duration(milliseconds: 180),
                 child: _AttendancePercentageCard(theme: theme, isDark: isDark),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 10),
               FadeSlideY(
                 delay: const Duration(milliseconds: 260),
                 child: _HeroAttendanceCard(theme: theme),
@@ -361,7 +360,7 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
         decoration: BoxDecoration(
           color: AppStyles.successGreen.withValues(
-            alpha: widget.isDark ? 0.10 : 0.05,
+            alpha: widget.isDark ? 0.15 : 0.07,
           ),
           borderRadius: BorderRadius.circular(18),
         ),
@@ -523,7 +522,7 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
           color: pctColor.withValues(alpha: isDark ? 0.08 : 0.04),
           width: 1,
         ),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
             color: pctColor.withValues(alpha: isDark ? 0.08 : 0.05),
@@ -1410,6 +1409,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   int _secondsRemaining = 147;
   Timer? _timer;
   bool _isVisible = true;
+  bool _isClosed = false;
   bool _ctaPressed = false;
 
   // Timer pill pulse
@@ -1447,13 +1447,11 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   void _closeBanner() {
     _timer?.cancel();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Attendance window closed'),
-        duration: Duration(seconds: 2),
-      ),
-    );
-    setState(() => _isVisible = false);
+    setState(() => _isClosed = true);
+    // Auto-hide the closed banner after 4 seconds
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _isVisible = false);
+    });
   }
 
   @override
@@ -1467,6 +1465,43 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   Widget build(BuildContext context) {
     if (!_isVisible) return const SizedBox.shrink();
 
+    // Closed state — inline neutral message
+    if (_isClosed) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10.0),
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 400),
+          opacity: 1.0,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.timer_off_rounded,
+                  size: 18,
+                  color: AppStyles.textGray,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'Attendance window closed',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppStyles.textGray,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     final Color themeColor = _secondsRemaining <= 30
         ? AppStyles.errorRed
         : _secondsRemaining <= 60
@@ -1475,8 +1510,15 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     final String minutes = (_secondsRemaining ~/ 60).toString().padLeft(2, '0');
     final String seconds = (_secondsRemaining % 60).toString().padLeft(2, '0');
 
+    // Urgency glow intensity
+    final double glowOpacity = _secondsRemaining <= 30
+        ? 0.25
+        : _secondsRemaining <= 60
+        ? 0.12
+        : 0.0;
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16.0),
+      padding: const EdgeInsets.only(bottom: 10.0),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 500),
         curve: Curves.easeInOut,
@@ -1488,6 +1530,15 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             color: themeColor.withValues(alpha: 0.25),
             width: 1.5,
           ),
+          boxShadow: glowOpacity > 0
+              ? [
+                  BoxShadow(
+                    color: themeColor.withValues(alpha: glowOpacity),
+                    blurRadius: 16,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : [],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1592,7 +1643,13 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               onTapDown: (_) => setState(() => _ctaPressed = true),
               onTapUp: (_) {
                 setState(() => _ctaPressed = false);
-                Navigator.of(context).pushNamed('/qr-precheck');
+                // Pass absolute end time for perfect timer sync
+                final endTime = DateTime.now().add(
+                  Duration(seconds: _secondsRemaining),
+                );
+                Navigator.of(
+                  context,
+                ).pushNamed('/qr-precheck', arguments: endTime);
               },
               onTapCancel: () => setState(() => _ctaPressed = false),
               child: AnimatedScale(

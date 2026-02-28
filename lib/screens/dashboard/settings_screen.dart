@@ -364,6 +364,8 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   Widget _buildSectionHeader(String title) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.only(left: 20, right: 20, top: 20, bottom: 8),
       child: Row(
@@ -374,7 +376,9 @@ class _SettingsScreenState extends State<SettingsScreen>
               fontSize: 12,
               fontWeight: FontWeight.w700,
               letterSpacing: 1.5,
-              color: AppStyles.textGray.withValues(alpha: 0.6),
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.7)
+                  : AppStyles.textDark.withValues(alpha: 0.55),
             ),
           ),
         ],
