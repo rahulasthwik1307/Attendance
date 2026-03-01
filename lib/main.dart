@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'utils/app_styles.dart';
 import 'utils/auth_flow_state.dart';
 
@@ -34,14 +35,24 @@ import 'screens/auth/set_new_password_screen.dart' as set_new_pw;
 import 'screens/auth/password_updated_screen.dart' as pw_updated;
 import 'screens/auth/password_change_success_screen.dart' as pw_change_success;
 import 'screens/face/face_updated_success_screen.dart' as face_updated_success;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await dotenv.load(fileName: ".env");
+
+  await Supabase.initialize(
+    url: dotenv.env['SUPABASE_URL']!,
+    anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
+  );
+
+  runApp(const SmartAttendanceApp());
+}
 
 final ValueNotifier<ThemeMode> appThemeNotifier = ValueNotifier(
   ThemeMode.light,
 );
-
-void main() {
-  runApp(const SmartAttendanceApp());
-}
 
 class SmartAttendanceApp extends StatelessWidget {
   const SmartAttendanceApp({super.key});
