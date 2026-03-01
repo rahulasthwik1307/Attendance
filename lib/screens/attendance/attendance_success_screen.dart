@@ -18,7 +18,10 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
   late Animation<double> _scaleAnimation;
   late AnimationController _rippleController;
 
-  int _countdown = 4;
+  // Progress bar for redirect
+  static const int _redirectDuration = 4;
+  double _progress = 0.0;
+  int _elapsed = 0;
   late Timer _timer;
 
   @override
@@ -34,19 +37,21 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
       CurvedAnimation(parent: _checkController, curve: Curves.elasticOut),
     );
 
+    // Single radial glow pulse — play once, not repeat
     _rippleController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
-    )..repeat();
+    )..forward();
 
     _checkController.forward();
 
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
+      _elapsed++;
       setState(() {
-        _countdown--;
+        _progress = _elapsed / _redirectDuration;
       });
-      if (_countdown <= 0) {
+      if (_elapsed >= _redirectDuration) {
         timer.cancel();
         Navigator.of(context).pushReplacementNamed('/dashboard');
       }
@@ -63,6 +68,9 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -84,207 +92,285 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
         centerTitle: true,
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Spacer(),
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  AnimatedBuilder(
-                    animation: _rippleController,
-                    builder: (context, child) {
-                      return Container(
-                        width: 150 + (_rippleController.value * 50),
-                        height: 150 + (_rippleController.value * 50),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: AppStyles.successGreen.withValues(
-                            alpha: 1 - _rippleController.value,
+        child: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: 40),
+                    Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        // Single radial glow pulse
+                        AnimatedBuilder(
+                          animation: _rippleController,
+                          builder: (context, child) {
+                            return Container(
+                              width: 150 + (_rippleController.value * 50),
+                              height: 150 + (_rippleController.value * 50),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: AppStyles.successGreen.withValues(
+                                  alpha: (1 - _rippleController.value) * 0.15,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        ScaleTransition(
+                          scale: _scaleAnimation,
+                          child: Container(
+                            padding: const EdgeInsets.all(24),
+                            decoration: const BoxDecoration(
+                              color: AppStyles.successGreen,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.check_rounded,
+                              size: 60,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
-                      );
-                    },
-                  ),
-                  ScaleTransition(
-                    scale: _scaleAnimation,
-                    child: Container(
-                      padding: const EdgeInsets.all(24),
-                      decoration: const BoxDecoration(
-                        color: AppStyles.successGreen,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.check_rounded,
-                        size: 60,
-                        color: Colors.white,
-                      ),
+                      ],
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 32),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 300),
-                child: Text(
-                  'You are marked Present!',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: AppStyles.textDark,
-                  ),
-                ),
-              ),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 400),
-                child: Padding(
-                  padding: EdgeInsets.only(top: 8.0),
-                  child: Text(
-                    'Face verification successful',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 16, color: AppStyles.textGray),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 32),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 500),
-                child: Container(
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      const Text(
-                        'CHECK-IN TIME',
+                    const SizedBox(height: 32),
+                    const FadeSlideY(
+                      delay: Duration(milliseconds: 300),
+                      child: Text(
+                        'You are marked Present!',
+                        textAlign: TextAlign.center,
                         style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: AppStyles.textGray,
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        '09:05 AM',
-                        style: TextStyle(
-                          fontSize: 32,
+                          fontSize: 24,
                           fontWeight: FontWeight.bold,
                           color: AppStyles.textDark,
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
+                    ),
+                    const FadeSlideY(
+                      delay: Duration(milliseconds: 400),
+                      child: Padding(
+                        padding: EdgeInsets.only(top: 8.0),
+                        child: Text(
+                          'Face verification successful',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: AppStyles.textGray,
+                          ),
                         ),
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+
+                    // ── Detail card (matching qr_success_screen style) ──────
+                    FadeSlideY(
+                      delay: const Duration(milliseconds: 500),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 6),
                         decoration: BoxDecoration(
-                          color: AppStyles.successGreen.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(20),
+                          color: isDark
+                              ? Colors.white.withValues(alpha: 0.06)
+                              : Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.08)
+                                : Colors.black.withValues(alpha: 0.06),
+                          ),
+                          boxShadow: isDark
+                              ? []
+                              : [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.04),
+                                    blurRadius: 12,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
+                        child: Column(
                           children: [
-                            const Icon(
-                              Icons.security_rounded,
-                              color: AppStyles.successGreen,
-                              size: 16,
+                            _DetailRow(
+                              icon: Icons.menu_book_rounded,
+                              iconColor: AppStyles.primaryBlue,
+                              label: 'Subject',
+                              value: 'DBMS',
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'On Time',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                                color: const Color.fromARGB(204, 5, 107, 32),
-                              ),
+                            _divider(isDark),
+                            _DetailRow(
+                              icon: Icons.schedule_rounded,
+                              iconColor: Colors.orange.shade600,
+                              label: 'Period',
+                              value: '3rd Period',
+                              valueSubtitle: '11:10 AM',
+                            ),
+                            _divider(isDark),
+                            _DetailRow(
+                              icon: Icons.access_time_filled_rounded,
+                              iconColor: Colors.purple.shade400,
+                              label: 'Marked At',
+                              value: '09:05 AM',
+                            ),
+                            _divider(isDark),
+                            _DetailRow(
+                              icon: Icons.verified_user_rounded,
+                              iconColor: AppStyles.successGreen,
+                              label: 'Face Verified',
+                              value: 'Confirmed ✔',
+                              valueColor: AppStyles.successGreen,
                             ),
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 600),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Location',
-                      style: TextStyle(color: AppStyles.textGray),
                     ),
-                    Text(
-                      'Main Campus',
-                      style: TextStyle(
-                        color: AppStyles.textDark,
-                        fontWeight: FontWeight.w600,
+                    const SizedBox(height: 24),
+
+                    // ── Progress bar + redirect text ─────────────────
+                    FadeSlideY(
+                      delay: const Duration(milliseconds: 600),
+                      child: Column(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(2),
+                            child: SizedBox(
+                              height: 3,
+                              width: double.infinity,
+                              child: LinearProgressIndicator(
+                                value: _progress,
+                                backgroundColor: isDark
+                                    ? Colors.white.withValues(alpha: 0.08)
+                                    : Colors.black.withValues(alpha: 0.06),
+                                valueColor: const AlwaysStoppedAnimation<Color>(
+                                  AppStyles.primaryBlue,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Redirecting to dashboard…',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: AppStyles.textGray.withValues(alpha: 0.6),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+                    const SizedBox(height: 16),
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 700),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Date', style: TextStyle(color: AppStyles.textGray)),
-                    Text(
-                      'Oct 24, 2024',
-                      style: TextStyle(
-                        color: AppStyles.textDark,
-                        fontWeight: FontWeight.w600,
-                      ),
+            ),
+            // ── Dashboard button pinned at bottom ──────────────
+            Container(
+              padding: const EdgeInsets.all(16),
+              child: FadeSlideY(
+                delay: const Duration(milliseconds: 700),
+                child: SizedBox(
+                  height: 48,
+                  width: double.infinity,
+                  child: AnimatedButton(
+                    onPressed: () {
+                      _timer.cancel();
+                      Navigator.of(context).pushReplacementNamed('/dashboard');
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppStyles.successGreen,
+                      elevation: 2,
                     ),
-                  ],
-                ),
-              ),
-              const Spacer(),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 800),
-                child: AnimatedButton(
-                  onPressed: () {
-                    _timer.cancel();
-                    Navigator.of(context).pushReplacementNamed('/dashboard');
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppStyles.successGreen,
+                    child: const Text('Go to Dashboard'),
                   ),
-                  child: const Text('Go to Dashboard →'),
                 ),
               ),
-              const SizedBox(height: 10),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _divider(bool isDark) {
+    return Divider(
+      height: 1,
+      thickness: 1,
+      indent: 56,
+      color: isDark
+          ? Colors.white.withValues(alpha: 0.06)
+          : Colors.black.withValues(alpha: 0.05),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String label;
+  final String value;
+  final String? valueSubtitle;
+  final Color? valueColor;
+
+  const _DetailRow({
+    required this.icon,
+    required this.iconColor,
+    required this.label,
+    required this.value,
+    this.valueSubtitle,
+    this.valueColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: iconColor, size: 18),
+          ),
+          const SizedBox(width: 14),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 14, color: AppStyles.textGray),
+          ),
+          const Spacer(),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
               Text(
-                'Redirecting in ${_countdown}s…',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppStyles.textGray,
-                  fontWeight: FontWeight.w500,
+                value,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color:
+                      valueColor ??
+                      (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
                 ),
               ),
-              const SizedBox(height: 16),
+              if (valueSubtitle != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  valueSubtitle!,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppStyles.textGray,
+                  ),
+                ),
+              ],
             ],
           ),
-        ),
+        ],
       ),
     );
   }
