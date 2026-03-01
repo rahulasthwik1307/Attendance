@@ -1524,6 +1524,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   bool _isVisible = false;
   bool _isClosed = false;
   bool _ctaPressed = false;
+  bool _hasMarkedAttendance = false;
 
   // Timer pill pulse
   late AnimationController _timerPulseController;
@@ -1537,6 +1538,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   DateTime? _qrTokenExpiresAt;
 
   RealtimeChannel? _subscription;
+  RealtimeChannel? _attendanceSubscription;
   String? _userClassId;
   Timer? _pollingTimer;
 
@@ -1552,6 +1554,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     );
 
     _initRealtimeSubscription();
+    _startPolling();
   }
 
   Future<void> _initRealtimeSubscription() async {
@@ -1573,8 +1576,32 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       // 2. Fetch active session initially
       _fetchActiveSession();
 
-      // 3. Start fallback polling every 10 seconds
-      _startPolling();
+      // 3. Subscribe to period_attendance for this student
+      _attendanceSubscription = supabase
+          .channel('public:period_attendance:student_${user.id}')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'period_attendance',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'student_id',
+              value: user.id,
+            ),
+            callback: (payload) {
+              final newRecord = payload.newRecord;
+              final status = newRecord['status'] as String?;
+              if (status == 'present' && mounted) {
+                setState(() {
+                  _hasMarkedAttendance = true;
+                });
+                _countdownTimer?.cancel();
+                _pollingTimer?.cancel();
+                _pollingTimer = null;
+              }
+            },
+          )
+          .subscribe();
 
       // 4. Subscribe to Realtime for this class
       _subscription = supabase
@@ -1635,6 +1662,61 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
       if (sessionData != null) {
         final fetchedSessionId = sessionData['id'] as String?;
+
+        // If we already know this session and attendance is marked, skip
+        if (fetchedSessionId == _activeSessionId &&
+            _isVisible &&
+            _hasMarkedAttendance) {
+          return;
+        }
+
+        // Check if student has already marked attendance for this session
+        final user = supabase.auth.currentUser;
+        if (user != null && fetchedSessionId != null && !_hasMarkedAttendance) {
+          debugPrint('Checking attendance for session id: $fetchedSessionId');
+          final attendanceRecord = await supabase
+              .from('period_attendance')
+              .select('status')
+              .eq('session_id', fetchedSessionId)
+              .eq('student_id', user.id)
+              .eq('status', 'present')
+              .maybeSingle();
+          debugPrint('Period attendance query result: $attendanceRecord');
+
+          if (attendanceRecord != null &&
+              attendanceRecord['status'] == 'present' &&
+              mounted) {
+            debugPrint(
+              'Setting hasMarkedAttendance to true and stopping all timers',
+            );
+            // Student already marked — show green card
+            // Still need to fetch subject info for display
+            final subjectId = sessionData['subject_id'];
+            final subjectData = await supabase
+                .from('subjects')
+                .select('name')
+                .eq('id', subjectId)
+                .maybeSingle();
+
+            if (!mounted) return;
+
+            _hasMarkedAttendance = true;
+            _pollingTimer?.cancel();
+            _pollingTimer = null;
+            _countdownTimer?.cancel();
+
+            setState(() {
+              _activeSessionId = fetchedSessionId;
+              _subjectName =
+                  subjectData?['name'] as String? ?? 'Unknown Subject';
+              _isVisible = true;
+              _isClosed = false;
+            });
+            return;
+          }
+        }
+
+        // If session already visible and not yet marked, don't re-init banner
         if (fetchedSessionId == _activeSessionId && _isVisible) {
           return;
         }
@@ -1730,6 +1812,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               const Duration(seconds: 180),
             );
             _secondsRemaining = remainingSeconds;
+            _hasMarkedAttendance = false;
 
             if (!_isVisible) {
               debugPrint('AttendanceBanner: Setting banner to visible');
@@ -1786,6 +1869,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   @override
   void dispose() {
     _subscription?.unsubscribe();
+    _attendanceSubscription?.unsubscribe();
     _pollingTimer?.cancel();
     _countdownTimer?.cancel();
     _timerPulseController.dispose();
@@ -1795,6 +1879,66 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   @override
   Widget build(BuildContext context) {
     if (!_isVisible) return const SizedBox.shrink();
+
+    // Attendance already marked — green card
+    if (_hasMarkedAttendance) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10.0),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: AppStyles.successGreen.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: AppStyles.successGreen.withValues(alpha: 0.25),
+              width: 1.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppStyles.successGreen.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.check_circle_rounded,
+                  color: AppStyles.successGreen,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Attendance Marked',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        color: AppStyles.successGreen,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Attendance Marked for $_subjectName',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: AppStyles.successGreen.withValues(alpha: 0.8),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     // Closed state — inline neutral message
     if (_isClosed) {

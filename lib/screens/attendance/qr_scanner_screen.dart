@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../utils/app_styles.dart';
+import '../../services/supabase_service.dart';
 
 class QrScannerScreen extends StatefulWidget {
   const QrScannerScreen({super.key});
@@ -15,14 +17,18 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   late AnimationController _scanLineController;
   late AnimationController _bracketGlowController;
   late Animation<double> _bracketGlowOpacity;
+  late MobileScannerController _scannerController;
   int _secondsRemaining = 180; // default, overridden from route args
   Timer? _countdownTimer;
   bool _hasNavigated = false;
   bool _timerInitialized = false;
+  bool _isProcessing = false;
 
   @override
   void initState() {
     super.initState();
+
+    _scannerController = MobileScannerController();
 
     _scanLineController = AnimationController(
       vsync: this,
@@ -37,14 +43,108 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     _bracketGlowOpacity = Tween<double>(begin: 0.5, end: 1.0).animate(
       CurvedAnimation(parent: _bracketGlowController, curve: Curves.easeInOut),
     );
+  }
 
-    // Simulate successful QR detection after 3 seconds
-    Future.delayed(const Duration(seconds: 3), () {
+  // ── Real Supabase QR validation flow ─────────────────────────────────
+  Future<void> _onQrDetected(String scannedToken) async {
+    if (_isProcessing || _hasNavigated) return;
+    setState(() => _isProcessing = true);
+
+    try {
+      final currentUserId = supabase.auth.currentUser?.id;
+      if (currentUserId == null) {
+        _showError('You are not signed in. Please sign in and try again.');
+        return;
+      }
+
+      // ── Step 1: Validate token ──────────────────────────────────────
+      final tokenRows = await supabase
+          .from('qr_tokens')
+          .select()
+          .eq('token', scannedToken)
+          .eq('is_used', false)
+          .gt('expires_at', DateTime.now().toUtc().toIso8601String())
+          .limit(1);
+
+      if (tokenRows.isEmpty) {
+        _showError(
+          'QR code is expired or invalid. Please wait for the next rotation.',
+        );
+        return;
+      }
+
+      final tokenRecord = tokenRows[0];
+      final String sessionId = tokenRecord['session_id'];
+
+      // ── Step 2: Verify attendance session is active ─────────────────
+      final sessionRows = await supabase
+          .from('attendance_sessions')
+          .select()
+          .eq('id', sessionId)
+          .eq('status', 'active')
+          .limit(1);
+
+      if (sessionRows.isEmpty) {
+        _showError('QR session has ended.');
+        return;
+      }
+
+      // ── Step 4: Upsert attendance as present in one operation ───────
+      try {
+        await supabase.from('period_attendance').upsert({
+          'session_id': sessionId,
+          'student_id': supabase.auth.currentUser!.id,
+          'scanned_at': DateTime.now().toIso8601String(),
+          'face_verified': false,
+          'status': 'present',
+        }, onConflict: 'session_id,student_id');
+        debugPrint('Upsert result: success for session $sessionId');
+      } catch (upsertError) {
+        debugPrint('Upsert error: $upsertError');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to mark attendance: $upsertError'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+      // ── Step 5: Mark token as used ──────────────────────────────────
+      await supabase
+          .from('qr_tokens')
+          .update({'is_used': true})
+          .eq('token', scannedToken);
+
+      // ── Step 6: Navigate to attendance success screen ───────────────
       if (mounted && !_hasNavigated) {
         _hasNavigated = true;
-        Navigator.of(context).pushReplacementNamed('/qr-face-verify');
+        Navigator.of(
+          context,
+        ).pushReplacementNamed('/attendance_success', arguments: sessionId);
       }
-    });
+    } catch (e) {
+      _showError(e.toString());
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: AppStyles.errorRed,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+    // Allow scanning again
+    if (mounted) setState(() => _isProcessing = false);
   }
 
   @override
@@ -151,6 +251,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
   @override
   void dispose() {
+    _scannerController.dispose();
     _scanLineController.dispose();
     _bracketGlowController.dispose();
     _countdownTimer?.cancel();
@@ -191,188 +292,214 @@ class _QrScannerScreenState extends State<QrScannerScreen>
           ),
         ),
       ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ── Info card (compact) ────────────────────────────────
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.06),
-                      blurRadius: 12,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(7),
-                      decoration: BoxDecoration(
-                        color: AppStyles.primaryBlue.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                      child: const Icon(
-                        Icons.menu_book_rounded,
-                        color: AppStyles.primaryBlue,
-                        size: 18,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '3rd Period — DBMS',
-                            style: TextStyle(
-                              color: AppStyles.textDark,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                          ),
-                          SizedBox(height: 1),
-                          Text(
-                            'Room 301',
-                            style: TextStyle(
-                              color: AppStyles.textGray,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          SizedBox(height: 2),
-                          Text(
-                            'This code expires shortly',
-                            style: TextStyle(
-                              color: AppStyles.textGray.withValues(alpha: 0.8),
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 500),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: timerColor.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.timer_outlined,
-                            size: 13,
-                            color: timerColor,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '$mm:$ss',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w800,
-                              fontSize: 14,
-                              color: timerColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+      body: Stack(
+        children: [
+          // ── Full-screen camera preview ───────────────────────
+          Positioned.fill(
+            child: MobileScanner(
+              controller: _scannerController,
+              onDetect: (BarcodeCapture barcodes) {
+                final rawValue = barcodes.barcodes.first.rawValue;
+                if (rawValue == null) return;
+                if (_isProcessing) return;
+                _onQrDetected(rawValue);
+              },
             ),
-
-            // ── Central scan area ──────────────────────────────────
-            const Spacer(),
-            Center(
-              child: SizedBox(
-                width: 240,
-                height: 240,
-                child: Stack(
-                  children: [
-                    // Corner brackets with breathing glow
-                    AnimatedBuilder(
-                      animation: _bracketGlowOpacity,
-                      builder: (context, _) {
-                        return CustomPaint(
-                          size: const Size(240, 240),
-                          painter: _ViewfinderPainter(
-                            opacity: _bracketGlowOpacity.value,
-                          ),
-                        );
-                      },
+          ),
+          // ── Overlay UI on top of camera ──────────────────────
+          SafeArea(
+            child: Column(
+              children: [
+                // ── Info card (compact) ────────────────────────────────
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
                     ),
-                    // Animated scan line
-                    AnimatedBuilder(
-                      animation: _scanLineController,
-                      builder: (context, _) {
-                        final dy = _scanLineController.value * 240;
-                        return Positioned(
-                          top: dy,
-                          left: 12,
-                          right: 12,
-                          child: Container(
-                            height: 2,
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [
-                                  Colors.transparent,
-                                  AppStyles.primaryBlue.withValues(alpha: 0.9),
-                                  Colors.transparent,
-                                ],
-                              ),
-                              borderRadius: BorderRadius.circular(1),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: AppStyles.primaryBlue.withValues(
-                                    alpha: 0.5,
-                                  ),
-                                  blurRadius: 12,
-                                  spreadRadius: 2,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.06),
+                          blurRadius: 12,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(7),
+                          decoration: BoxDecoration(
+                            color: AppStyles.primaryBlue.withValues(
+                              alpha: 0.08,
+                            ),
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                          child: const Icon(
+                            Icons.menu_book_rounded,
+                            color: AppStyles.primaryBlue,
+                            size: 18,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '3rd Period — DBMS',
+                                style: TextStyle(
+                                  color: AppStyles.textDark,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
                                 ),
-                              ],
-                            ),
+                              ),
+                              SizedBox(height: 1),
+                              Text(
+                                'Room 301',
+                                style: TextStyle(
+                                  color: AppStyles.textGray,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                'This code expires shortly',
+                                style: TextStyle(
+                                  color: AppStyles.textGray.withValues(
+                                    alpha: 0.8,
+                                  ),
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
                           ),
-                        );
-                      },
+                        ),
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 500),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: timerColor.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.timer_outlined,
+                                size: 13,
+                                color: timerColor,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                '$mm:$ss',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 14,
+                                  color: timerColor,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
+
+                // ── Central scan area ──────────────────────────────────
+                const Spacer(),
+                Center(
+                  child: SizedBox(
+                    width: 240,
+                    height: 240,
+                    child: Stack(
+                      children: [
+                        // Corner brackets with breathing glow
+                        AnimatedBuilder(
+                          animation: _bracketGlowOpacity,
+                          builder: (context, _) {
+                            return CustomPaint(
+                              size: const Size(240, 240),
+                              painter: _ViewfinderPainter(
+                                opacity: _bracketGlowOpacity.value,
+                              ),
+                            );
+                          },
+                        ),
+                        // Animated scan line
+                        AnimatedBuilder(
+                          animation: _scanLineController,
+                          builder: (context, _) {
+                            final dy = _scanLineController.value * 240;
+                            return Positioned(
+                              top: dy,
+                              left: 12,
+                              right: 12,
+                              child: Container(
+                                height: 2,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      Colors.transparent,
+                                      AppStyles.primaryBlue.withValues(
+                                        alpha: 0.9,
+                                      ),
+                                      Colors.transparent,
+                                    ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(1),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: AppStyles.primaryBlue.withValues(
+                                        alpha: 0.5,
+                                      ),
+                                      blurRadius: 12,
+                                      spreadRadius: 2,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 32),
+                const Text(
+                  'Point camera at the QR code',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'This code expires shortly',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.35),
+                    fontSize: 13,
+                  ),
+                ),
+                const Spacer(flex: 2),
+              ],
             ),
-            const SizedBox(height: 32),
-            const Text(
-              'Point camera at the QR code',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'This code expires shortly',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.35),
-                fontSize: 13,
-              ),
-            ),
-            const Spacer(flex: 2),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
