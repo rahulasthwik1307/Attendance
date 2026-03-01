@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'utils/app_styles.dart';
 import 'utils/auth_flow_state.dart';
 
@@ -16,25 +17,42 @@ import 'screens/attendance/attendance_failed_screen.dart' as att_fail;
 import 'screens/attendance/location_error_screen.dart' as loc_error;
 import 'screens/dashboard/profile_screen.dart' as profile;
 import 'screens/dashboard/settings_screen.dart' as settings_screen;
+import 'screens/attendance/qr_precheck_screen.dart' as qr_precheck;
+import 'screens/attendance/qr_scanner_screen.dart' as qr_scanner;
+import 'screens/attendance/qr_face_verify_screen.dart' as qr_face_verify;
+import 'screens/attendance/qr_success_screen.dart' as qr_success;
+import 'screens/attendance/qr_timeout_screen.dart' as qr_timeout;
 import 'screens/auth/activate_account_screen.dart' as activate;
 // Auth & password reset flow
 import 'screens/auth/sign_in_screen.dart' as sign_in;
 import 'screens/auth/forgot_password_screen.dart' as forgot_pw;
-import 'screens/auth/password_reset_face_success_screen.dart' as pw_reset_success;
-import 'screens/auth/forgot_password_face_verify_screen.dart' as forgot_pw_verify;
+import 'screens/auth/password_reset_face_success_screen.dart'
+    as pw_reset_success;
+import 'screens/auth/forgot_password_face_verify_screen.dart'
+    as forgot_pw_verify;
 import 'screens/face/reset_face_verify_screen.dart' as reset_face_verify;
 import 'screens/auth/set_new_password_screen.dart' as set_new_pw;
 import 'screens/auth/password_updated_screen.dart' as pw_updated;
 import 'screens/auth/password_change_success_screen.dart' as pw_change_success;
 import 'screens/face/face_updated_success_screen.dart' as face_updated_success;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await dotenv.load(fileName: ".env");
+
+  await Supabase.initialize(
+    url: dotenv.env['SUPABASE_URL']!,
+    anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
+  );
+
+  runApp(const SmartAttendanceApp());
+}
 
 final ValueNotifier<ThemeMode> appThemeNotifier = ValueNotifier(
   ThemeMode.light,
 );
-
-void main() {
-  runApp(const SmartAttendanceApp());
-}
 
 class SmartAttendanceApp extends StatelessWidget {
   const SmartAttendanceApp({super.key});
@@ -110,6 +128,22 @@ class SmartAttendanceApp extends StatelessWidget {
               case '/activate':
                 page = const activate.ActivateAccountScreen();
                 break;
+              case '/qr-precheck':
+                page = const qr_precheck.QrPrecheckScreen();
+                break;
+              case '/qr-scanner':
+                page = const qr_scanner.QrScannerScreen();
+                break;
+              case '/qr-face-verify':
+                page = const qr_face_verify.QrFaceVerifyScreen();
+                break;
+              case '/qr-success':
+                page = const qr_success.QrSuccessScreen();
+                break;
+              case '/qr-timeout':
+                final isTimeout = routeSettings.arguments as bool? ?? true;
+                page = qr_timeout.QrTimeoutScreen(isTimeout: isTimeout);
+                break;
               // ── Auth & password reset flow ───────────────────────────────
               case '/sign_in':
                 page = const sign_in.SignInScreen();
@@ -149,7 +183,7 @@ class SmartAttendanceApp extends StatelessWidget {
               return AuthPageRoute(page: page);
             }
 
-            return AppStyles.buildPageTransition(page);
+            return AppStyles.buildPageTransition(page, settings: routeSettings);
           },
         );
       },

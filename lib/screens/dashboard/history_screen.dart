@@ -158,16 +158,71 @@ class HistoryScreen extends StatefulWidget {
 class _HistoryScreenState extends State<HistoryScreen>
     with TickerProviderStateMixin {
   late TabController _tabController;
+  late AnimationController _headerAnimController;
+  late Animation<double> _headerFadeAnim;
+  late Animation<Offset> _headerSlideAnim;
+
+  // Month/year selection state
+  int _selectedYear = 2024;
+  String _selectedMonthAbbr = 'Oct'; // 3-letter abbreviation
+  bool _pillPressed = false;
+  bool _sheetOpen = false;
+
+  String get _selectedMonthLabel => '$_selectedMonthAbbr $_selectedYear';
+
+  // Selectable months per year (for demo)
+  static const Map<int, List<String>> _selectableMonths = {
+    2024: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'],
+    2025: [],
+  };
+
+  static const List<String> _monthAbbreviations = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+
+  static const List<int> _availableYears = [2024, 2025];
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+
+    _headerAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _headerFadeAnim = CurvedAnimation(
+      parent: _headerAnimController,
+      curve: Curves.easeOut,
+    );
+    _headerSlideAnim =
+        Tween<Offset>(begin: const Offset(0, -0.25), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _headerAnimController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
+    // Start header entry animation after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _headerAnimController.forward();
+    });
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _headerAnimController.dispose();
     super.dispose();
   }
 
@@ -176,6 +231,31 @@ class _HistoryScreenState extends State<HistoryScreen>
     if (index == 1) return;
     if (index == 2) Navigator.of(context).pushReplacementNamed('/settings');
     if (index == 3) Navigator.of(context).pushReplacementNamed('/profile');
+  }
+
+  void _showMonthPicker() {
+    setState(() => _sheetOpen = true);
+    showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      enableDrag: true,
+      builder: (ctx) => _MonthPickerSheet(
+        initialYear: _selectedYear,
+        initialMonth: _selectedMonthAbbr,
+        monthAbbreviations: _monthAbbreviations,
+        selectableMonths: _selectableMonths,
+        availableYears: _availableYears,
+      ),
+    ).then((result) {
+      setState(() => _sheetOpen = false);
+      if (result != null) {
+        setState(() {
+          _selectedYear = result['year'] as int;
+          _selectedMonthAbbr = result['month'] as String;
+        });
+      }
+    });
   }
 
   @override
@@ -301,61 +381,116 @@ class _HistoryScreenState extends State<HistoryScreen>
           backgroundColor: Colors.transparent,
           elevation: 0,
           automaticallyImplyLeading: false,
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'History',
-                style: TextStyle(
-                  color:
-                      theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 24,
-                ),
+          toolbarHeight: 64,
+          title: FadeTransition(
+            opacity: _headerFadeAnim,
+            child: SlideTransition(
+              position: _headerSlideAnim,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    'History',
+                    style: TextStyle(
+                      color:
+                          theme.textTheme.displayLarge?.color ??
+                          AppStyles.textDark,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 24,
+                    ),
+                  ),
+                  // ── Inline Month Selector ─────────────────────────────
+                  GestureDetector(
+                    onTapDown: (_) => setState(() => _pillPressed = true),
+                    onTapUp: (_) {
+                      setState(() => _pillPressed = false);
+                      _showMonthPicker();
+                    },
+                    onTapCancel: () => setState(() => _pillPressed = false),
+                    child: AnimatedScale(
+                      scale: _pillPressed ? 0.97 : 1.0,
+                      duration: const Duration(milliseconds: 120),
+                      curve: Curves.easeInOut,
+                      child: AnimatedOpacity(
+                        opacity: _pillPressed ? 0.90 : 1.0,
+                        duration: const Duration(milliseconds: 120),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              _selectedMonthLabel,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: isDark
+                                    ? Colors.white.withValues(alpha: 0.72)
+                                    : AppStyles.textDark.withValues(
+                                        alpha: 0.65,
+                                      ),
+                                height: 1.0,
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                            AnimatedRotation(
+                              turns: _sheetOpen ? 0.5 : 0.0,
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeInOut,
+                              child: Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                size: 17,
+                                color: isDark
+                                    ? Colors.white.withValues(alpha: 0.60)
+                                    : AppStyles.textDark.withValues(
+                                        alpha: 0.55,
+                                      ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              Text(
-                'Oct 2024',
-                style: TextStyle(
-                  color: AppStyles.textGray.withValues(alpha: 0.8),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+            ),
           ),
           bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(48),
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.08)
-                    : Colors.black.withValues(alpha: 0.05),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: TabBar(
-                controller: _tabController,
-                indicator: BoxDecoration(
-                  color: theme.primaryColor,
-                  borderRadius: BorderRadius.circular(10),
+            preferredSize: const Size.fromHeight(52),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.08)
+                      : Colors.black.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                indicatorSize: TabBarIndicatorSize.tab,
-                labelColor: Colors.white,
-                unselectedLabelColor: AppStyles.textGray,
-                labelStyle: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13,
+                child: TabBar(
+                  controller: _tabController,
+                  indicator: BoxDecoration(
+                    color: theme.primaryColor,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  labelColor: Colors.white,
+                  unselectedLabelColor: AppStyles.textGray,
+                  labelStyle: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                  unselectedLabelStyle: const TextStyle(
+                    fontWeight: FontWeight.w500,
+                    fontSize: 13,
+                  ),
+                  dividerColor: Colors.transparent,
+                  tabs: const [
+                    Tab(text: 'College'),
+                    Tab(text: 'Classes'),
+                    Tab(text: 'Subjects'),
+                  ],
                 ),
-                unselectedLabelStyle: const TextStyle(
-                  fontWeight: FontWeight.w500,
-                  fontSize: 13,
-                ),
-                dividerColor: Colors.transparent,
-                tabs: const [
-                  Tab(text: 'College'),
-                  Tab(text: 'Classes'),
-                  Tab(text: 'Subjects'),
-                ],
               ),
             ),
           ),
@@ -621,17 +756,35 @@ class _CollegeAttendanceTab extends StatelessWidget {
                     const SizedBox(width: 14),
                     // Event info only — no date repeated
                     Expanded(
-                      child: Text(
-                        status == 'absent'
-                            ? 'Not marked'
-                            : 'Entered at ${record['time']}',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color:
-                              theme.textTheme.displayLarge?.color ??
-                              AppStyles.textDark,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            status == 'absent'
+                                ? 'Not marked'
+                                : status == 'late'
+                                ? 'Late entry'
+                                : 'Entered at',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: AppStyles.textGray,
+                            ),
+                          ),
+                          if (status != 'absent') ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              record['time'] as String,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color:
+                                    theme.textTheme.displayLarge?.color ??
+                                    AppStyles.textDark,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -1426,6 +1579,243 @@ class _InfoChip extends StatelessWidget {
           fontWeight: FontWeight.w600,
           color: color,
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Month Picker Bottom Sheet
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MonthPickerSheet extends StatefulWidget {
+  final int initialYear;
+  final String initialMonth;
+  final List<String> monthAbbreviations;
+  final Map<int, List<String>> selectableMonths;
+  final List<int> availableYears;
+
+  const _MonthPickerSheet({
+    required this.initialYear,
+    required this.initialMonth,
+    required this.monthAbbreviations,
+    required this.selectableMonths,
+    required this.availableYears,
+  });
+
+  @override
+  State<_MonthPickerSheet> createState() => _MonthPickerSheetState();
+}
+
+class _MonthPickerSheetState extends State<_MonthPickerSheet>
+    with SingleTickerProviderStateMixin {
+  late int _activeYear;
+  String? _tappedMonth;
+
+  @override
+  void initState() {
+    super.initState();
+    _activeYear = widget.initialYear;
+  }
+
+  bool _isSelectable(String month) {
+    final selectable = widget.selectableMonths[_activeYear] ?? [];
+    return selectable.contains(month);
+  }
+
+  void _selectMonth(String month) async {
+    if (!_isSelectable(month)) return;
+    setState(() => _tappedMonth = month);
+    await Future.delayed(const Duration(milliseconds: 160));
+    if (mounted) {
+      Navigator.of(context).pop({'year': _activeYear, 'month': month});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final bg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+    final handleColor = isDark
+        ? Colors.white.withValues(alpha: 0.18)
+        : Colors.black.withValues(alpha: 0.13);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 20),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.10),
+            blurRadius: 28,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Drag handle ───────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 4),
+            child: Container(
+              width: 38,
+              height: 4,
+              decoration: BoxDecoration(
+                color: handleColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          // ── Title ─────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+            child: Row(
+              children: [
+                Text(
+                  'Select Month',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                    color:
+                        theme.textTheme.displayLarge?.color ??
+                        AppStyles.textDark,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // ── Year pill row ──────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+            child: Row(
+              children: widget.availableYears.map((year) {
+                final isSelected = year == _activeYear;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: GestureDetector(
+                    onTap: () => setState(() => _activeYear = year),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeInOut,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? theme.primaryColor
+                            : (isDark
+                                  ? Colors.white.withValues(alpha: 0.07)
+                                  : Colors.black.withValues(alpha: 0.04)),
+                        borderRadius: BorderRadius.circular(50),
+                        border: Border.all(
+                          color: isSelected
+                              ? theme.primaryColor
+                              : (isDark
+                                    ? Colors.white.withValues(alpha: 0.14)
+                                    : Colors.black.withValues(alpha: 0.10)),
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Text(
+                        '$year',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: isSelected
+                              ? Colors.white
+                              : (isDark
+                                    ? Colors.white.withValues(alpha: 0.65)
+                                    : AppStyles.textGray),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          // ── Month grid ────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+            child: GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 4,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                childAspectRatio: 1.85,
+              ),
+              itemCount: widget.monthAbbreviations.length,
+              itemBuilder: (ctx, i) {
+                final month = widget.monthAbbreviations[i];
+                final selectable = _isSelectable(month);
+                final isCurrentSelected =
+                    month == widget.initialMonth &&
+                    _activeYear == widget.initialYear;
+                final isTapped = _tappedMonth == month;
+
+                return GestureDetector(
+                  onTap: selectable ? () => _selectMonth(month) : null,
+                  child: AnimatedScale(
+                    scale: isTapped ? 0.90 : 1.0,
+                    duration: const Duration(milliseconds: 130),
+                    curve: Curves.easeInOut,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeInOut,
+                      decoration: BoxDecoration(
+                        color: isCurrentSelected && selectable
+                            ? theme.primaryColor
+                            : isTapped
+                            ? theme.primaryColor.withValues(alpha: 0.80)
+                            : selectable
+                            ? (isDark
+                                  ? Colors.white.withValues(alpha: 0.07)
+                                  : Colors.black.withValues(alpha: 0.04))
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isCurrentSelected && selectable
+                              ? theme.primaryColor
+                              : selectable
+                              ? (isDark
+                                    ? Colors.white.withValues(alpha: 0.12)
+                                    : Colors.black.withValues(alpha: 0.09))
+                              : Colors.transparent,
+                          width: 1,
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: Opacity(
+                        opacity: selectable ? 1.0 : 0.30,
+                        child: Text(
+                          month,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight:
+                                (isCurrentSelected && selectable) || isTapped
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            color: (isCurrentSelected && selectable) || isTapped
+                                ? Colors.white
+                                : (isDark
+                                      ? Colors.white.withValues(alpha: 0.85)
+                                      : AppStyles.textDark),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

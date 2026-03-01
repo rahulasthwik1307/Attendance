@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:async';
 import 'dart:math' as math;
 import '../../utils/app_styles.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/custom_bottom_nav.dart';
 import '../../widgets/fade_slide_y.dart';
+import '../../services/supabase_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -19,9 +22,12 @@ class _DashboardScreenState extends State<DashboardScreen>
   late Animation<double> _pulseAnimation;
   bool _scheduleExpanded = false;
 
+  String _studentName = 'Student';
+
   @override
   void initState() {
     super.initState();
+    _fetchProfile();
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
@@ -35,6 +41,27 @@ class _DashboardScreenState extends State<DashboardScreen>
   void dispose() {
     _pulseController.dispose();
     super.dispose();
+  }
+
+  Future<void> _fetchProfile() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user != null) {
+        final userData = await supabase
+            .from('users')
+            .select('full_name')
+            .eq('id', user.id)
+            .maybeSingle();
+
+        if (userData != null && mounted) {
+          setState(() {
+            _studentName = userData['full_name'] as String;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching profile: $e');
+    }
   }
 
   void _onNavTap(int index) {
@@ -162,7 +189,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Hello, Rahul 👋',
+                'Hello, ${_studentName.split(' ').first} 👋',
                 style: TextStyle(
                   color:
                       theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
@@ -188,17 +215,20 @@ class _DashboardScreenState extends State<DashboardScreen>
               vertical: 16.0,
             ),
             children: [
-              const SizedBox(height: 4),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 50),
+                child: const _AttendanceBanner(),
+              ),
               FadeSlideY(
                 delay: const Duration(milliseconds: 100),
                 child: _TodayStatusCard(isDark: isDark),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 10),
               FadeSlideY(
                 delay: const Duration(milliseconds: 180),
                 child: _AttendancePercentageCard(theme: theme, isDark: isDark),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 10),
               FadeSlideY(
                 delay: const Duration(milliseconds: 260),
                 child: _HeroAttendanceCard(theme: theme),
@@ -307,6 +337,9 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
   late Animation<double> _fadeAnim;
   late Animation<double> _scaleAnim;
 
+  bool _isPresentToday = false;
+  bool _isLoading = true;
+
   @override
   void initState() {
     super.initState();
@@ -327,10 +360,36 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
       ),
     );
 
-    // Short delay to allow screen to build before starting
-    Future.delayed(const Duration(milliseconds: 50), () {
-      if (mounted) _cardController.forward();
-    });
+    _checkTodayAttendance();
+  }
+
+  Future<void> _checkTodayAttendance() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user != null) {
+        final todayStr = DateTime.now().toIso8601String().split('T')[0];
+
+        final record = await supabase
+            .from('college_attendance')
+            .select('id')
+            .eq('student_id', user.id)
+            .eq('date', todayStr)
+            .maybeSingle();
+
+        if (mounted) {
+          setState(() {
+            _isPresentToday = record != null;
+            _isLoading = false;
+          });
+          _cardController.forward();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error checking today attendance: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   @override
@@ -341,6 +400,25 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16.0),
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    final color = _isPresentToday
+        ? AppStyles.successGreen
+        : AppStyles.amberWarning;
+    final message = _isPresentToday
+        ? 'You are Present Today'
+        : 'Not Yet Marked';
+    final iconData = _isPresentToday
+        ? Icons.check_rounded
+        : Icons.pending_actions_rounded;
+
     return AnimatedBuilder(
       animation: _cardController,
       builder: (context, child) {
@@ -355,14 +433,8 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
         decoration: BoxDecoration(
-          color: AppStyles.successGreen.withValues(
-            alpha: widget.isDark ? 0.15 : 0.07,
-          ),
+          color: color.withValues(alpha: widget.isDark ? 0.15 : 0.07),
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: AppStyles.successGreen.withValues(alpha: 0.25),
-            width: 1,
-          ),
         ),
         child: Row(
           children: [
@@ -374,14 +446,10 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: AppStyles.successGreen.withValues(alpha: 0.25),
+                  color: color.withValues(alpha: 0.25),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(
-                  Icons.check_rounded,
-                  color: AppStyles.successGreen,
-                  size: 24,
-                ),
+                child: Icon(iconData, color: color, size: 24),
               ),
             ),
             const SizedBox(width: 14),
@@ -390,30 +458,31 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'You are Present Today',
+                    message,
                     style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w800,
                       letterSpacing: -0.2,
-                      color: AppStyles.successGreen,
+                      color: color,
                     ),
                   ),
                   const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      _StatusPill(
-                        icon: Icons.location_on_rounded,
-                        label: 'Campus',
-                        color: AppStyles.successGreen,
-                      ),
-                      _StatusPill(
-                        icon: Icons.face_retouching_natural_rounded,
-                        label: 'Face Verified',
-                        color: AppStyles.successGreen,
-                      ),
-                    ],
-                  ),
+                  if (_isPresentToday)
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        _StatusPill(
+                          icon: Icons.location_on_rounded,
+                          label: 'Campus',
+                          color: color,
+                        ),
+                        _StatusPill(
+                          icon: Icons.face_retouching_natural_rounded,
+                          label: 'Face Verified',
+                          color: color,
+                        ),
+                      ],
+                    ),
                 ],
               ),
             ),
@@ -478,9 +547,10 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
   late Animation<double> _progressAnim;
   late Animation<int> _counterAnim;
 
-  static const double _pct = 0.78;
-  static const int _present = 18;
-  static const int _total = 23;
+  double _pct = 0.0;
+  int _present = 0;
+  int _total = 0;
+  bool _isLoading = true;
 
   @override
   void initState() {
@@ -489,17 +559,48 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
       vsync: this,
       duration: const Duration(milliseconds: 1600),
     );
-    _progressAnim = Tween<double>(
-      begin: 0,
-      end: _pct,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
-    _counterAnim = IntTween(
-      begin: 0,
-      end: 78,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
-    Future.delayed(const Duration(milliseconds: 500), () {
-      if (mounted) _controller.forward();
-    });
+    _fetchAttendanceStats();
+  }
+
+  Future<void> _fetchAttendanceStats() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user != null) {
+        final records = await supabase
+            .from('period_attendance')
+            .select('status')
+            .eq('student_id', user.id)
+            .inFilter('status', ['present', 'absent']);
+
+        int total = records.length;
+        int present = records.where((r) => r['status'] == 'present').length;
+        double pct = total > 0 ? present / total : 0.0;
+
+        if (mounted) {
+          setState(() {
+            _total = total;
+            _present = present;
+            _pct = pct;
+            _isLoading = false;
+          });
+
+          _progressAnim = Tween<double>(begin: 0, end: _pct).animate(
+            CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
+          );
+
+          _counterAnim = IntTween(begin: 0, end: (_pct * 100).round()).animate(
+            CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
+          );
+
+          _controller.forward();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching attendance stats: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   @override
@@ -522,7 +623,7 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
           color: pctColor.withValues(alpha: isDark ? 0.08 : 0.04),
           width: 1,
         ),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
             color: pctColor.withValues(alpha: isDark ? 0.08 : 0.05),
@@ -531,145 +632,158 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
           ),
         ],
       ),
-      child: Row(
-        children: [
-          AnimatedBuilder(
-            animation: _controller,
-            builder: (context, _) {
-              return SizedBox(
-                width: 100,
-                height: 100,
-                child: CustomPaint(
-                  painter: _ArcPainter(
-                    progress: _progressAnim.value,
-                    isDark: isDark,
-                    color: pctColor,
-                  ),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        RichText(
-                          text: TextSpan(
+      child: _isLoading
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(20.0),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          : Row(
+              children: [
+                AnimatedBuilder(
+                  animation: _controller,
+                  builder: (context, _) {
+                    return SizedBox(
+                      width: 100,
+                      height: 100,
+                      child: CustomPaint(
+                        painter: _ArcPainter(
+                          progress: _progressAnim.value,
+                          isDark: isDark,
+                          color: pctColor,
+                        ),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              TextSpan(
-                                text: '${_counterAnim.value}',
-                                style: TextStyle(
-                                  fontSize: 26,
-                                  fontWeight: FontWeight.w800,
-                                  color: pctColor,
-                                  letterSpacing: -1,
-                                  height: 1,
+                              RichText(
+                                text: TextSpan(
+                                  children: [
+                                    TextSpan(
+                                      text: '${_counterAnim.value}',
+                                      style: TextStyle(
+                                        fontSize: 26,
+                                        fontWeight: FontWeight.w800,
+                                        color: pctColor,
+                                        letterSpacing: -1,
+                                        height: 1,
+                                      ),
+                                    ),
+                                    TextSpan(
+                                      text: '%',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: pctColor.withValues(alpha: 0.7),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              TextSpan(
-                                text: '%',
+                              Text(
+                                'Overall',
                                 style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: pctColor.withValues(alpha: 0.7),
+                                  fontSize: 10,
+                                  color:
+                                      theme.textTheme.bodyMedium?.color ??
+                                      AppStyles.textGray,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                             ],
                           ),
                         ),
-                        Text(
-                          'Overall',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color:
-                                theme.textTheme.bodyMedium?.color ??
-                                AppStyles.textGray,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-          const SizedBox(width: 20),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Attendance',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color:
-                        theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                RichText(
-                  text: TextSpan(
-                    children: [
-                      TextSpan(
-                        text: '$_present',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                          color:
-                              theme.textTheme.displayLarge?.color ??
-                              AppStyles.textDark,
-                          letterSpacing: -0.5,
-                        ),
                       ),
-                      TextSpan(
-                        text: ' / $_total',
+                    );
+                  },
+                ),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Attendance',
                         style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
                           color:
                               theme.textTheme.bodyMedium?.color ??
                               AppStyles.textGray,
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                Text(
-                  'Days Present',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color:
-                        theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: pctColor.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.trending_up_rounded,
-                        size: 13,
-                        color: pctColor,
+                      const SizedBox(height: 6),
+                      RichText(
+                        text: TextSpan(
+                          children: [
+                            TextSpan(
+                              text: '$_present',
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w800,
+                                color:
+                                    theme.textTheme.displayLarge?.color ??
+                                    AppStyles.textDark,
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                            TextSpan(
+                              text: ' / $_total',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color:
+                                    theme.textTheme.bodyMedium?.color ??
+                                    AppStyles.textGray,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          'Above 75% — Good Standing',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: pctColor,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                      Text(
+                        'Classes Attended',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color:
+                              theme.textTheme.bodyMedium?.color ??
+                              AppStyles.textGray,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: pctColor.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.trending_up_rounded,
+                              size: 13,
+                              color: pctColor,
+                            ),
+                            const SizedBox(width: 4),
+                            Flexible(
+                              child: Text(
+                                _pct >= 0.75
+                                    ? 'Good Standing — Above 75% Requirement'
+                                    : 'Warning — Below 75% Requirement',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: pctColor,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -677,9 +791,6 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
                 ),
               ],
             ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -1394,6 +1505,708 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
           ),
         ),
       ],
+    );
+  }
+}
+
+class _AttendanceBanner extends StatefulWidget {
+  const _AttendanceBanner();
+
+  @override
+  State<_AttendanceBanner> createState() => _AttendanceBannerState();
+}
+
+class _AttendanceBannerState extends State<_AttendanceBanner>
+    with SingleTickerProviderStateMixin {
+  int _secondsRemaining = 0;
+  Timer? _countdownTimer;
+  String? _activeSessionId;
+  bool _isVisible = false;
+  bool _isClosed = false;
+  bool _ctaPressed = false;
+  bool _hasMarkedAttendance = false;
+
+  // Timer pill pulse
+  late AnimationController _timerPulseController;
+  late Animation<double> _timerPulseAnim;
+
+  String _subjectName = '';
+  String _periodInfo = '';
+  // ignore: unused_field
+  String _teacherName = '';
+  // ignore: unused_field
+  DateTime? _qrTokenExpiresAt;
+
+  RealtimeChannel? _subscription;
+  RealtimeChannel? _attendanceSubscription;
+  String? _userClassId;
+  Timer? _pollingTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timerPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _timerPulseAnim = Tween<double>(begin: 1.0, end: 1.06).animate(
+      CurvedAnimation(parent: _timerPulseController, curve: Curves.easeInOut),
+    );
+
+    _initRealtimeSubscription();
+    _startPolling();
+  }
+
+  Future<void> _initRealtimeSubscription() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+
+      // 1. Fetch user's class_id
+      final studentData = await supabase
+          .from('students')
+          .select('class_id')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      if (studentData == null) return;
+      _userClassId = studentData['class_id'] as String;
+      debugPrint('AttendanceBanner: Fetched user class_id = $_userClassId');
+
+      // 2. Fetch active session initially
+      _fetchActiveSession();
+
+      // 3. Subscribe to period_attendance for this student
+      _attendanceSubscription = supabase
+          .channel('public:period_attendance:student_${user.id}')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'period_attendance',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'student_id',
+              value: user.id,
+            ),
+            callback: (payload) {
+              final newRecord = payload.newRecord;
+              final status = newRecord['status'] as String?;
+              if (status == 'present' && mounted) {
+                setState(() {
+                  _hasMarkedAttendance = true;
+                });
+                _countdownTimer?.cancel();
+                _pollingTimer?.cancel();
+                _pollingTimer = null;
+              }
+            },
+          )
+          .subscribe();
+
+      // 4. Subscribe to Realtime for this class
+      _subscription = supabase
+          .channel('public:attendance_sessions')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'attendance_sessions',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'class_id',
+              value: _userClassId!,
+            ),
+            callback: (payload) {
+              final recordId = payload.newRecord['id'] as String?;
+              if (recordId == _activeSessionId) {
+                return;
+              }
+              debugPrint(
+                'AttendanceBanner: Realtime event received: ${payload.eventType} data: ${payload.newRecord}',
+              );
+              _fetchActiveSession();
+            },
+          )
+          .subscribe();
+    } catch (e) {
+      debugPrint('Error initializing realtime: $e');
+    }
+  }
+
+  void _startPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (!mounted) return;
+      debugPrint(
+        'AttendanceBanner: Fallback polling checking for active session...',
+      );
+      _fetchActiveSession();
+    });
+  }
+
+  Future<void> _fetchActiveSession() async {
+    if (_userClassId == null || !mounted) return;
+    try {
+      // Step 1: Fetch active session without joins
+      final sessionData = await supabase
+          .from('attendance_sessions')
+          .select(
+            'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at',
+          )
+          .eq('class_id', _userClassId!)
+          .eq('status', 'active')
+          .order('opened_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      if (!mounted) return;
+
+      if (sessionData != null) {
+        final fetchedSessionId = sessionData['id'] as String?;
+
+        // If we already know this session and attendance is marked, skip
+        if (fetchedSessionId == _activeSessionId &&
+            _isVisible &&
+            _hasMarkedAttendance) {
+          return;
+        }
+
+        // Check if student has already marked attendance for this session
+        final user = supabase.auth.currentUser;
+        if (user != null && fetchedSessionId != null && !_hasMarkedAttendance) {
+          debugPrint('Checking attendance for session id: $fetchedSessionId');
+          final attendanceRecord = await supabase
+              .from('period_attendance')
+              .select('status')
+              .eq('session_id', fetchedSessionId)
+              .eq('student_id', user.id)
+              .eq('status', 'present')
+              .maybeSingle();
+          debugPrint('Period attendance query result: $attendanceRecord');
+
+          if (attendanceRecord != null &&
+              attendanceRecord['status'] == 'present' &&
+              mounted) {
+            debugPrint(
+              'Setting hasMarkedAttendance to true and stopping all timers',
+            );
+            // Student already marked — show green card
+            // Still need to fetch subject info for display
+            final subjectId = sessionData['subject_id'];
+            final subjectData = await supabase
+                .from('subjects')
+                .select('name')
+                .eq('id', subjectId)
+                .maybeSingle();
+
+            if (!mounted) return;
+
+            _hasMarkedAttendance = true;
+            _pollingTimer?.cancel();
+            _pollingTimer = null;
+            _countdownTimer?.cancel();
+
+            setState(() {
+              _activeSessionId = fetchedSessionId;
+              _subjectName =
+                  subjectData?['name'] as String? ?? 'Unknown Subject';
+              _isVisible = true;
+              _isClosed = false;
+            });
+            return;
+          }
+        }
+
+        // If session already visible and not yet marked, don't re-init banner
+        if (fetchedSessionId == _activeSessionId && _isVisible) {
+          return;
+        }
+
+        // Start 180 second flat countdown from when the active session is first seen
+        int remainingSeconds = 180;
+        final openedAtStr = sessionData['opened_at'] as String?;
+        if (openedAtStr != null) {
+          final openedAt = DateTime.parse(openedAtStr).toLocal();
+          final elapsed = DateTime.now().difference(openedAt).inSeconds;
+          remainingSeconds = math.max(0, 180 - elapsed);
+        }
+
+        if (remainingSeconds > 0) {
+          // Step 2: Parallel fetch for references
+          final subjectId = sessionData['subject_id'];
+          final periodId = sessionData['period_id'];
+          final teacherId = sessionData['teacher_id'];
+
+          final results = await Future.wait([
+            supabase
+                .from('subjects')
+                .select('name')
+                .eq('id', subjectId)
+                .maybeSingle(),
+            supabase
+                .from('periods')
+                .select('period_number, start_time, end_time')
+                .eq('id', periodId)
+                .maybeSingle(),
+            // Check if teacher exists in public.teachers, then get name from public.users
+            supabase
+                .from('teachers')
+                .select('id')
+                .eq('id', teacherId)
+                .maybeSingle()
+                .then((t) async {
+                  if (t != null) {
+                    return await supabase
+                        .from('users')
+                        .select('full_name')
+                        .eq('id', teacherId)
+                        .maybeSingle();
+                  }
+                  return null;
+                }),
+          ]);
+
+          if (!mounted) return;
+
+          final subjectData = results[0];
+          final periodData = results[1];
+          final teacherData = results[2];
+
+          debugPrint(
+            'AttendanceBanner: Found active session for class_id $_userClassId, subject: ${subjectData?['name']}',
+          );
+
+          String formattedPeriod = 'Unknown Period';
+          if (periodData != null) {
+            final int periodNum = periodData['period_number'] as int? ?? 1;
+            final String start = periodData['start_time'] as String? ?? '';
+            final String end = periodData['end_time'] as String? ?? '';
+
+            String getOrdinal(int n) {
+              if (n >= 11 && n <= 13) return 'th';
+              switch (n % 10) {
+                case 1:
+                  return 'st';
+                case 2:
+                  return 'nd';
+                case 3:
+                  return 'rd';
+                default:
+                  return 'th';
+              }
+            }
+
+            formattedPeriod = '$periodNum${getOrdinal(periodNum)} Period';
+            if (start.isNotEmpty && end.isNotEmpty) {
+              formattedPeriod += ' $start - $end';
+            }
+          }
+
+          setState(() {
+            _activeSessionId = fetchedSessionId;
+            _subjectName = subjectData?['name'] as String? ?? 'Unknown Subject';
+            _periodInfo = formattedPeriod;
+            _teacherName =
+                teacherData?['full_name'] as String? ?? 'Unknown Teacher';
+            // We do not use qrTokenExpiresAt for banner logic anymore, but keep the assignment valid
+            _qrTokenExpiresAt = DateTime.now().add(
+              const Duration(seconds: 180),
+            );
+            _secondsRemaining = remainingSeconds;
+            _hasMarkedAttendance = false;
+
+            if (!_isVisible) {
+              debugPrint('AttendanceBanner: Setting banner to visible');
+            }
+            _isClosed = false;
+            _isVisible = true;
+          });
+          _startTimer();
+        } else {
+          _closeBanner();
+        }
+      } else {
+        // If session status changed to finalized or no active session exists
+        _closeBanner();
+      }
+    } catch (e) {
+      debugPrint('Error fetching session data: $e');
+    }
+  }
+
+  void _startTimer() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_secondsRemaining > 0) {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        setState(() => _secondsRemaining--);
+        // Subtle pulse on each tick
+        _timerPulseController.forward().then((_) {
+          if (mounted) _timerPulseController.reverse();
+        });
+        if (_secondsRemaining <= 0) {
+          _closeBanner();
+        }
+      } else {
+        _closeBanner();
+      }
+    });
+  }
+
+  void _closeBanner() {
+    _activeSessionId = null;
+    _countdownTimer?.cancel();
+    if (!mounted) return;
+    setState(() => _isClosed = true);
+    // Auto-hide the closed banner after 4 seconds
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _isVisible = false);
+    });
+  }
+
+  @override
+  void dispose() {
+    _subscription?.unsubscribe();
+    _attendanceSubscription?.unsubscribe();
+    _pollingTimer?.cancel();
+    _countdownTimer?.cancel();
+    _timerPulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isVisible) return const SizedBox.shrink();
+
+    // Attendance already marked — green card
+    if (_hasMarkedAttendance) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10.0),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: AppStyles.successGreen.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: AppStyles.successGreen.withValues(alpha: 0.25),
+              width: 1.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppStyles.successGreen.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.check_circle_rounded,
+                  color: AppStyles.successGreen,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Attendance Marked',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        color: AppStyles.successGreen,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Attendance Marked for $_subjectName',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: AppStyles.successGreen.withValues(alpha: 0.8),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Closed state — inline neutral message
+    if (_isClosed) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10.0),
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 400),
+          opacity: 1.0,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.timer_off_rounded,
+                  size: 18,
+                  color: AppStyles.textGray,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'Attendance window closed',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppStyles.textGray,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final Color themeColor = _secondsRemaining <= 30
+        ? AppStyles.errorRed
+        : _secondsRemaining <= 60
+        ? AppStyles.amberWarning
+        : AppStyles.successGreen;
+    final String minutes = (_secondsRemaining ~/ 60).toString().padLeft(2, '0');
+    final String seconds = (_secondsRemaining % 60).toString().padLeft(2, '0');
+
+    // Urgency glow intensity
+    final double glowOpacity = _secondsRemaining <= 30
+        ? 0.25
+        : _secondsRemaining <= 60
+        ? 0.12
+        : 0.0;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10.0),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+        decoration: BoxDecoration(
+          color: themeColor.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: themeColor.withValues(alpha: 0.25),
+            width: 1.5,
+          ),
+          boxShadow: glowOpacity > 0
+              ? [
+                  BoxShadow(
+                    color: themeColor.withValues(alpha: glowOpacity),
+                    blurRadius: 16,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : [],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Row 1: Status + Timer pill ─────────────────────
+            Row(
+              children: [
+                _PulsingDot(color: themeColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Attendance Window',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
+                          color: AppStyles.textDark,
+                          letterSpacing: -0.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Active for current period',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: themeColor.withValues(alpha: 0.8),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Pulsing timer pill
+                ScaleTransition(
+                  scale: _timerPulseAnim,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 500),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: themeColor.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.timer_outlined, size: 14, color: themeColor),
+                        const SizedBox(width: 4),
+                        Text(
+                          '$minutes:$seconds',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                            color: themeColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // ── Row 2: Period info ─────────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.03),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.menu_book_rounded,
+                    size: 15,
+                    color: AppStyles.textGray,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '$_periodInfo — $_subjectName',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppStyles.textGray,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // ── CTA with press scale ──────────────────────────
+            GestureDetector(
+              onTapDown: (_) => setState(() => _ctaPressed = true),
+              onTapUp: (_) {
+                setState(() => _ctaPressed = false);
+                // Pass absolute end time for perfect timer sync
+                final endTime = DateTime.now().add(
+                  Duration(seconds: _secondsRemaining),
+                );
+                Navigator.of(
+                  context,
+                ).pushNamed('/qr-precheck', arguments: endTime);
+              },
+              onTapCancel: () => setState(() => _ctaPressed = false),
+              child: AnimatedScale(
+                scale: _ctaPressed ? 0.96 : 1.0,
+                duration: const Duration(milliseconds: 100),
+                curve: Curves.easeInOut,
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: null, // handled by GestureDetector
+                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    label: const Text(
+                      'Scan QR Now',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: themeColor,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: themeColor,
+                      disabledForegroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 0,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PulsingDot extends StatefulWidget {
+  final Color color;
+  const _PulsingDot({required this.color});
+
+  @override
+  State<_PulsingDot> createState() => _PulsingDotState();
+}
+
+class _PulsingDotState extends State<_PulsingDot>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _opacityAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+    _opacityAnimation = Tween<double>(
+      begin: 0.4,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _opacityAnimation,
+      child: Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle),
+      ),
     );
   }
 }

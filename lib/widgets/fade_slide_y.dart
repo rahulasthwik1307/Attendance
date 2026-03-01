@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 
-/// A widget that fades its child in after an optional [delay].
-/// No movement — pure opacity animation only.
-/// The [yOffset] parameter is intentionally removed; this is a fade-only widget.
+/// A widget that fades and slides its child in after an optional [delay].
+/// Provides a gentle Y-offset slide combined with opacity for stagger effects.
 class FadeSlideY extends StatefulWidget {
   final Widget child;
   final Duration delay;
@@ -23,6 +22,7 @@ class _FadeSlideYState extends State<FadeSlideY>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _opacity;
+  late Animation<Offset> _slide;
 
   @override
   void initState() {
@@ -32,6 +32,11 @@ class _FadeSlideYState extends State<FadeSlideY>
     _opacity = Tween<double>(
       begin: 0.0,
       end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+
+    _slide = Tween<Offset>(
+      begin: const Offset(0, 0.04),
+      end: Offset.zero,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
 
     Future.delayed(widget.delay, () {
@@ -49,6 +54,9 @@ class _FadeSlideYState extends State<FadeSlideY>
 
   @override
   Widget build(BuildContext context) {
-    return FadeTransition(opacity: _opacity, child: widget.child);
+    return FadeTransition(
+      opacity: _opacity,
+      child: SlideTransition(position: _slide, child: widget.child),
+    );
   }
 }
