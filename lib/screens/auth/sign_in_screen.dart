@@ -68,16 +68,15 @@ class _SignInScreenState extends State<SignInScreen> {
             .eq('id', user.id)
             .maybeSingle();
 
-        // Check for approved face registration
-        final faceRegData = await supabase
-            .from('face_registrations')
-            .select()
-            .eq('student_id', user.id)
-            .eq('status', 'approved')
+        // ── Step 1: Check if student has embedding_a (face registered?) ──────
+        final studentData = await supabase
+            .from('students')
+            .select('embedding_a')
+            .eq('id', user.id)
             .maybeSingle();
 
-        // ignore: unused_local_variable
-        bool hasApprovedFace = faceRegData != null;
+        final bool hasEmbedding =
+            studentData != null && studentData['embedding_a'] != null;
 
         if (!mounted) return;
         setState(() {
@@ -90,9 +89,46 @@ class _SignInScreenState extends State<SignInScreen> {
 
         // Set password as set (since they signed in successfully with one)
         AuthFlowState.instance.passwordSet = true;
-        AuthFlowState.instance.faceRegistered = true;
 
-        Navigator.of(context).pushReplacementNamed('/dashboard');
+        if (!hasEmbedding) {
+          // Face not registered yet → go to registration
+          AuthFlowState.instance.faceRegistered = false;
+          Navigator.of(context).pushReplacementNamed('/register');
+          return;
+        }
+
+        // ── Step 2: Check teacher approval status ─────────────────────────────
+        final faceRegData = await supabase
+            .from('face_registrations')
+            .select('approved')
+            .eq('student_id', user.id)
+            .maybeSingle();
+
+        // Also check is_approved directly from students table as fallback
+        final approvalData = await supabase
+            .from('students')
+            .select('is_approved')
+            .eq('id', user.id)
+            .maybeSingle();
+
+        final bool isApproved =
+            (faceRegData != null && faceRegData['approved'] == true) ||
+            (approvalData != null && approvalData['is_approved'] == true);
+
+        if (!isApproved) {
+          // Face registered but not approved → waiting screen
+          AuthFlowState.instance.faceRegistered = false;
+          if (mounted) {
+            Navigator.of(context).pushReplacementNamed('/registration_success');
+          }
+          return;
+        }
+
+        // ── Step 3: Approved — go to dashboard ────────────────────────────────
+        AuthFlowState.instance.faceRegistered = true;
+        if (mounted) {
+          Navigator.of(context).pushReplacementNamed('/dashboard');
+        }
       }
     } on AuthException catch (error) {
       if (!mounted) return;
