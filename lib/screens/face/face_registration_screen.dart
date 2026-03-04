@@ -111,6 +111,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // ─── Challenge verification timeout ──────────────────────────────────────
   DateTime? _challengeStartTime;
 
+  // Tracks intermediate blinks to trigger green flash per blink registered
+  int _lastKnownBlinkCount = 0;
+
   // Progress: which step out of total (for display)
   int _captureProgress = 0; // 0-9 total frames
   String _progressLabel = '';
@@ -158,6 +161,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     "Move slightly Up": "Raise your face a bit",
     "Hold still…": "Almost ready, stay steady",
     "Blink to verify": "Blink naturally to confirm you are present",
+    "Blink your eyes 2-3 times":
+        "Blink naturally 2 to 3 times to confirm you are present",
     "Setting up camera…": "Please wait",
     "Calibrating…": "Look straight at the camera and hold still",
     "Look straight ahead": "Getting your front profile",
@@ -261,12 +266,18 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     // Always store latest frame for capture use
     _lastCameraImage = cameraImage;
 
-    // Rate limit: process max 10 frames per second
+    // Rate limit: process max 10 frames per second (except during active blink)
     final now = DateTime.now();
-    final int limit = (_phase == _Phase.front && !_challengeVerified)
-        ? 33
-        : 100; // Higher FPS during blink detection
-    if (now.difference(_lastFrameTime).inMilliseconds < limit) return;
+    // Bypass rate limit entirely during active blink detection for lag-free ~30 FPS.
+    // After blink verified or during capture phases, use standard 10fps.
+    final bool isBlinkPhase =
+        _phase == _Phase.front && !_challengeVerified && _isFaceReady;
+    if (!isBlinkPhase) {
+      final int limit = (_phase == _Phase.front && !_challengeVerified)
+          ? 33
+          : 100;
+      if (now.difference(_lastFrameTime).inMilliseconds < limit) return;
+    }
     if (_isProcessingFrame) return;
     if (!mounted) return;
 
@@ -316,14 +327,14 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           _steadyStartTime = null;
           if (_isFaceReady) {
             _isFaceReady = false;
-            _livenessService.reset();
+            _livenessService.resetCalibration();
             _challengeStartTime = null;
             if (_phase == _Phase.front) {
               _blinkCountdownController.stop();
               _blinkCountdownController.reset();
             }
             debugPrint(
-              '[FACE_REG] Face lost — resetting positioning & challenge',
+              '[FACE_REG] Face lost — resetting calibration & challenge',
             );
           }
           _updateInstruction('Fit your face in the circle', animate: false);
@@ -371,14 +382,14 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           if (_isFaceReady) {
             // Was in liveness challenge, now lost position — reset
             _isFaceReady = false;
-            _livenessService.reset();
+            _livenessService.resetCalibration();
             _challengeStartTime = null;
             if (_phase == _Phase.front) {
               _blinkCountdownController.stop();
               _blinkCountdownController.reset();
             }
             debugPrint(
-              '[FACE_REG] Face lost position during liveness — resetting challenge',
+              '[FACE_REG] Face lost position — resetting calibration & challenge',
             );
           }
           _steadyStartTime = null;
@@ -394,7 +405,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
             .inMilliseconds;
 
         if (!_isFaceReady) {
-          if (steadyMs < 500) {
+          if (steadyMs < 800) {
             _updateInstruction(
               'Hold still…',
               subtitle: 'Almost ready, stay steady',
@@ -403,24 +414,30 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
             _isProcessingFrame = false;
             return;
           }
-          // Steady for 500ms — mark ready and kick off liveness challenge
+          // Steady for 800ms — mark ready
           _isFaceReady = true;
-          _challengeStartTime = DateTime.now();
           _livenessService.reset();
           debugPrint(
-            '[FACE_REG] Face positioned & steady 500ms — starting liveness',
+            '[FACE_REG] Face positioned & steady 800ms — starting calibration',
           );
 
+          // For blink phase: run inline calibration before showing prompt
           if (_phase == _Phase.front) {
-            _blinkCountdownController.reset();
-            _blinkCountdownController.forward();
+            // Show calibrating instruction while we collect baseline
+            _updateInstruction(
+              'Calibrating…',
+              subtitle: 'Look straight at the camera and hold still',
+              animate: false,
+            );
+          } else {
+            // Head turn phases don't need calibration — start immediately
+            _challengeStartTime = DateTime.now();
+            _updateInstruction(
+              _getChallengeInstruction(_phaseToChallengeType(_phase)),
+              subtitle: _getChallengeSubtitle(_phaseToChallengeType(_phase)),
+              animate: false,
+            );
           }
-          // Show appropriate challenge instruction
-          _updateInstruction(
-            _getChallengeInstruction(_phaseToChallengeType(_phase)),
-            subtitle: _getChallengeSubtitle(_phaseToChallengeType(_phase)),
-            animate: false,
-          );
         }
       }
 
@@ -514,11 +531,46 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       return;
     }
 
+    // ── Blink phase: run inline calibration before detecting ───────────────
+    // Collects 10 baseline eye-probability samples after face is steady.
+    // Only then shows the blink prompt and starts countdown.
+    if (challenge == ChallengeType.blink &&
+        !_livenessService.isBlinkCalibrated) {
+      final bool calibDone = _livenessService.calibrateBlink(face);
+      if (!calibDone) {
+        return; // Still collecting — keep showing "Calibrating…"
+      }
+      // Calibration just finished — start countdown and show prompt
+      _challengeStartTime = DateTime.now();
+      _lastKnownBlinkCount = 0;
+      _blinkCountdownController.reset();
+      _blinkCountdownController.forward();
+      _updateInstruction(
+        'Blink your eyes 2-3 times',
+        subtitle: 'Blink naturally 2 to 3 times to confirm you are present',
+        animate: false,
+      );
+      return; // Start detecting on the very next frame
+    }
+
     // ── Try to detect the challenge ──────────────────────────────────────
     bool detected = false;
     switch (challenge) {
       case ChallengeType.blink:
         detected = _livenessService.detectBlink(face);
+        // ─ Per-blink green flash (intermediate progress feedback) ──────────
+        // Flash green every time a new blink is registered but not yet done.
+        final int currentBlinkCount = _livenessService.blinkCount;
+        if (!detected && currentBlinkCount > _lastKnownBlinkCount) {
+          _lastKnownBlinkCount = currentBlinkCount;
+          if (mounted) {
+            setState(() => _borderColor = AppStyles.successGreen);
+          }
+          await Future.delayed(const Duration(milliseconds: 250));
+          if (mounted && !_challengeVerified) {
+            setState(() => _borderColor = AppStyles.primaryBlue);
+          }
+        }
         break;
       case ChallengeType.turnLeft:
         detected = _livenessService.detectTurnLeft(face);
