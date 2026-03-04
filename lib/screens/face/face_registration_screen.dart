@@ -653,8 +653,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       return;
     }
 
-    // Quality + centering check
-    if (!_isFaceAcceptable(face, cameraImage)) {
+    // Quality + centering check (phase-aware: relaxed offset for side turns)
+    if (!_isFaceAcceptable(face, cameraImage, currentPhase)) {
       _updateInstruction(
         _getFacingInstruction(face, cameraImage),
         animate: false,
@@ -688,15 +688,33 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     switch (currentPhase) {
       case _Phase.front:
         _frontFrames.add(jpegBytes);
-        if (emb != null) _frontEmbeddings.add(emb);
+        if (emb != null) {
+          _frontEmbeddings.add(emb);
+        } else {
+          debugPrint(
+            '[FACE_REG] Failed to generate embedding for phase front (frame ${_frontFrames.length})',
+          );
+        }
         break;
       case _Phase.left:
         _leftFrames.add(jpegBytes);
-        if (emb != null) _leftEmbeddings.add(emb);
+        if (emb != null) {
+          _leftEmbeddings.add(emb);
+        } else {
+          debugPrint(
+            '[FACE_REG] Failed to generate embedding for phase left (frame ${_leftFrames.length})',
+          );
+        }
         break;
       case _Phase.right:
         _rightFrames.add(jpegBytes);
-        if (emb != null) _rightEmbeddings.add(emb);
+        if (emb != null) {
+          _rightEmbeddings.add(emb);
+        } else {
+          debugPrint(
+            '[FACE_REG] Failed to generate embedding for phase right (frame ${_rightFrames.length})',
+          );
+        }
         break;
       default:
         break;
@@ -754,6 +772,31 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _processAndUpload() async {
     if (!mounted) return;
+
+    // ── Final frame count check ──────────────────────────────────────────
+    debugPrint(
+      '[FACE_REG] Final Frame Check: Front: ${_frontFrames.length}, '
+      'Left: ${_leftFrames.length}, Right: ${_rightFrames.length}',
+    );
+
+    if (_frontFrames.length < _framesPerPhase) {
+      _setError(
+        'Capture incomplete (Front frames missed). Please stay inside the circle.',
+      );
+      return;
+    }
+    if (_leftFrames.length < _framesPerPhase) {
+      _setError(
+        'Capture incomplete (Left side missed). Please stay inside the circle.',
+      );
+      return;
+    }
+    if (_rightFrames.length < _framesPerPhase) {
+      _setError(
+        'Capture incomplete (Right side missed). Please stay inside the circle.',
+      );
+      return;
+    }
 
     _updateInstruction('Processing…', subtitle: 'Generating your face profile');
 
@@ -1213,42 +1256,59 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   }
 
   // Check face is acceptably centered and sized
-  bool _isFaceAcceptable(Face face, CameraImage image) {
+  // Phase-aware face acceptability check.
+  //
+  // FRONT phase: strict 0.25 centerOffset — ensures a clean anchor image.
+  // LEFT / RIGHT phases: relaxed 0.45 centerOffset — head turns naturally
+  // shift the face bounding box toward one side of the frame.
+  bool _isFaceAcceptable(Face face, CameraImage image, _Phase phase) {
     final double widthRatio = face.boundingBox.width / image.width;
 
     // Debug: log widthRatio so we can see what the device actually reports
-    debugPrint("WidthRatio: $widthRatio");
+    debugPrint('WidthRatio: $widthRatio');
 
     // Relaxed thresholds — bounding box scale varies across devices
     if (widthRatio < 0.12 || widthRatio > 0.85) {
       debugPrint(
-        "[FACE_REG] _isFaceAcceptable() returns false (widthRatio: ${widthRatio.toStringAsFixed(3)} outside 0.12-0.85)",
+        '[FACE_REG] _isFaceAcceptable() returns false (widthRatio: ${widthRatio.toStringAsFixed(3)} outside 0.12-0.85)',
       );
       return false;
     }
 
-    // Horizontal centering check — 25% offset tolerance from center
+    // Phase-dependent centering tolerance
+    // FRONT: strict 0.25 — anchor image must be well-centred.
+    // LEFT/RIGHT: relaxed 0.45 — side turns naturally shift the bounding box.
+    final bool isSideTurn = phase == _Phase.left || phase == _Phase.right;
+    final double maxOffset = isSideTurn ? 0.45 : 0.25;
+
     final double centerX = face.boundingBox.left + face.boundingBox.width / 2;
     final double imageCenterX = image.width / 2;
     final double centerOffset = (centerX - imageCenterX).abs() / image.width;
 
-    if (centerOffset > 0.25) {
+    if (centerOffset > maxOffset) {
       debugPrint(
-        "[FACE_REG] _isFaceAcceptable() returns false (centerOffset: ${centerOffset.toStringAsFixed(3)} > 0.25)",
+        '[FACE_REG] _isFaceAcceptable() returns false (centerOffset: ${centerOffset.toStringAsFixed(3)} > $maxOffset for phase=${phase.name})',
       );
       return false;
+    }
+
+    if (isSideTurn && centerOffset > 0.25) {
+      // Accepted only because of the relaxed side-turn threshold — log it
+      debugPrint(
+        '[FACE_REG] Side-turn accepted with relaxed offset: ${centerOffset.toStringAsFixed(3)} (phase=${phase.name})',
+      );
     }
 
     // Head pitch check — allow ±25 degrees tolerance
     final double? pitch = face.headEulerAngleX;
     if (pitch != null && pitch.abs() > 25) {
       debugPrint(
-        "[FACE_REG] _isFaceAcceptable() returns false (pitch: ${pitch.toStringAsFixed(1)} > 25)",
+        '[FACE_REG] _isFaceAcceptable() returns false (pitch: ${pitch.toStringAsFixed(1)} > 25)',
       );
       return false;
     }
 
-    debugPrint("[FACE_REG] _isFaceAcceptable() returns true");
+    debugPrint('[FACE_REG] _isFaceAcceptable() returns true');
     return true;
   }
 

@@ -10,6 +10,7 @@
 // This file does NOT touch Supabase, camera, or UI.
 // It is a pure service called by face screens.
 
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -84,34 +85,139 @@ class FaceMlService {
   // ─────────────────────────────────────────────────────────────────────────
   // GENERATE EMBEDDING from a raw camera image bytes + detected face
   //
-  // Returns a 128-dim L2-normalized float vector.
+  // Returns a 192-dim L2-normalized float vector (MobileFaceNet output).
   // Returns null if preprocessing fails (bad crop, no landmarks).
   // ─────────────────────────────────────────────────────────────────────────
   Future<List<double>?> generateEmbedding({
     required Uint8List jpegBytes,
-    required Face face,
+    required Face face, // used as fallback if re-detection fails
   }) async {
     if (!_isInitialized) await initialize();
 
+    // ── Step 1: Write JPEG to a temp file ─────────────────────────────────
+    // The `face` passed in was detected from the live YUV camera buffer whose
+    // coordinate system differs from the decoded JPEG (rotation, flip, etc.).
+    // Writing to a file and re-running ML Kit gives us a `Face` whose landmark
+    // coordinates are anchored to the decoded JPEG's pixel space.
+    File? tempFile;
+    Face? jpegFace;
     try {
-      // 1. Decode JPEG to image object
+      final String tempPath =
+          '${Directory.systemTemp.path}/face_emb_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      tempFile = File(tempPath);
+      await tempFile.writeAsBytes(jpegBytes);
+
+      final InputImage staticInput = InputImage.fromFilePath(tempPath);
+
+      // Use a fresh detector with accurate mode for static images
+      final FaceDetector staticDetector = FaceDetector(
+        options: FaceDetectorOptions(
+          enableContours: true,
+          enableLandmarks: true,
+          enableClassification: true,
+          enableTracking: false,
+          performanceMode: FaceDetectorMode.accurate,
+          minFaceSize: 0.10,
+        ),
+      );
+
+      try {
+        final List<Face> detected = await staticDetector.processImage(
+          staticInput,
+        );
+        await staticDetector.close();
+
+        if (detected.isNotEmpty) {
+          // Pick the largest face in the JPEG
+          jpegFace = detected.reduce(
+            (a, b) => a.boundingBox.width >= b.boundingBox.width ? a : b,
+          );
+          debugPrint(
+            '[FACE_REG] Re-detect OK — using JPEG-space face '
+            '(box: ${jpegFace.boundingBox.width.toStringAsFixed(0)}×'
+            '${jpegFace.boundingBox.height.toStringAsFixed(0)})',
+          );
+        } else {
+          debugPrint(
+            '[FACE_REG] Re-detect: no face found in JPEG — using caller face as fallback',
+          );
+        }
+      } catch (e) {
+        await staticDetector.close();
+        debugPrint('[FACE_REG] Re-detect error: $e — using fallback face');
+      }
+    } catch (e) {
+      debugPrint('[FACE_REG] Temp file error: $e — using fallback face');
+    } finally {
+      // Clean up temp file (fire-and-forget)
+      try {
+        tempFile?.deleteSync();
+      } catch (_) {}
+    }
+
+    // Use the JPEG-space face if available;
+    // otherwise: scale the live-stream bounding box to JPEG dimensions.
+    Face activeFace;
+    if (jpegFace != null) {
+      activeFace = jpegFace;
+    } else {
+      // The live-stream face coordinates are in camera-buffer space
+      // (e.g. 480×640). Decode the JPEG to find its actual pixel dimensions,
+      // then compute a scale factor and produce a synthetically scaled face
+      // bounding box that maps into JPEG pixel coordinates.
+      //
+      // We cannot construct a `Face` with different coordinates since it is a
+      // final data class, so we fall back to the crop-with-padding approach
+      // which only needs the bounding box. We override _preprocess to use the
+      // decoded image dimensions as the reference for clamping.
+      //
+      // Simple approach: just pass the original face and let _cropWithPadding
+      // clamp the box to image bounds. This still works if the aspect ratios
+      // are close (same sensor, different buffer stage).
+      debugPrint(
+        '[FACE_REG] Fallback: using caller face (live-stream bbox) — '
+        'box W=${face.boundingBox.width.toStringAsFixed(0)} '
+        'H=${face.boundingBox.height.toStringAsFixed(0)}',
+      );
+      activeFace = face;
+    }
+
+    try {
+      // ── Step 2: Decode JPEG ────────────────────────────────────────────
       final img.Image? decoded = img.decodeJpg(jpegBytes);
-      if (decoded == null) return null;
+      if (decoded == null) {
+        debugPrint('[FACE_REG] generateEmbedding: JPEG decode failed');
+        return null;
+      }
 
-      // 2. Full preprocessing pipeline
-      final img.Image? processed = _preprocess(decoded, face);
-      if (processed == null) return null;
+      // ── Step 3: Full preprocessing pipeline ───────────────────────────
+      final img.Image? processed = _preprocess(decoded, activeFace);
+      if (processed == null) {
+        debugPrint('[FACE_REG] generateEmbedding: _preprocess returned null');
+        return null;
+      }
 
-      // 3. Convert to float32 tensor normalized to [-1, 1]
+      // ── Step 4: Float32 tensor [-1, 1] ────────────────────────────────
       final Float32List tensor = _imageToTensor(processed);
 
-      // 4. Run MobileFaceNet
-      final List<List<double>> output = [List.filled(128, 0.0)];
+      // ── Step 5: Run MobileFaceNet ──────────────────────────────────────
+      // Output dimension: 192 (verified from model tensor shape).
+      // Shape mismatch at runtime will throw — caught by the catch block.
+      final List<List<double>> output = [List.filled(192, 0.0)];
       _interpreter!.run(tensor.reshape([1, 112, 112, 3]), output);
+      debugPrint(
+        '[FACE_REG] Model run complete, raw[0]=${output[0][0].toStringAsFixed(4)}',
+      );
 
-      // 5. L2 normalize the raw embedding
-      return _l2Normalize(output[0]);
+      // ── Step 6: L2 normalize ───────────────────────────────────────────
+      final List<double> embedding = _l2Normalize(output[0]);
+      debugPrint(
+        '[FACE_REG] Embedding generated — '
+        'norm=${_vectorNorm(embedding).toStringAsFixed(4)}',
+      );
+      return embedding;
     } catch (e) {
+      debugPrint('[FACE_REG] generateEmbedding error: $e');
       return null;
     }
   }
@@ -512,6 +618,16 @@ class FaceMlService {
 
     if (magnitude < 1e-10) return embedding;
     return embedding.map((v) => v / magnitude).toList();
+  }
+
+  // Returns the Euclidean norm of a vector (before normalization).
+  // Used purely for debug logging to verify embeddings are non-zero.
+  double _vectorNorm(List<double> v) {
+    double sum = 0.0;
+    for (final x in v) {
+      sum += x * x;
+    }
+    return math.sqrt(sum);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
