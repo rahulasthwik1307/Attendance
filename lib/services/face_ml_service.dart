@@ -612,42 +612,57 @@ class LivenessChallengeService {
   final ChallengeValidator _validator;
 
   LivenessChallengeService()
-      : _validator = ChallengeValidator(
-          const LivenessConfig(
-            // eyeOpenThreshold: avg eye probability < this → considerd closed
-            // Default 0.35 but we use 0.45 for low-FPS forgiveness
-            eyeOpenThreshold: 0.45,
-            // headAngleThreshold: degrees of head rotation to detect a turn
-            headAngleThreshold: 15.0,
-            // We handle anti-spoofing separately; disable package's version
-            enableAntiSpoofing: false,
-            challengeTimeout: Duration(seconds: 10),
-          ),
-        );
+    : _validator = ChallengeValidator(
+        const LivenessConfig(
+          // eyeOpenThreshold: avg eye probability < this → considerd closed
+          // Default 0.35 but we use 0.45 for low-FPS forgiveness
+          eyeOpenThreshold: 0.45,
+          // headAngleThreshold: degrees of head rotation to detect a turn
+          headAngleThreshold: 15.0,
+          // We handle anti-spoofing separately; disable package's version
+          enableAntiSpoofing: false,
+          challengeTimeout: Duration(seconds: 10),
+        ),
+      );
 
   /// Detect a natural blink (eyes close → reopen within 1000ms).
   bool detectBlink(Face face) {
+    final double leftProb = face.leftEyeOpenProbability ?? -1;
+    final double rightProb = face.rightEyeOpenProbability ?? -1;
+    debugPrint(
+      '[FACE_REG] Blink check | '
+      'leftEye: ${leftProb.toStringAsFixed(2)} '
+      'rightEye: ${rightProb.toStringAsFixed(2)}',
+    );
     final result = _validator.validateChallenge(face, ChallengeType.blink);
     if (result) {
-      debugPrint('[LIVENESS] ✓ Blink detected successfully');
+      debugPrint('[FACE_REG] ✓ Blink VERIFIED');
     }
     return result;
   }
 
   /// Detect head currently turned to the left.
   bool detectTurnLeft(Face face) {
+    final double yaw = face.headEulerAngleY ?? 0;
+    debugPrint('[FACE_REG] TurnLeft check | yaw: ${yaw.toStringAsFixed(1)}');
     final result = _validator.validateChallenge(face, ChallengeType.turnLeft);
     if (result) {
-      debugPrint('[LIVENESS] ✓ Head turn LEFT detected');
+      debugPrint(
+        '[FACE_REG] ✓ Head turn LEFT VERIFIED (yaw: ${yaw.toStringAsFixed(1)})',
+      );
     }
     return result;
   }
 
   /// Detect head currently turned to the right.
   bool detectTurnRight(Face face) {
+    final double yaw = face.headEulerAngleY ?? 0;
+    debugPrint('[FACE_REG] TurnRight check | yaw: ${yaw.toStringAsFixed(1)}');
     final result = _validator.validateChallenge(face, ChallengeType.turnRight);
     if (result) {
-      debugPrint('[LIVENESS] ✓ Head turn RIGHT detected');
+      debugPrint(
+        '[FACE_REG] ✓ Head turn RIGHT VERIFIED (yaw: ${yaw.toStringAsFixed(1)})',
+      );
     }
     return result;
   }

@@ -118,15 +118,45 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // ignore: unused_field
   String? _errorMessage;
 
+  // ─── Face positioning state ────────────────────────────────────────────
+  DateTime? _steadyStartTime;
+  bool _isFaceReady = false;
+
+  // Layout info captured from LayoutBuilder for coordinate mapping
+  double _uiCircleSize = 0;
+  double _uiAvailW = 0;
+  double _uiAvailH = 0;
+
+  // ─── Smoothing buffer (weighted moving average, last 5 frames) ────────
+  static const int _smoothingBufferSize = 5;
+  final List<double> _bufFaceWidth = [];
+  final List<double> _bufFaceHeight = [];
+  final List<double> _bufFaceCX = [];
+  final List<double> _bufFaceCY = [];
+  final List<double> _bufYaw = [];
+  final List<double> _bufPitch = [];
+
+  // ─── Hysteresis state ─────────────────────────────────────────────────
+  // Tracks the last accepted positioning instruction to apply safety gaps.
+  // null = face was accepted (in good position).
+  String? _lastPosInstruction;
+
   // ─── Instruction strings ─────────────────────────────────────────────────
   // These match the original screen's instruction map exactly
   final Map<String, String> _subtitles = {
     "Fit your face in the circle": "Make sure your full face is visible",
     "Move closer": "Step a little closer to the camera",
+    "Move closer to the camera":
+        "Step a little closer so your face fills the circle",
     "Move back": "You are too close, step back slightly",
+    "Move slightly backward": "You are too close, step back a little",
     "Move left": "Shift your position slightly to the left",
+    "Move slightly Left": "Shift yourself slightly to the left",
     "Move right": "Shift your position slightly to the right",
-    "Hold still…": "Almost done, stay steady",
+    "Move slightly Right": "Shift yourself slightly to the right",
+    "Move slightly Down": "Lower your face a bit",
+    "Move slightly Up": "Raise your face a bit",
+    "Hold still…": "Almost ready, stay steady",
     "Blink to verify": "Blink naturally to confirm you are present",
     "Setting up camera…": "Please wait",
     "Calibrating…": "Look straight at the camera and hold still",
@@ -281,6 +311,21 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         // face loss — blinks/turns can cause ML Kit to lose the face briefly.
         // Only show "Fit your face" during challenge verification sub-phase.
         if (!_challengeVerified) {
+          // Reset positioning steady state and smoothing buffer on face loss
+          _clearSmoothing();
+          _steadyStartTime = null;
+          if (_isFaceReady) {
+            _isFaceReady = false;
+            _livenessService.reset();
+            _challengeStartTime = null;
+            if (_phase == _Phase.front) {
+              _blinkCountdownController.stop();
+              _blinkCountdownController.reset();
+            }
+            debugPrint(
+              '[FACE_REG] Face lost — resetting positioning & challenge',
+            );
+          }
           _updateInstruction('Fit your face in the circle', animate: false);
         }
         _isProcessingFrame = false;
@@ -295,13 +340,89 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         return;
       }
 
-      // Debug logging — see what ML Kit is actually returning
+      // Push raw face metrics into smoothing buffer for moving average
+      _pushSmoothing(face);
+
+      // Debug: smoothed face metrics (5-frame average, reduces noise)
       debugPrint(
-        'Face: bbox=${face.boundingBox}, yaw=${face.headEulerAngleY?.toStringAsFixed(1)}, pitch=${face.headEulerAngleX?.toStringAsFixed(1)}, widthRatio=${(face.boundingBox.width / cameraImage.width).toStringAsFixed(3)}',
+        '[FACE_REG] Face detected | '
+        'avgW: ${_bufAvg(_bufFaceWidth).toStringAsFixed(1)} '
+        'avgCX: ${_bufAvg(_bufFaceCX).toStringAsFixed(1)} '
+        'avgCY: ${_bufAvg(_bufFaceCY).toStringAsFixed(1)} '
+        'rawYaw: ${face.headEulerAngleY?.toStringAsFixed(1)} '
+        'rawPitch: ${face.headEulerAngleX?.toStringAsFixed(1)}',
       );
-      debugPrint(
-        '[FACE_REG] Face detected | widthRatio=${(face.boundingBox.width / cameraImage.width).toStringAsFixed(3)} yaw=${face.headEulerAngleY?.toStringAsFixed(1)} pitch=${face.headEulerAngleX?.toStringAsFixed(1)}',
-      );
+
+      // ── Pre-liveness positioning gate ──────────────────────────────────
+      // Centering + distance + steadiness must pass before liveness starts.
+      // During liveness (isFaceReady && !challengeVerified), use relaxed check;
+      // if user moves out, reset that liveness phase.
+      if (!_challengeVerified) {
+        // Choose strictness: strict before liveness starts, relaxed during
+        final bool strict = !_isFaceReady;
+        final String? posInstruction = _getPositioningInstruction(
+          face,
+          cameraImage,
+          strict: strict,
+        );
+
+        if (posInstruction != null) {
+          // Not positioned — reset steady timer and ready state
+          if (_isFaceReady) {
+            // Was in liveness challenge, now lost position — reset
+            _isFaceReady = false;
+            _livenessService.reset();
+            _challengeStartTime = null;
+            if (_phase == _Phase.front) {
+              _blinkCountdownController.stop();
+              _blinkCountdownController.reset();
+            }
+            debugPrint(
+              '[FACE_REG] Face lost position during liveness — resetting challenge',
+            );
+          }
+          _steadyStartTime = null;
+          _updateInstruction(posInstruction, animate: false);
+          _isProcessingFrame = false;
+          return;
+        }
+
+        // Face is centered and at correct distance — track steadiness
+        _steadyStartTime ??= DateTime.now();
+        final int steadyMs = DateTime.now()
+            .difference(_steadyStartTime!)
+            .inMilliseconds;
+
+        if (!_isFaceReady) {
+          if (steadyMs < 500) {
+            _updateInstruction(
+              'Hold still…',
+              subtitle: 'Almost ready, stay steady',
+              animate: false,
+            );
+            _isProcessingFrame = false;
+            return;
+          }
+          // Steady for 500ms — mark ready and kick off liveness challenge
+          _isFaceReady = true;
+          _challengeStartTime = DateTime.now();
+          _livenessService.reset();
+          debugPrint(
+            '[FACE_REG] Face positioned & steady 500ms — starting liveness',
+          );
+
+          if (_phase == _Phase.front) {
+            _blinkCountdownController.reset();
+            _blinkCountdownController.forward();
+          }
+          // Show appropriate challenge instruction
+          _updateInstruction(
+            _getChallengeInstruction(_phaseToChallengeType(_phase)),
+            subtitle: _getChallengeSubtitle(_phaseToChallengeType(_phase)),
+            animate: false,
+          );
+        }
+      }
 
       // Route to correct phase handler
       switch (_phase) {
@@ -827,6 +948,218 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     return biggest;
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // FACE POSITIONING — smoothed centering + distance + hysteresis
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Push one frame of raw face data into the smoothing ring buffer.
+  void _pushSmoothing(Face face) {
+    _bufFaceWidth.add(face.boundingBox.width);
+    _bufFaceHeight.add(face.boundingBox.height);
+    _bufFaceCX.add(face.boundingBox.center.dx);
+    _bufFaceCY.add(face.boundingBox.center.dy);
+    _bufYaw.add(face.headEulerAngleY ?? 0);
+    _bufPitch.add(face.headEulerAngleX ?? 0);
+    while (_bufFaceWidth.length > _smoothingBufferSize) {
+      _bufFaceWidth.removeAt(0);
+      _bufFaceHeight.removeAt(0);
+      _bufFaceCX.removeAt(0);
+      _bufFaceCY.removeAt(0);
+      _bufYaw.removeAt(0);
+      _bufPitch.removeAt(0);
+    }
+  }
+
+  /// Arithmetic mean of a buffer list.
+  double _bufAvg(List<double> buf) {
+    if (buf.isEmpty) return 0;
+    return buf.reduce((a, b) => a + b) / buf.length;
+  }
+
+  /// Reset smoothing buffer and hysteresis state.
+  void _clearSmoothing() {
+    _bufFaceWidth.clear();
+    _bufFaceHeight.clear();
+    _bufFaceCX.clear();
+    _bufFaceCY.clear();
+    _bufYaw.clear();
+    _bufPitch.clear();
+    _lastPosInstruction = null;
+  }
+
+  /// Log hysteresis-triggered instruction changes with [FACE_REG] prefix.
+  void _logInstructionChange(String newInstruction) {
+    if (_lastPosInstruction != newInstruction) {
+      debugPrint(
+        '[FACE_REG] Instruction Change: '
+        '${_lastPosInstruction ?? "Accepted"} -> $newInstruction (Hysteresis Triggered)',
+      );
+    }
+  }
+
+  /// Map a [_Phase] to its corresponding [ChallengeType].
+  ChallengeType _phaseToChallengeType(_Phase phase) {
+    switch (phase) {
+      case _Phase.front:
+        return ChallengeType.blink;
+      case _Phase.left:
+        return ChallengeType.turnLeft;
+      case _Phase.right:
+        return ChallengeType.turnRight;
+      default:
+        return ChallengeType.blink;
+    }
+  }
+
+  /// Checks if the largest detected face is centered within the UI circle and
+  /// at the correct distance, using **smoothed** (5-frame moving average) face
+  /// metrics and **hysteresis** (safety gaps) to prevent flickering.
+  ///
+  /// Returns `null` when the face is properly positioned, or a user-facing
+  /// instruction string explaining what to adjust.
+  ///
+  /// Grace zone: 25% of circle size (strict) / 40% (relaxed during liveness).
+  String? _getPositioningInstruction(
+    Face face,
+    CameraImage image, {
+    bool strict = true,
+  }) {
+    if (_uiCircleSize == 0 || _uiAvailW == 0) return null; // layout not ready
+
+    // ── Rotated camera dimensions (portrait) ──────────────────────────────
+    final int sensorOrientation =
+        _cameraController!.description.sensorOrientation;
+    final bool isRotated = sensorOrientation == 90 || sensorOrientation == 270;
+    final double rotW = isRotated
+        ? image.height.toDouble()
+        : image.width.toDouble();
+    final double rotH = isRotated
+        ? image.width.toDouble()
+        : image.height.toDouble();
+
+    // Scale from camera image pixels → screen (logical) pixels
+    final double scale = _uiAvailW / rotW;
+
+    // Circle center in camera coordinates
+    final double circleCameraCX = rotW / 2;
+    final double circleTop = _uiAvailH * 0.40 - _uiCircleSize / 2;
+    final double circleCameraCY = rotH / 2 + circleTop / scale;
+
+    // Circle diameter in camera pixels
+    final double circleCameraSize = _uiCircleSize / scale;
+
+    // ── Use smoothed (5-frame averaged) face metrics ────────────────────
+    final double smoothW = _bufAvg(_bufFaceWidth);
+    final double smoothH = _bufAvg(_bufFaceHeight);
+    final double smoothCX = _bufAvg(_bufFaceCX);
+    final double smoothCY = _bufAvg(_bufFaceCY);
+
+    // ── 1. Distance check with hysteresis ───────────────────────────────
+    final double faceWidthRatio = smoothW / circleCameraSize;
+    final bool wasTooFar = _lastPosInstruction == 'Move closer to the camera';
+    final bool wasTooClose = _lastPosInstruction == 'Move slightly backward';
+
+    // Enter "closer": ratio < 0.40
+    // Stay in "closer" until ratio >= 0.45 (safety gap prevents flicker)
+    if (faceWidthRatio < 0.40 || (wasTooFar && faceWidthRatio < 0.45)) {
+      _logInstructionChange('Move closer to the camera');
+      _lastPosInstruction = 'Move closer to the camera';
+      return 'Move closer to the camera';
+    }
+
+    // Smoothed bounding-box edges for border-touch detection
+    final double smoothLeft = smoothCX - smoothW / 2;
+    final double smoothRight = smoothCX + smoothW / 2;
+    final double smoothTop = smoothCY - smoothH / 2;
+    final double smoothBottom = smoothCY + smoothH / 2;
+
+    final double circleRadius = circleCameraSize / 2;
+
+    // True circular containment — check all 4 bounding-box corners
+    final corners = [
+      Offset(smoothLeft, smoothTop),
+      Offset(smoothRight, smoothTop),
+      Offset(smoothLeft, smoothBottom),
+      Offset(smoothRight, smoothBottom),
+    ];
+
+    bool cornerOutsideCircle = false;
+    for (final corner in corners) {
+      final dx = corner.dx - circleCameraCX;
+      final dy = corner.dy - circleCameraCY;
+      final distance = math.sqrt(dx * dx + dy * dy);
+      if (distance > circleRadius * 0.98) {
+        cornerOutsideCircle = true;
+        break;
+      }
+    }
+
+    // Enter "backward": ratio > threshold or any corner outside the circle
+    // Stay "backward" until ratio <= 0.75
+    final double backwardEnter = (_lastPosInstruction == null) ? 0.85 : 0.80;
+    if (faceWidthRatio > backwardEnter ||
+        cornerOutsideCircle ||
+        (wasTooClose && faceWidthRatio > 0.75)) {
+      _logInstructionChange('Move slightly backward');
+      _lastPosInstruction = 'Move slightly backward';
+      return 'Move slightly backward';
+    }
+
+    // ── 2. Centering check — 25% grace zone with hysteresis ─────────────
+    final double graceZone = (strict ? 0.25 : 0.40) * circleCameraSize;
+    // Exit threshold 20% tighter than entry → prevents flicker at boundary
+    final double exitGrace = graceZone * 0.80;
+
+    // Horizontal (front camera is mirrored)
+    final double offX = smoothCX - circleCameraCX;
+    if (offX > graceZone ||
+        (_lastPosInstruction == 'Move slightly Right' && offX > exitGrace)) {
+      _logInstructionChange('Move slightly Right');
+      _lastPosInstruction = 'Move slightly Right';
+      return 'Move slightly Right';
+    }
+    if (offX < -graceZone ||
+        (_lastPosInstruction == 'Move slightly Left' && offX < -exitGrace)) {
+      _logInstructionChange('Move slightly Left');
+      _lastPosInstruction = 'Move slightly Left';
+      return 'Move slightly Left';
+    }
+
+    // Vertical (not mirrored)
+    final double offY = smoothCY - circleCameraCY;
+    if (offY < -graceZone ||
+        (_lastPosInstruction == 'Move slightly Down' && offY < -exitGrace)) {
+      _logInstructionChange('Move slightly Down');
+      _lastPosInstruction = 'Move slightly Down';
+      return 'Move slightly Down';
+    }
+    if (offY > graceZone ||
+        (_lastPosInstruction == 'Move slightly Up' && offY > exitGrace)) {
+      _logInstructionChange('Move slightly Up');
+      _lastPosInstruction = 'Move slightly Up';
+      return 'Move slightly Up';
+    }
+
+    // ── All checks passed — face is well-positioned ─────────────────────
+    if (_lastPosInstruction != null) {
+      debugPrint(
+        '[FACE_REG] Instruction Change: $_lastPosInstruction -> Accepted (Centered)',
+      );
+    }
+    _lastPosInstruction = null;
+
+    final int stableMs = _steadyStartTime != null
+        ? DateTime.now().difference(_steadyStartTime!).inMilliseconds
+        : 0;
+    debugPrint(
+      '[FACE_REG] Status: Centered | AvgWidth: ${faceWidthRatio.toStringAsFixed(2)} '
+      '| OffX: ${offX.toStringAsFixed(1)} | OffY: ${offY.toStringAsFixed(1)} '
+      '| StableTime: ${stableMs}ms',
+    );
+
+    return null; // Face is well-positioned
+  }
+
   // Check face is acceptably centered and sized
   bool _isFaceAcceptable(Face face, CameraImage image) {
     final double widthRatio = face.boundingBox.width / image.width;
@@ -990,32 +1323,35 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       _phase = phase;
     });
 
-    // Reset challenge verification for each new phase
+    // Reset challenge verification and positioning state for each new phase
     _challengeVerified = false;
     _challengeStartTime = null;
     _livenessService.reset();
+    _steadyStartTime = null;
+    _isFaceReady = false;
+    _clearSmoothing();
 
-    // Update instruction text for new phase
+    // Update instruction text for new phase — start with centering prompt
+    // (liveness instruction will be shown once face is positioned & steady)
     switch (phase) {
       case _Phase.front:
-        // Front phase starts with blink verification
         _blinkCountdownController.reset();
-        _blinkCountdownController.forward();
+        // Don't auto-start countdown — positioning gate will start it
         _updateInstruction(
-          'Blink to verify',
-          subtitle: 'Blink naturally to confirm your presence',
+          'Fit your face in the circle',
+          subtitle: 'Centre your face and hold steady',
         );
         break;
       case _Phase.left:
         _updateInstruction(
-          'Turn slightly left',
-          subtitle: 'Turn your head to the left slowly',
+          'Fit your face in the circle',
+          subtitle: 'Centre your face before turning left',
         );
         break;
       case _Phase.right:
         _updateInstruction(
-          'Turn slightly right',
-          subtitle: 'Turn your head to the right slowly',
+          'Fit your face in the circle',
+          subtitle: 'Centre your face before turning right',
         );
         break;
       case _Phase.processing:
@@ -1184,6 +1520,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                     final double availH = constraints.maxHeight;
                     final double circleSize = availW * 0.80;
                     final double circleTop = availH * 0.40 - circleSize / 2;
+
+                    // Store layout info for face positioning calculations
+                    _uiCircleSize = circleSize;
+                    _uiAvailW = availW;
+                    _uiAvailH = availH;
 
                     return SizedBox(
                       width: availW,
@@ -1494,6 +1835,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _challengeVerified = false;
     _challengeStartTime = null;
     _blinkCountdownController.reset();
+    _steadyStartTime = null;
+    _isFaceReady = false;
+    _clearSmoothing();
 
     setState(() {
       _borderColor = AppStyles.primaryBlue;
