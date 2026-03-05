@@ -1149,7 +1149,49 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     final double smoothCX = _bufAvg(_bufFaceCX);
     final double smoothCY = _bufAvg(_bufFaceCY);
 
-    // ── 1. Distance check with hysteresis ───────────────────────────────
+    // Smoothed bounding-box edges
+    final double smoothLeft = smoothCX - smoothW / 2;
+    final double smoothRight = smoothCX + smoothW / 2;
+    final double smoothTop = smoothCY - smoothH / 2;
+    final double smoothBottom = smoothCY + smoothH / 2;
+
+    final double circleRadius = circleCameraSize / 2;
+
+    // ── 1. PRIORITY: Virtual Crown (Hairline) + Strict Boundary ──────────
+    // ML Kit bounding box top is at the eyebrow, not the hairline.
+    // Extend upward by 30% of face height to approximate the real crown/hair.
+    final double virtualCrownTop = smoothTop - (smoothH * 0.30);
+
+    // Absolute circle edge coordinates
+    final double circleTopBound = circleCameraCY - circleRadius;
+    final double circleBottomBound = circleCameraCY + circleRadius;
+    final double circleLeftBound = circleCameraCX - circleRadius;
+    final double circleRightBound = circleCameraCX + circleRadius;
+
+    debugPrint(
+      '[BOUNDARY_DEBUG] Crown: ${virtualCrownTop.toStringAsFixed(1)} | CircleTop: ${circleTopBound.toStringAsFixed(1)}',
+    );
+
+    // Hair/Crown touching or crossing the top of the circle
+    if (virtualCrownTop < circleTopBound) {
+      _logInstructionChange('Move slightly backward');
+      _lastPosInstruction = 'Move slightly backward';
+      return 'Move slightly backward';
+    }
+    // Chin touching or crossing the bottom
+    if (smoothBottom > circleBottomBound) {
+      _logInstructionChange('Move slightly backward');
+      _lastPosInstruction = 'Move slightly backward';
+      return 'Move slightly backward';
+    }
+    // Cheeks touching or crossing the sides
+    if (smoothLeft < circleLeftBound || smoothRight > circleRightBound) {
+      _logInstructionChange('Move slightly backward');
+      _lastPosInstruction = 'Move slightly backward';
+      return 'Move slightly backward';
+    }
+
+    // ── 2. Distance check with hysteresis ───────────────────────────────
     final double faceWidthRatio = smoothW / circleCameraSize;
     final bool wasTooFar = _lastPosInstruction == 'Move closer to the camera';
     final bool wasTooClose = _lastPosInstruction == 'Move slightly backward';
@@ -1162,47 +1204,19 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       return 'Move closer to the camera';
     }
 
-    // Smoothed bounding-box edges for border-touch detection
-    final double smoothLeft = smoothCX - smoothW / 2;
-    final double smoothRight = smoothCX + smoothW / 2;
-    final double smoothTop = smoothCY - smoothH / 2;
-    final double smoothBottom = smoothCY + smoothH / 2;
-
-    final double circleRadius = circleCameraSize / 2;
-
-    // True circular containment — check all 4 bounding-box corners
-    final corners = [
-      Offset(smoothLeft, smoothTop),
-      Offset(smoothRight, smoothTop),
-      Offset(smoothLeft, smoothBottom),
-      Offset(smoothRight, smoothBottom),
-    ];
-
-    bool cornerOutsideCircle = false;
-    for (final corner in corners) {
-      final dx = corner.dx - circleCameraCX;
-      final dy = corner.dy - circleCameraCY;
-      final distance = math.sqrt(dx * dx + dy * dy);
-      if (distance > circleRadius * 0.98) {
-        cornerOutsideCircle = true;
-        break;
-      }
-    }
-
-    // Enter "backward": ratio > threshold or any corner outside the circle
+    // Enter "backward": ratio > 0.90 (comfortable close distance)
     // Stay "backward" until ratio <= 0.75
-    final double backwardEnter = (_lastPosInstruction == null) ? 0.85 : 0.80;
+    final double backwardEnter = (_lastPosInstruction == null) ? 0.90 : 0.80;
     if (faceWidthRatio > backwardEnter ||
-        cornerOutsideCircle ||
         (wasTooClose && faceWidthRatio > 0.75)) {
       _logInstructionChange('Move slightly backward');
       _lastPosInstruction = 'Move slightly backward';
       return 'Move slightly backward';
     }
 
-    // ── 2. Centering check — 25% grace zone with hysteresis ─────────────
-    final double graceZone = (strict ? 0.25 : 0.40) * circleCameraSize;
-    // Exit threshold 20% tighter than entry → prevents flicker at boundary
+    // ── 3. Visual centering — 15% grace zone with hysteresis ────────────
+    // Only checked AFTER virtual crown and all edges are safely inside.
+    final double graceZone = circleCameraSize * 0.15;
     final double exitGrace = graceZone * 0.80;
 
     // Horizontal (front camera is mirrored)
@@ -1248,6 +1262,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         : 0;
     debugPrint(
       '[FACE_REG] Status: Centered | AvgWidth: ${faceWidthRatio.toStringAsFixed(2)} '
+      '| CrownTop: ${virtualCrownTop.toStringAsFixed(1)} | CircleTop: ${circleTopBound.toStringAsFixed(1)} '
       '| OffX: ${offX.toStringAsFixed(1)} | OffY: ${offY.toStringAsFixed(1)} '
       '| StableTime: ${stableMs}ms',
     );
@@ -1262,6 +1277,61 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // LEFT / RIGHT phases: relaxed 0.45 centerOffset — head turns naturally
   // shift the face bounding box toward one side of the frame.
   bool _isFaceAcceptable(Face face, CameraImage image, _Phase phase) {
+    // ── PRIORITY: Virtual Crown Extended-Box boundary check ──────────────
+    // If any edge of the extended bounding box (with 30% crown/hair padding
+    // on top) is touching or outside the circle, reject immediately —
+    // liveness challenges must NOT start.
+    if (_uiCircleSize > 0 && _uiAvailW > 0 && _bufFaceWidth.isNotEmpty) {
+      final int sensorOrientation =
+          _cameraController!.description.sensorOrientation;
+      final bool isRotated =
+          sensorOrientation == 90 || sensorOrientation == 270;
+      final double rotW = isRotated
+          ? image.height.toDouble()
+          : image.width.toDouble();
+      final double rotH = isRotated
+          ? image.width.toDouble()
+          : image.height.toDouble();
+      final double scale = _uiAvailW / rotW;
+
+      final double circleCameraCX = rotW / 2;
+      final double circleTopUI = _uiAvailH * 0.40 - _uiCircleSize / 2;
+      final double circleCameraCY = rotH / 2 + circleTopUI / scale;
+      final double circleCameraSize = _uiCircleSize / scale;
+      final double circleRadius = circleCameraSize / 2;
+
+      final double circleTopBound = circleCameraCY - circleRadius;
+      final double circleBottomBound = circleCameraCY + circleRadius;
+      final double circleLeftBound = circleCameraCX - circleRadius;
+      final double circleRightBound = circleCameraCX + circleRadius;
+
+      final double smoothW = _bufAvg(_bufFaceWidth);
+      final double smoothH = _bufAvg(_bufFaceHeight);
+      final double smoothCX = _bufAvg(_bufFaceCX);
+      final double smoothCY = _bufAvg(_bufFaceCY);
+      final double smoothTop = smoothCY - smoothH / 2;
+      final double smoothBottom = smoothCY + smoothH / 2;
+      final double smoothLeft = smoothCX - smoothW / 2;
+      final double smoothRight = smoothCX + smoothW / 2;
+
+      // Virtual crown — extend top by 30% of face height
+      final double virtualCrownTop = smoothTop - (smoothH * 0.30);
+
+      debugPrint(
+        '[BOUNDARY_DEBUG] isFaceAcceptable Crown: ${virtualCrownTop.toStringAsFixed(1)} | CircleTop: ${circleTopBound.toStringAsFixed(1)}',
+      );
+
+      if (virtualCrownTop < circleTopBound ||
+          smoothBottom > circleBottomBound ||
+          smoothLeft < circleLeftBound ||
+          smoothRight > circleRightBound) {
+        debugPrint(
+          '[FACE_REG] _isFaceAcceptable() returns false (crown/extended box outside circle boundary)',
+        );
+        return false;
+      }
+    }
+
     final double widthRatio = face.boundingBox.width / image.width;
 
     // Debug: log widthRatio so we can see what the device actually reports
@@ -1299,14 +1369,16 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       );
     }
 
-    // Head pitch check — allow ±25 degrees tolerance
+    // Head pitch check — allow ±35 degrees tolerance (natural downward gaze)
     final double? pitch = face.headEulerAngleX;
-    if (pitch != null && pitch.abs() > 25) {
+    if (pitch != null && pitch.abs() > 35) {
       debugPrint(
-        '[FACE_REG] _isFaceAcceptable() returns false (pitch: ${pitch.toStringAsFixed(1)} > 25)',
+        '[FACE_REG] _isFaceAcceptable() returns false (pitch: ${pitch.toStringAsFixed(1)} > 35)',
       );
       return false;
     }
+
+    // (Edge-touch check already handled at top of method)
 
     debugPrint('[FACE_REG] _isFaceAcceptable() returns true');
     return true;
@@ -1357,7 +1429,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     final double coverageRatio = faceArea / imageArea;
 
     if (coverageRatio < 0.08) return 'Move closer';
-    if (coverageRatio > 0.60) return 'Move back';
+    if (coverageRatio > 0.75) return 'Move back';
 
     final double? pitch = face.headEulerAngleX;
     if (pitch != null && pitch > 15) return 'Fit your face in the circle';
