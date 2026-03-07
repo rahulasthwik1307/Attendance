@@ -40,9 +40,7 @@ class _RegistrationSuccessScreenState extends State<RegistrationSuccessScreen>
 
     _timer = Timer(const Duration(seconds: 3), () {
       if (mounted) {
-        Navigator.of(
-          context,
-        ).pushNamedAndRemoveUntil('/dashboard', (route) => false);
+        Navigator.of(context).pushReplacementNamed('/face_preview');
       }
     });
   }

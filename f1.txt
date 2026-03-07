@@ -24,7 +24,6 @@
 
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui';
 import 'package:image/image.dart' as img;
 
 import 'package:camera/camera.dart';
@@ -94,7 +93,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
   // First front frame saved as registration photo
   Uint8List? _registrationPhotoBytes;
-  Rect? _registrationFaceBbox;
 
   // Embeddings per phase
   final List<List<double>> _frontEmbeddings = [];
@@ -126,14 +124,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // ─── Face positioning state ────────────────────────────────────────────
   DateTime? _steadyStartTime;
   bool _isFaceReady = false;
-  Timer? _instructionDebounceTimer;
 
   // ── Flash effect ──
   bool _showFlash = false;
-
-  // ── Micro-Interactions ──
-  late AnimationController _successBounceController;
-  late AnimationController _particleController;
 
   // Layout info captured from LayoutBuilder for coordinate mapping
   double _uiCircleSize = 0;
@@ -205,22 +198,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     _textFadeController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 250),
+      duration: const Duration(milliseconds: 200),
     )..forward();
 
     _blinkCountdownController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 3),
-    );
-
-    _successBounceController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    );
-
-    _particleController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1000),
     );
 
     // Start real registration flow
@@ -503,7 +486,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
       _updateInstruction(
         'No blink detected',
-        subtitle: 'Blink naturally 2 to 3 times to confirm presence',
+        subtitle: 'Please blink naturally once (relaxed eyes). Retrying…',
         animate: false,
       );
 
@@ -514,11 +497,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       // Restart challenge countdown
       if (challenge == ChallengeType.blink) {
         _blinkCountdownController.reset();
-        _blinkCountdownController.forward(from: 0.0);
+        _blinkCountdownController.forward();
       }
       _updateInstruction(
         _getChallengeInstruction(challenge),
-        subtitle: 'Blink naturally 2 to 3 times to confirm presence',
+        subtitle: _getChallengeSubtitle(challenge),
         animate: false,
       );
       return;
@@ -577,18 +560,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     if (detected) {
       debugPrint('[FACE_REG] Blink challenge VERIFIED ✓');
-      // Save registration photo at liveness moment — face is perfectly
-      // straight and centered here, guaranteed by liveness gate.
-      if (_registrationPhotoBytes == null) {
-        final Uint8List? livenessPhoto = _lastCameraImage != null
-            ? _convertYuvToJpegSync(_lastCameraImage!)
-            : null;
-        if (livenessPhoto != null) {
-          _registrationPhotoBytes = livenessPhoto;
-          _registrationFaceBbox = face.boundingBox;
-          debugPrint('[FACE_REG] Registration photo saved at liveness moment');
-        }
-      }
       _challengeVerified = true;
       _livenessService.reset();
       _challengeStartTime = null;
@@ -619,6 +590,19 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         return 'Turn slightly right';
       default:
         return 'Hold still…';
+    }
+  }
+
+  String _getChallengeSubtitle(ChallengeType challenge) {
+    switch (challenge) {
+      case ChallengeType.blink:
+        return 'Blink naturally to confirm your presence';
+      case ChallengeType.turnLeft:
+        return 'Turn your head to the left slowly';
+      case ChallengeType.turnRight:
+        return 'Turn your head to the right slowly';
+      default:
+        return 'Stay steady';
     }
   }
 
@@ -658,7 +642,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     // Save first front frame as registration photo
     if (currentPhase == _Phase.front && _registrationPhotoBytes == null) {
       _registrationPhotoBytes = jpegBytes;
-      _registrationFaceBbox = face.boundingBox;
     }
 
     // Update progress BEFORE heavy embedding calculation to un-freeze UI
@@ -779,19 +762,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       await Future.delayed(const Duration(milliseconds: 500));
       _setPhase(_Phase.processing);
 
-      try {
-        _cameraController?.stopImageStream();
-      } catch (_) {}
-
-      Future.delayed(const Duration(milliseconds: 800), () {
-        if (mounted) {
-          _pulseController.stop();
-          _successBounceController.forward(from: 0.0).then((_) {
-            _successBounceController.reverse();
-          });
-        }
-      });
-
       // Delay to let processing UI show up before heavy synchronous math
       await Future.delayed(const Duration(milliseconds: 50));
       await _processAndUpload();
@@ -875,13 +845,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
       // Navigate to registration success screen
       if (mounted) {
-        Navigator.of(context).pushReplacementNamed(
-          '/face_preview',
-          arguments: {
-            'photoBytes': _registrationPhotoBytes,
-            'faceBbox': _registrationFaceBbox,
-          },
-        );
+        Navigator.of(context).pushReplacementNamed('/registration_success');
       }
     } catch (e) {
       _setError('Registration failed: ${e.toString()}');
@@ -1512,25 +1476,16 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
   // ─── UI state updates ─────────────────────────────────────────────────────
 
-  void _setPhase(_Phase newPhase) {
+  void _setPhase(_Phase phase) {
     if (!mounted) return;
-    if (_phase == newPhase) return;
-
-    if (newPhase != _Phase.error && newPhase != _Phase.liveness) {
-      HapticFeedback.mediumImpact();
-      _successBounceController.forward(from: 0.0);
-    }
-    if (newPhase == _Phase.done) {
-      _particleController.forward(from: 0.0);
-    }
 
     setState(() {
-      _phase = newPhase;
+      _phase = phase;
     });
 
     // Only reset challenge state for the liveness phase.
     // For capture phases (left/front/right), _challengeVerified stays true.
-    if (newPhase == _Phase.liveness) {
+    if (phase == _Phase.liveness) {
       _challengeVerified = false;
       _challengeStartTime = null;
       _livenessService.reset();
@@ -1540,7 +1495,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     }
 
     // Update instruction text for new phase
-    switch (newPhase) {
+    switch (phase) {
       case _Phase.liveness:
         _blinkCountdownController.reset();
         _updateInstruction(
@@ -1568,8 +1523,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         break;
       case _Phase.processing:
         _updateInstruction(
-          'Face registration completed',
-          subtitle: 'Saving your registration securely',
+          'Processing…',
+          subtitle: 'Generating your face profile',
         );
         break;
       case _Phase.done:
@@ -1593,64 +1548,29 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   }) {
     if (!mounted) return;
 
-    if (_instructionTitle == title) {
-      _instructionDebounceTimer?.cancel();
-      return;
-    }
+    // Don't re-animate if instruction hasn't changed — prevents flickering
+    // when _handleBlinkPrompt / _handleCalibration call this every frame
+    if (_instructionTitle == title) return;
 
-    _instructionDebounceTimer?.cancel();
-    _instructionDebounceTimer = Timer(const Duration(milliseconds: 120), () {
-      if (!mounted) return;
-      if (_instructionTitle == title) return;
-
-      if (animate) {
-        _textFadeController.reverse().then((_) {
-          if (!mounted) return;
-          setState(() {
-            _instructionTitle = title;
-            _instructionSubtitle = subtitle ?? (_subtitles[title] ?? '');
-
-            final lower = title.toLowerCase();
-            if (lower.contains('move closer') ||
-                lower.contains('move left') ||
-                lower.contains('move right') ||
-                lower.contains('move slightly up') ||
-                lower.contains('move slightly down') ||
-                lower.contains('move to the center') ||
-                lower.contains('move slightly backward')) {
-              _borderColor = Colors.orangeAccent;
-            } else if (_phase != _Phase.error &&
-                _borderColor != AppStyles.successGreen) {
-              _borderColor = AppStyles.primaryBlue;
-            }
-          });
-          _textFadeController.forward();
-          // Force blink timer to reset and start
-          if (_phase == _Phase.liveness) {
-            _blinkCountdownController.forward(from: 0.0);
-          }
-        });
-      } else {
+    if (animate) {
+      _textFadeController.reverse().then((_) {
+        if (!mounted) return;
         setState(() {
           _instructionTitle = title;
           _instructionSubtitle = subtitle ?? (_subtitles[title] ?? '');
-
-          final lower = title.toLowerCase();
-          if (lower.contains('move closer') ||
-              lower.contains('move left') ||
-              lower.contains('move right') ||
-              lower.contains('move slightly up') ||
-              lower.contains('move slightly down') ||
-              lower.contains('move to the center') ||
-              lower.contains('move slightly backward')) {
-            _borderColor = Colors.orangeAccent;
-          } else if (_phase != _Phase.error &&
-              _borderColor != AppStyles.successGreen) {
-            _borderColor = AppStyles.primaryBlue;
-          }
         });
-      }
-    });
+        _textFadeController.forward();
+        // Force blink timer to reset and start
+        if (_phase == _Phase.liveness) {
+          _blinkCountdownController.forward(from: 0.0);
+        }
+      });
+    } else {
+      setState(() {
+        _instructionTitle = title;
+        _instructionSubtitle = subtitle ?? (_subtitles[title] ?? '');
+      });
+    }
   }
 
   // FIXED: debugPrint full error for logs, show short user-friendly message in UI
@@ -1673,11 +1593,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   void dispose() {
     _pulseController.dispose();
     _textFadeController.dispose();
-    _pulseController.dispose();
-    _textFadeController.dispose();
     _blinkCountdownController.dispose();
-    _successBounceController.dispose();
-    _particleController.dispose();
 
     // Stop image stream FIRST, then dispose
     if (_cameraController != null && _cameraInitialized) {
@@ -1745,7 +1661,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                           // Progress indicator below title
                           if (_captureProgress > 0)
                             Padding(
-                              padding: const EdgeInsets.only(top: 8),
+                              padding: const EdgeInsets.only(top: 2),
                               child: Text(
                                 _progressLabel,
                                 style: const TextStyle(
@@ -1767,6 +1683,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
               // ── Camera Preview — uses Expanded to fill available space ──
               Expanded(
+                flex: 5,
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final double availW = constraints.maxWidth;
@@ -1779,26 +1696,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                     _uiAvailW = availW;
                     _uiAvailH = availH;
 
-                    double offsetX = 0;
-                    double offsetY = 0;
-                    if (_cameraInitialized && _bufFaceCX.isNotEmpty) {
-                      final Size? previewSize =
-                          _cameraController?.value.previewSize;
-                      final double sensorW =
-                          previewSize?.height ?? 3.0; // Swapped for portrait
-                      if (sensorW > 0) {
-                        final double scale = availW / sensorW;
-                        final double faceUIX = _bufAvg(_bufFaceCX) * scale;
-                        final double faceUIY = _bufAvg(_bufFaceCY) * scale;
-                        final double circleUIX = availW / 2;
-                        final double circleUIY =
-                            circleTop - 100 + circleSize / 2;
-
-                        offsetX = (faceUIX - circleUIX).clamp(-6.0, 6.0);
-                        offsetY = (faceUIY - circleUIY).clamp(-6.0, 6.0);
-                      }
-                    }
-
                     return SizedBox(
                       width: availW,
                       height: availH,
@@ -1809,127 +1706,46 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                             child: Container(color: AppStyles.backgroundLight),
                           ),
 
-                          // Face Interactive Overlay Group
-                          AnimatedPositioned(
-                            duration: const Duration(milliseconds: 120),
-                            curve: Curves.easeOut,
-                            left: offsetX,
-                            top: offsetY,
-                            right: -offsetX,
-                            bottom: -offsetY,
-                            child: Stack(
-                              children: [
-                                // Circle clip for the preview
-                                Positioned(
-                                  left: (availW - circleSize) / 2,
-                                  top:
-                                      circleTop -
-                                      100, // Visually shift upward by 100px (final slight adjustment)
-                                  child: ClipOval(
-                                    child: SizedBox(
-                                      width: circleSize,
-                                      height: circleSize,
-                                      child: OverflowBox(
-                                        maxWidth: availW,
-                                        maxHeight: availH,
-                                        child: Transform.translate(
-                                          offset: Offset(0, -circleTop),
-                                          child: Stack(
-                                            children: [
-                                              _buildCameraPreview(availW),
-                                              Positioned.fill(
-                                                child: AnimatedOpacity(
-                                                  duration: const Duration(
-                                                    milliseconds: 200,
-                                                  ),
-                                                  curve: Curves.easeOut,
-                                                  opacity:
-                                                      (_phase ==
-                                                              _Phase
-                                                                  .processing ||
-                                                          _phase == _Phase.done)
-                                                      ? 0.12
-                                                      : 0.0,
-                                                  child: Container(
-                                                    color: Colors.black,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
+                          // Circle clip for the preview
+                          Positioned(
+                            left: (availW - circleSize) / 2,
+                            top: circleTop,
+                            child: ClipOval(
+                              child: SizedBox(
+                                width: circleSize,
+                                height: circleSize,
+                                child: OverflowBox(
+                                  maxWidth: availW,
+                                  maxHeight: availH,
+                                  child: Transform.translate(
+                                    offset: Offset(0, -circleTop),
+                                    child: _buildCameraPreview(availW),
                                   ),
                                 ),
+                              ),
+                            ),
+                          ),
 
-                                // Pulsing circle border + Directional Guidance, Liquid Progress, and Bounce
-                                Positioned(
-                                  left: (availW - circleSize) / 2,
-                                  top:
-                                      circleTop -
-                                      100, // Visually shift upward by 100px (final slight adjustment)
-                                  child: ScaleTransition(
-                                    scale: Tween<double>(begin: 1.0, end: 1.05)
-                                        .animate(
-                                          CurvedAnimation(
-                                            parent: _successBounceController,
-                                            curve: Curves.elasticOut,
-                                          ),
-                                        ),
-                                    child: TweenAnimationBuilder<double>(
-                                      tween: Tween<double>(
-                                        begin: 0.0,
-                                        end:
-                                            _captureProgress /
-                                            (_framesPerPhase * 3),
-                                      ),
-                                      duration: const Duration(
-                                        milliseconds: 800,
-                                      ),
-                                      curve: Curves.elasticOut,
-                                      builder:
-                                          (context, animatedProgress, child) {
-                                            double tilt = 0.0;
-                                            if (animatedProgress > 0.4 &&
-                                                animatedProgress < 0.9) {
-                                              tilt =
-                                                  math.sin(
-                                                    (animatedProgress - 0.4) *
-                                                        math.pi *
-                                                        4,
-                                                  ) *
-                                                  0.03;
-                                            }
-                                            return Transform.rotate(
-                                              angle: tilt,
-                                              child: AnimatedBuilder(
-                                                animation: _pulseController,
-                                                builder: (context, _) {
-                                                  return CustomPaint(
-                                                    size: Size(
-                                                      circleSize,
-                                                      circleSize,
-                                                    ),
-                                                    painter: _BorderPainter(
-                                                      pulseValue:
-                                                          _pulseController
-                                                              .value,
-                                                      baseColor: _borderColor,
-                                                      progress:
-                                                          animatedProgress,
-                                                      phase: _phase,
-                                                      flowValue: 0.0,
-                                                    ),
-                                                  );
-                                                },
-                                              ),
-                                            );
-                                          },
-                                    ),
+                          // Pulsing circle border + Directional Guidance
+                          Positioned(
+                            left: (availW - circleSize) / 2,
+                            top: circleTop,
+                            child: AnimatedBuilder(
+                              animation: _pulseController,
+                              builder: (context, child) {
+                                return CustomPaint(
+                                  size: Size(circleSize, circleSize),
+                                  painter: _BorderPainter(
+                                    pulseValue: _pulseController.value,
+                                    baseColor: _borderColor,
+                                    progress:
+                                        _captureProgress /
+                                        (_framesPerPhase * 3),
+                                    phase: _phase,
+                                    flowValue: 0.0, // Scan line removed
                                   ),
-                                ),
-                              ],
+                                );
+                              },
                             ),
                           ),
 
@@ -1948,7 +1764,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                                 painter: _FillLightPainter(
                                   circleCenter: Offset(
                                     availW / 2,
-                                    (circleTop - 100) + circleSize / 2,
+                                    circleTop + circleSize / 2,
                                   ),
                                   circleRadius: circleSize / 2,
                                 ),
@@ -1967,8 +1783,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                                   gradient: RadialGradient(
                                     center: FractionalOffset(
                                       0.5,
-                                      ((circleTop - 100) + circleSize / 2) /
-                                          availH,
+                                      (circleTop + circleSize / 2) / availH,
                                     ),
                                     radius: 0.8,
                                     colors: [
@@ -1981,357 +1796,215 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                             ),
                           ),
 
-                          // Confetti Particle Burst
+                          // Blink countdown indicator (conditional visibility)
                           Positioned(
-                            left: (availW - circleSize) / 2,
-                            top:
-                                circleTop -
-                                100, // Visually shift upward by 100px (final slight adjustment)
-                            child: AnimatedBuilder(
-                              animation: _particleController,
-                              builder: (context, _) => CustomPaint(
-                                size: Size(circleSize, circleSize),
-                                painter: _ParticleBurstPainter(
-                                  _particleController.value,
-                                ),
+                            left: (availW - 44) / 2,
+                            top: circleTop + circleSize + 12,
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 300),
+                              opacity:
+                                  (_instructionTitle ==
+                                          'Blink your eyes 2 to 3 times' ||
+                                      _instructionSubtitle ==
+                                          'Blink your eyes 2 to 3 times' ||
+                                      _instructionTitle.contains(
+                                        'Blink to Start',
+                                      ))
+                                  ? 1.0
+                                  : 0.0,
+                              child: AnimatedBuilder(
+                                animation: _blinkCountdownController,
+                                builder: (context, child) {
+                                  final double remaining =
+                                      3.0 *
+                                      (1.0 - _blinkCountdownController.value);
+                                  return SizedBox(
+                                    width: 44,
+                                    height: 44,
+                                    child: Stack(
+                                      alignment: Alignment.center,
+                                      children: [
+                                        CircularProgressIndicator(
+                                          value:
+                                              1.0 -
+                                              _blinkCountdownController.value,
+                                          strokeWidth: 3.0,
+                                          color: AppStyles.primaryBlue,
+                                          backgroundColor: AppStyles.primaryBlue
+                                              .withValues(alpha: 0.15),
+                                        ),
+                                        Text(
+                                          '${remaining.ceil()}',
+                                          style: const TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w700,
+                                            color: AppStyles.primaryBlue,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
                               ),
                             ),
                           ),
 
-                          // --- Dynamic Layout Column (Countdown, HUD, Instructions) ---
-                          Positioned(
-                            top: (circleTop - 100) + circleSize + 40,
-                            left: 16,
-                            right: 16,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                // 1. Blink countdown indicator (conditional visibility)
-                                Builder(
-                                  builder: (context) {
-                                    final bool showCountdown =
-                                        (_instructionTitle ==
-                                            'Blink your eyes 2 to 3 times' ||
-                                        _instructionSubtitle ==
-                                            'Blink your eyes 2 to 3 times' ||
-                                        _instructionSubtitle ==
-                                            'Blink naturally 2 to 3 times to confirm presence' ||
-                                        _instructionTitle.contains(
-                                          'Blink to Start',
-                                        ));
-
-                                    return AnimatedOpacity(
-                                      duration: const Duration(
-                                        milliseconds: 300,
-                                      ),
-                                      opacity: showCountdown ? 1.0 : 0.0,
-                                      child: Visibility(
-                                        visible:
-                                            showCountdown ||
-                                            _blinkCountdownController
-                                                .isAnimating,
-                                        child: Column(
-                                          children: [
-                                            AnimatedBuilder(
-                                              animation:
-                                                  _blinkCountdownController,
-                                              builder: (context, child) {
-                                                final double remaining =
-                                                    3.0 *
-                                                    (1.0 -
-                                                        _blinkCountdownController
-                                                            .value);
-                                                return SizedBox(
-                                                  width: 50,
-                                                  height: 50,
-                                                  child: Stack(
-                                                    alignment: Alignment.center,
-                                                    children: [
-                                                      SizedBox(
-                                                        width: 50,
-                                                        height: 50,
-                                                        child: CircularProgressIndicator(
-                                                          value:
-                                                              1.0 -
-                                                              _blinkCountdownController
-                                                                  .value,
-                                                          strokeWidth: 4.0,
-                                                          color: Colors
-                                                              .orangeAccent,
-                                                          backgroundColor:
-                                                              Colors
-                                                                  .orangeAccent
-                                                                  .withValues(
-                                                                    alpha: 0.15,
-                                                                  ),
-                                                        ),
-                                                      ),
-                                                      AnimatedSwitcher(
-                                                        duration:
-                                                            const Duration(
-                                                              milliseconds: 300,
-                                                            ),
-                                                        transitionBuilder:
-                                                            (
-                                                              Widget child,
-                                                              Animation<double>
-                                                              animation,
-                                                            ) {
-                                                              return ScaleTransition(
-                                                                scale:
-                                                                    animation,
-                                                                child: FadeTransition(
-                                                                  opacity:
-                                                                      animation,
-                                                                  child: child,
-                                                                ),
-                                                              );
-                                                            },
-                                                        child: Text(
-                                                          '${remaining.ceil()}',
-                                                          key: ValueKey<int>(
-                                                            remaining.ceil(),
-                                                          ),
-                                                          style: const TextStyle(
-                                                            fontSize: 18,
-                                                            fontWeight:
-                                                                FontWeight.w800,
-                                                            color: Colors
-                                                                .orangeAccent,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                );
-                                              },
-                                            ),
-                                            const SizedBox(
-                                              height: 14,
-                                            ), // Gap below countdown
-                                          ],
-                                        ),
-                                      ),
-                                    );
-                                  },
+                          // Processing overlay
+                          if (_phase == _Phase.processing)
+                            Positioned(
+                              left: (availW - circleSize) / 2,
+                              top: circleTop,
+                              child: Container(
+                                width: circleSize,
+                                height: circleSize,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.black.withValues(alpha: 0.5),
                                 ),
-
-                                // 2. Premium Glassmorphism HUD
-                                if (_phase != _Phase.initializing &&
-                                    _phase != _Phase.processing &&
-                                    _phase != _Phase.done)
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(16),
-                                    child: BackdropFilter(
-                                      filter: ImageFilter.blur(
-                                        sigmaX: 10,
-                                        sigmaY: 10,
-                                      ),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 16,
-                                          vertical: 12,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.black54,
-                                          gradient: LinearGradient(
-                                            begin: Alignment.topLeft,
-                                            end: Alignment.bottomRight,
-                                            colors: [
-                                              Colors.black.withValues(
-                                                alpha: 0.6,
-                                              ),
-                                              Colors.transparent,
-                                            ],
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            16,
-                                          ),
-                                          border: Border.all(
-                                            color: Colors.white.withValues(
-                                              alpha: 0.5,
-                                            ),
-                                            width: 0.5,
-                                          ),
-                                        ),
-                                        child: AnimatedBuilder(
-                                          animation: _pulseController,
-                                          builder: (context, _) {
-                                            return Row(
-                                              mainAxisAlignment:
-                                                  MainAxisAlignment
-                                                      .spaceBetween,
-                                              children: [
-                                                _NeonChip(
-                                                  label: 'Blink',
-                                                  isActive:
-                                                      _phase == _Phase.liveness,
-                                                  isDone: _challengeVerified,
-                                                  pulseValue:
-                                                      _pulseController.value,
-                                                ),
-                                                _ShimmerLine(
-                                                  isDone: _challengeVerified,
-                                                  pulseController:
-                                                      _pulseController,
-                                                ),
-                                                _NeonChip(
-                                                  label: 'Left',
-                                                  isActive:
-                                                      _phase == _Phase.left,
-                                                  isDone:
-                                                      _leftEmbeddings.length >=
-                                                      _framesPerPhase,
-                                                  pulseValue:
-                                                      _pulseController.value,
-                                                ),
-                                                _ShimmerLine(
-                                                  isDone:
-                                                      _leftEmbeddings.length >=
-                                                      _framesPerPhase,
-                                                  pulseController:
-                                                      _pulseController,
-                                                ),
-                                                _NeonChip(
-                                                  label: 'Front',
-                                                  isActive:
-                                                      _phase == _Phase.front,
-                                                  isDone:
-                                                      _frontEmbeddings.length >=
-                                                      _framesPerPhase,
-                                                  pulseValue:
-                                                      _pulseController.value,
-                                                ),
-                                                _ShimmerLine(
-                                                  isDone:
-                                                      _frontEmbeddings.length >=
-                                                      _framesPerPhase,
-                                                  pulseController:
-                                                      _pulseController,
-                                                ),
-                                                _NeonChip(
-                                                  label: 'Right',
-                                                  isActive:
-                                                      _phase == _Phase.right,
-                                                  isDone:
-                                                      _rightEmbeddings.length >=
-                                                      _framesPerPhase,
-                                                  pulseValue:
-                                                      _pulseController.value,
-                                                ),
-                                              ],
-                                            );
-                                          },
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-
-                                const SizedBox(height: 18), // Reduced gap
-                                // 3. Instruction card
-                                SlideTransition(
-                                  position:
-                                      Tween<Offset>(
-                                        begin: const Offset(0, 0.06),
-                                        end: const Offset(0, 0),
-                                      ).animate(
-                                        CurvedAnimation(
-                                          parent: _textFadeController,
-                                          curve: Curves.easeOut,
-                                        ),
-                                      ),
-                                  child: FadeTransition(
-                                    opacity: _textFadeController,
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(
-                                          color: _phase == _Phase.error
-                                              ? AppStyles.errorRed.withValues(
-                                                  alpha: 0.3,
-                                                )
-                                              : AppStyles.primaryBlue
-                                                    .withValues(alpha: 0.1),
-                                          width: 1.5,
-                                        ),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: Colors.black.withValues(
-                                              alpha: 0.05,
-                                            ),
-                                            blurRadius: 10,
-                                            offset: const Offset(0, 4),
-                                          ),
-                                        ],
-                                      ),
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical:
-                                            _instructionTitle ==
-                                                'Move to the center of the circle'
-                                            ? 6
-                                            : 10,
-                                      ),
-                                      child: Column(
-                                        mainAxisSize:
-                                            MainAxisSize.min, // Fix alignment
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          Text(
-                                            _instructionTitle,
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                              fontSize: 20,
-                                              fontWeight: FontWeight.w700,
-                                              color: _phase == _Phase.error
-                                                  ? AppStyles.errorRed
-                                                  : AppStyles.primaryBlue,
-                                            ),
-                                          ),
-                                          _instructionTitle ==
-                                                  'Move to the center of the circle'
-                                              ? const SizedBox.shrink()
-                                              : const SizedBox(height: 2),
-                                          Text(
-                                            _instructionSubtitle,
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.grey.shade600,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-
-                                          // Retry button on error
-                                          if (_phase == _Phase.error) ...[
-                                            const SizedBox(height: 16),
-                                            TextButton(
-                                              onPressed: _onRetry,
-                                              child: const Text(
-                                                'Try Again',
-                                                style: TextStyle(
-                                                  color: AppStyles.primaryBlue,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ],
-                                      ),
-                                    ),
+                                child: const Center(
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 3,
                                   ),
                                 ),
-                              ],
+                              ),
                             ),
-                          ),
                         ],
                       ),
                     );
                   },
                 ),
               ),
+
+              const SizedBox(height: 10),
+
+              // ── Phase progress HUD Chips ──────────────────────────────────────
+              if (_phase != _Phase.initializing &&
+                  _phase != _Phase.processing &&
+                  _phase != _Phase.done)
+                AnimatedBuilder(
+                  animation: _pulseController,
+                  builder: (context, _) {
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _NeonChip(
+                          label: 'Blink',
+                          isActive: _phase == _Phase.liveness,
+                          isDone: _challengeVerified,
+                          pulseValue: _pulseController.value,
+                        ),
+                        const SizedBox(width: 8),
+                        _NeonChip(
+                          label: 'Left',
+                          isActive: _phase == _Phase.left,
+                          isDone: _leftEmbeddings.length >= _framesPerPhase,
+                          pulseValue: _pulseController.value,
+                        ),
+                        const SizedBox(width: 8),
+                        _NeonChip(
+                          label: 'Front',
+                          isActive: _phase == _Phase.front,
+                          isDone: _frontEmbeddings.length >= _framesPerPhase,
+                          pulseValue: _pulseController.value,
+                        ),
+                        const SizedBox(width: 8),
+                        _NeonChip(
+                          label: 'Right',
+                          isActive: _phase == _Phase.right,
+                          isDone: _rightEmbeddings.length >= _framesPerPhase,
+                          pulseValue: _pulseController.value,
+                        ),
+                      ],
+                    );
+                  },
+                ),
+
+              const SizedBox(height: 4),
+
+              // ── Instruction card ─────────────────────────────────────────
+              Expanded(
+                flex: 2,
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                    child: FadeTransition(
+                      opacity: _textFadeController,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: _phase == _Phase.error
+                                ? AppStyles.errorRed.withValues(alpha: 0.3)
+                                : AppStyles.primaryBlue.withValues(alpha: 0.1),
+                            width: 1.5,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.05),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 14,
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min, // Fix alignment
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              _instructionTitle,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                color: _phase == _Phase.error
+                                    ? AppStyles.errorRed
+                                    : AppStyles.primaryBlue,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              _instructionSubtitle,
+                              textAlign: TextAlign.center,
+                              maxLines: 4,
+                              overflow: TextOverflow.ellipsis,
+                              softWrap: true,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w400,
+                                color: Color(0xFF4A5568),
+                              ),
+                            ),
+
+                            // Retry button on error
+                            if (_phase == _Phase.error) ...[
+                              const SizedBox(height: 16),
+                              TextButton(
+                                onPressed: _onRetry,
+                                child: const Text(
+                                  'Try Again',
+                                  style: TextStyle(
+                                    color: AppStyles.primaryBlue,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 12),
             ],
           ),
         ),
@@ -2381,7 +2054,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _leftFrames.clear();
     _rightFrames.clear();
     _registrationPhotoBytes = null;
-    _registrationFaceBbox = null;
     _captureProgress = 0;
     _progressLabel = '';
     _challengeVerified = false;
@@ -2401,7 +2073,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 }
 
 // ─── Phase neon chip ──────────────────────────────────────────────────────────────
-class _NeonChip extends StatefulWidget {
+class _NeonChip extends StatelessWidget {
   final String label;
   final bool isActive;
   final bool isDone;
@@ -2415,74 +2087,51 @@ class _NeonChip extends StatefulWidget {
   });
 
   @override
-  State<_NeonChip> createState() => _NeonChipState();
-}
-
-class _NeonChipState extends State<_NeonChip> {
-  double _scale = 1.0;
-
-  @override
-  void didUpdateWidget(_NeonChip oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (!oldWidget.isDone && widget.isDone) {
-      _triggerBounce();
-    }
-  }
-
-  void _triggerBounce() async {
-    if (!mounted) return;
-    setState(() => _scale = 1.15);
-    await Future.delayed(const Duration(milliseconds: 140)); // Half duration
-    if (!mounted) return;
-    setState(() => _scale = 1.0);
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final chip = _buildChipContent();
-    return AnimatedScale(
-      scale: widget.isDone ? _scale : 1.0,
-      duration: const Duration(milliseconds: 140),
-      curve: Curves.easeOutBack,
-      child: chip,
-    );
-  }
-
-  Widget _buildChipContent() {
-    if (widget.isDone) {
+    if (isDone) {
       // Solid Emerald Green Pop
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2ECC71),
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF2ECC71).withValues(alpha: 0.4),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.check, color: Colors.white, size: 12),
-            const SizedBox(width: 4),
-            Text(
-              widget.label,
-              style: const TextStyle(
-                fontSize: 12,
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
+      return TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0.8, end: 1.0),
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.elasticOut,
+        builder: (context, scale, child) {
+          return Transform.scale(
+            scale: scale,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2ECC71),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF2ECC71).withValues(alpha: 0.4),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.check, color: Colors.white, size: 12),
+                  const SizedBox(width: 4),
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          );
+        },
       );
     }
 
-    if (widget.isActive) {
+    if (isActive) {
       // Glowing Blue Neon Border
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -2491,22 +2140,20 @@ class _NeonChipState extends State<_NeonChip> {
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: AppStyles.primaryBlue.withValues(
-              alpha: 0.5 + (0.5 * widget.pulseValue),
+              alpha: 0.5 + (0.5 * pulseValue),
             ),
             width: 1.5,
           ),
           boxShadow: [
             BoxShadow(
-              color: AppStyles.primaryBlue.withValues(
-                alpha: 0.2 * widget.pulseValue,
-              ),
+              color: AppStyles.primaryBlue.withValues(alpha: 0.2 * pulseValue),
               blurRadius: 8,
               spreadRadius: 2,
             ),
           ],
         ),
         child: Text(
-          widget.label,
+          label,
           style: const TextStyle(
             fontSize: 12,
             color: AppStyles.primaryBlue,
@@ -2517,19 +2164,21 @@ class _NeonChipState extends State<_NeonChip> {
     }
 
     // Pending grey state
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFD1D5DB), width: 1.0),
-      ),
-      child: Text(
-        widget.label,
-        style: const TextStyle(
-          fontSize: 12,
-          color: Color(0xFF6B7280),
-          fontWeight: FontWeight.w600,
+    return Opacity(
+      opacity: 0.4,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade200,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            color: Colors.grey,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ),
     );
@@ -2608,30 +2257,31 @@ class _BorderPainter extends CustomPainter {
     final paint = Paint()
       ..color = baseColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.0;
+      ..strokeWidth = 2.5;
 
     final shadowPaint = Paint()
       ..color = baseColor.withValues(alpha: pulseValue * 0.5)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.0
+      ..strokeWidth = 2.5
       ..maskFilter = MaskFilter.blur(BlurStyle.normal, 8 + (pulseValue * 12));
 
     canvas.drawCircle(center, radius, shadowPaint);
     canvas.drawCircle(center, radius, paint);
+
     // 2. High-Impact Progress Ring (Emerald Green light-pipe glow)
     if (progress > 0) {
       const Color progressColor = Color(0xFF2ECC71); // Vibrant Emerald
       final progressPaint = Paint()
         ..color = progressColor
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 8.0
-        ..strokeCap = StrokeCap.butt;
+        ..strokeWidth = 10.0
+        ..strokeCap = StrokeCap.round;
 
       final progressGlow = Paint()
         ..color = progressColor.withValues(alpha: 0.6)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 12.0
-        ..strokeCap = StrokeCap.butt
+        ..strokeWidth = 14.0
+        ..strokeCap = StrokeCap.round
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.0);
 
       // Draw arc from top (-pi/2) clockwise
@@ -2639,49 +2289,6 @@ class _BorderPainter extends CustomPainter {
       canvas.drawArc(rect, -math.pi / 2, sweepAngle, false, progressGlow);
       canvas.drawArc(rect, -math.pi / 2, sweepAngle, false, progressPaint);
     }
-
-    if (phase != _Phase.processing && phase != _Phase.done) {
-      // Breathing halo
-      final double breathOffset = 4.0 + (10.0 * pulseValue);
-      final double haloRadius = radius + breathOffset;
-
-      final Paint haloPaint = Paint()
-        ..shader = RadialGradient(
-          colors: [
-            baseColor.withValues(alpha: 0.15 * (1.0 - pulseValue)),
-            baseColor.withValues(alpha: 0.0),
-          ],
-          stops: const [0.8, 1.0],
-        ).createShader(Rect.fromCircle(center: center, radius: haloRadius));
-
-      canvas.drawCircle(center, haloRadius, haloPaint);
-
-      final glowArcPaint = Paint()
-        ..color = baseColor.withValues(alpha: 0.45)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 6.0
-        ..strokeCap = StrokeCap.round
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
-
-      final glowAngle = pulseValue * 2 * math.pi;
-      canvas.drawArc(rect, glowAngle, 0.436, false, glowArcPaint);
-    }
-
-    // ── 3D Circle Illusion ──
-    final Paint topHighlightPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.18)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.0
-      ..strokeCap = StrokeCap.round;
-
-    final Paint bottomShadowPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.12)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.0
-      ..strokeCap = StrokeCap.round;
-
-    canvas.drawArc(rect, -math.pi * 0.85, 1.57, false, topHighlightPaint);
-    canvas.drawArc(rect, math.pi * 0.15, 1.57, false, bottomShadowPaint);
 
     // 3. Directional Guidance (Turn Left / Right)
     if (phase == _Phase.left || phase == _Phase.right) {
@@ -2746,87 +2353,5 @@ class _BorderPainter extends CustomPainter {
         oldDelegate.progress != progress ||
         oldDelegate.phase != phase ||
         oldDelegate.flowValue != flowValue;
-  }
-}
-
-class _ParticleBurstPainter extends CustomPainter {
-  final double progress; // 0.0 to 1.0 from _particleController
-
-  _ParticleBurstPainter(this.progress);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (progress <= 0.0 || progress >= 1.0) return;
-
-    final center = Offset(size.width / 2, size.height / 2);
-    final paint = Paint()
-      ..color = Colors.white.withValues(alpha: 1.0 - progress);
-
-    final random = math.Random(
-      12345,
-    ); // Deterministic seed for stable burst pattern
-    for (int i = 0; i < 30; i++) {
-      final angle = random.nextDouble() * 2 * math.pi;
-      final speed = 50.0 + random.nextDouble() * 100.0;
-      final distance = (size.width / 2) + speed * progress;
-
-      final x = center.dx + math.cos(angle) * distance;
-      final y = center.dy + math.sin(angle) * distance;
-
-      // Randomly sized rectangular pieces
-      final rectSize = 3.0 + random.nextDouble() * 5.0;
-      canvas.drawRect(
-        Rect.fromCenter(
-          center: Offset(x, y),
-          width: rectSize,
-          height: rectSize,
-        ),
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _ParticleBurstPainter oldDelegate) {
-    return oldDelegate.progress != progress;
-  }
-}
-
-class _ShimmerLine extends StatelessWidget {
-  final bool isDone;
-  final AnimationController pulseController;
-
-  const _ShimmerLine({required this.isDone, required this.pulseController});
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: AnimatedBuilder(
-        animation: pulseController,
-        builder: (context, child) {
-          return Container(
-            height: 2,
-            margin: const EdgeInsets.symmetric(horizontal: 4),
-            decoration: BoxDecoration(
-              color: isDone ? null : Colors.grey.shade600,
-              gradient: isDone
-                  ? LinearGradient(
-                      colors: const [
-                        Color(0xFF2ECC71),
-                        Colors.white,
-                        Color(0xFF2ECC71),
-                      ],
-                      stops: [
-                        math.max(0.0, pulseController.value - 0.3),
-                        pulseController.value,
-                        math.min(1.0, pulseController.value + 0.3),
-                      ],
-                    )
-                  : null,
-            ),
-          );
-        },
-      ),
-    );
   }
 }

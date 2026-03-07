@@ -17,6 +17,7 @@ import 'package:flutter/foundation.dart';
 import 'package:facial_liveness_verification/facial_liveness_verification.dart'
     show ChallengeType, ChallengeValidator, LivenessConfig;
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:google_mlkit_face_mesh_detection/google_mlkit_face_mesh_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
@@ -44,6 +45,10 @@ class FaceMlService {
       performanceMode: FaceDetectorMode.fast,
       minFaceSize: 0.15,
     ),
+  );
+
+  final FaceMeshDetector faceMeshDetector = FaceMeshDetector(
+    option: FaceMeshDetectorOptions.faceMesh,
   );
 
   // ─── ArcFace 5-point target landmark positions in 112×112 space ──────────
@@ -687,6 +692,7 @@ class FaceMlService {
   void dispose() {
     _interpreter?.close();
     faceDetector.close();
+    faceMeshDetector.close();
     _isInitialized = false;
   }
 }
@@ -743,14 +749,16 @@ class ProductionBlinkDetector {
   static const int _maxBlinkDurationMs = 500;
 
   // ── Double-blink counter ──────────────────────────────────────────
-  // Requires 2 distinct blinks within _windowMs, each separated by
-  // at least _cooldownMs to prevent a long single blink counting twice.
+  // Requires 1 distinct blink within _windowMs.
   int _blinkCount = 0;
   DateTime? _firstBlinkTime; // start of the 2.5s window
   DateTime? _lastBlinkTime; // prevents counting one long blink as two
-  static const int _requiredBlinks = 2;
+  static const int _requiredBlinks = 1; // Instant blink capture
   static const int _windowMs = 2500; // 2.5 second window
   static const int _cooldownMs = 200; // min gap between blinks
+
+  // ── Quick Trigger ───────────────────────────────────────────────
+  int _consecutiveClosedFrames = 0;
 
   int get blinkCount => _blinkCount;
 
@@ -842,10 +850,24 @@ class ProductionBlinkDetector {
       }
     }
 
-    // ── 2. State-machine fallback ─────────────────────────────────
+    // ── 2. Quick Trigger (Instant drop) ───────────────────────────
     final bool eyesClosed = prob < thresh;
     final bool eyesOpen = prob >= baseline * 0.80;
 
+    if (eyesClosed) {
+      _consecutiveClosedFrames++;
+      if (_consecutiveClosedFrames >= 2) {
+        debugPrint(
+          '[FACE_REG] Blink candidate (Quick Trigger, 2 frames below threshold)',
+        );
+        _resetState();
+        return _registerBlink();
+      }
+    } else {
+      _consecutiveClosedFrames = 0;
+    }
+
+    // ── 3. State-machine fallback ─────────────────────────────────
     if (!_inBlink && eyesClosed) {
       // Eyes just closed — start timer
       _inBlink = true;
@@ -992,6 +1014,7 @@ class ProductionBlinkDetector {
   void _resetState() {
     _inBlink = false;
     _eyeClosedStart = null;
+    _consecutiveClosedFrames = 0;
     _probBuffer.clear();
     // NOTE: intentionally does NOT reset _blinkCount / _firstBlinkTime /
     // _lastBlinkTime — those are part of the double-blink window logic

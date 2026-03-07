@@ -23,6 +23,7 @@ dependencies:
   # --- Phase 1: Face & ML (Strict versions for compatibility) ---
   # Upgraded to 0.13.1 to satisfy facial_liveness_verification
   google_mlkit_face_detection: ^0.13.1
+  google_mlkit_face_mesh_detection: ^0.4.2
 
   # Run MobileFaceNet .tflite on-device
   tflite_flutter: ^0.11.0
