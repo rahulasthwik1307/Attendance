@@ -577,18 +577,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     if (detected) {
       debugPrint('[FACE_REG] Blink challenge VERIFIED ✓');
-      // Save registration photo at liveness moment — face is perfectly
-      // straight and centered here, guaranteed by liveness gate.
-      if (_registrationPhotoBytes == null) {
-        final Uint8List? livenessPhoto = _lastCameraImage != null
-            ? _convertYuvToJpegSync(_lastCameraImage!)
-            : null;
-        if (livenessPhoto != null) {
-          _registrationPhotoBytes = livenessPhoto;
-          _registrationFaceBbox = face.boundingBox;
-          debugPrint('[FACE_REG] Registration photo saved at liveness moment');
-        }
-      }
       _challengeVerified = true;
       _livenessService.reset();
       _challengeStartTime = null;
@@ -659,6 +647,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     if (currentPhase == _Phase.front && _registrationPhotoBytes == null) {
       _registrationPhotoBytes = jpegBytes;
       _registrationFaceBbox = face.boundingBox;
+      debugPrint(
+        '[FACE_REG] ✓ FRONT photo saved — bbox=${face.boundingBox} yaw=${face.headEulerAngleY?.toStringAsFixed(1)}',
+      );
     }
 
     // Update progress BEFORE heavy embedding calculation to un-freeze UI
@@ -1230,7 +1221,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     // Enter "backward": ratio > 0.90 (comfortable close distance)
     // Stay "backward" until ratio <= 0.75
-    final double backwardEnter = (_lastPosInstruction == null) ? 0.90 : 0.80;
+    final double backwardEnter = (_lastPosInstruction == null) ? 0.95 : 0.80;
     if (faceWidthRatio > backwardEnter ||
         (wasTooClose && faceWidthRatio > 0.75)) {
       _logInstructionChange('Move slightly backward');
@@ -1411,7 +1402,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     switch (phase) {
       case _Phase.front:
-        return yaw.abs() <= 12; // ±12°
+        return yaw.abs() <= 6; // ±6° — ensures truly straight front capture
       case _Phase.left:
         return yaw >= -28 && yaw <= -8; // Turned left (negative after flip)
       case _Phase.right:
