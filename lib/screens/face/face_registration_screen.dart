@@ -367,16 +367,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       // Push raw face metrics into smoothing buffer for moving average
       _pushSmoothing(face);
 
-      // Debug: smoothed face metrics (5-frame average, reduces noise)
-      debugPrint(
-        '[FACE_REG] Face detected | '
-        'avgW: ${_bufAvg(_bufFaceWidth).toStringAsFixed(1)} '
-        'avgCX: ${_bufAvg(_bufFaceCX).toStringAsFixed(1)} '
-        'avgCY: ${_bufAvg(_bufFaceCY).toStringAsFixed(1)} '
-        'rawYaw: ${face.headEulerAngleY?.toStringAsFixed(1)} '
-        'rawPitch: ${face.headEulerAngleX?.toStringAsFixed(1)}',
-      );
-
       // ── Pre-liveness positioning gate ──────────────────────────────────
       // Only applies during liveness phase (before initial blink).
       // Once _challengeVerified is true, capture phases skip this entirely.
@@ -761,6 +751,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         '[FACE_REG] PHASE: right → processing (${_rightFrames.length} right frames collected)',
       );
       // All phases done — process and upload
+      // Stop camera FIRST — no delay, instant black-out on 9/9
+      try {
+        await _cameraController?.stopImageStream();
+      } catch (_) {}
+
       _updateInstruction(
         'All done!',
         subtitle: 'Preparing face data',
@@ -769,10 +764,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       HapticFeedback.mediumImpact();
       await Future.delayed(const Duration(milliseconds: 500));
       _setPhase(_Phase.processing);
-
-      try {
-        _cameraController?.stopImageStream();
-      } catch (_) {}
 
       Future.delayed(const Duration(milliseconds: 800), () {
         if (mounted) {
@@ -1395,10 +1386,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     // Fix: Negate yaw for front camera (common Xiaomi/POCO inversion)
     // This makes "Turn slightly left" match user's physical left turn
     final double yaw = -yawRaw;
-
-    debugPrint(
-      '[FACE_REG] Pose yaw check | raw=${yawRaw.toStringAsFixed(1)} → corrected=${yaw.toStringAsFixed(1)} phase=${phase.name}',
-    );
 
     switch (phase) {
       case _Phase.front:
@@ -2333,9 +2320,10 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // Build camera preview — uses AspectRatio for correct 4:3 framing
   Widget _buildCameraPreview(double containerWidth) {
     if (!_cameraInitialized || _cameraController == null) {
-      return Container(
-        color: Colors.grey.shade200,
-        child: const Center(child: CircularProgressIndicator()),
+      return SizedBox(
+        width: containerWidth,
+        height: containerWidth,
+        child: _PulsingCameraLoader(),
       );
     }
 
@@ -2817,6 +2805,84 @@ class _ShimmerLine extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _PulsingCameraLoader extends StatefulWidget {
+  @override
+  State<_PulsingCameraLoader> createState() => _PulsingCameraLoaderState();
+}
+
+class _PulsingCameraLoaderState extends State<_PulsingCameraLoader>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulse;
+  late Animation<double> _scale;
+  late Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat(reverse: true);
+    _scale = Tween<double>(
+      begin: 0.82,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+    _opacity = Tween<double>(
+      begin: 0.4,
+      end: 0.85,
+    ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFFF0F4FF),
+      child: Center(
+        child: AnimatedBuilder(
+          animation: _pulse,
+          builder: (context, child) {
+            return Opacity(
+              opacity: _opacity.value,
+              child: Transform.scale(
+                scale: _scale.value,
+                child: Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF1A73E8).withValues(alpha: 0.12),
+                  ),
+                  child: Center(
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color(0xFF1A73E8),
+                      ),
+                      child: const Icon(
+                        Icons.camera_alt_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }

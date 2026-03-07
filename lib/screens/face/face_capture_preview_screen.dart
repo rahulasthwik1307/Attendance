@@ -5,6 +5,7 @@ import '../../utils/app_styles.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
 import '../../utils/auth_flow_state.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class FaceCapturePreviewScreen extends StatefulWidget {
   const FaceCapturePreviewScreen({super.key});
@@ -281,25 +282,84 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
                     child: AnimatedButton(
                       onPressed: () async {
                         if (_isLoading || _isSuccess) return;
+                        if (_croppedPhotoBytes == null) return;
+
                         setState(() => _isLoading = true);
-                        await Future.delayed(const Duration(milliseconds: 800));
-                        if (!context.mounted) return;
-                        setState(() {
-                          _isLoading = false;
-                          _isSuccess = true;
-                        });
-                        await Future.delayed(const Duration(milliseconds: 600));
-                        if (!context.mounted) return;
-                        AuthFlowState.instance.faceRegistered = true;
-                        if (AuthFlowState.instance.isFaceReset) {
-                          AuthFlowState.instance.isFaceReset = false;
-                          Navigator.of(
-                            context,
-                          ).pushReplacementNamed('/face_updated_success');
-                        } else {
-                          Navigator.of(
-                            context,
-                          ).pushReplacementNamed('/dashboard');
+
+                        try {
+                          // Step 1 — get current user
+                          final user =
+                              Supabase.instance.client.auth.currentUser;
+                          if (user == null) {
+                            setState(() => _isLoading = false);
+                            return;
+                          }
+
+                          // Step 2 — upload cropped face photo to storage
+                          await Supabase.instance.client.storage
+                              .from('face-registrations')
+                              .uploadBinary(
+                                '${user.id}/registration_${user.id}_preview.jpg',
+                                _croppedPhotoBytes!,
+                                fileOptions: const FileOptions(
+                                  contentType: 'image/jpeg',
+                                  upsert: true,
+                                ),
+                              );
+
+                          // Step 3 — get public URL
+                          final photoUrl = Supabase.instance.client.storage
+                              .from('face-registrations')
+                              .getPublicUrl(
+                                '${user.id}/registration_${user.id}_preview.jpg',
+                              );
+
+                          // Step 4 — save URL to students table
+                          final updateResult = await Supabase.instance.client
+                              .from('students')
+                              .update({'registration_photo': photoUrl})
+                              .eq('id', user.id)
+                              .select();
+
+                          debugPrint('[PREVIEW] update result: $updateResult');
+                          debugPrint('[PREVIEW] photoUrl: $photoUrl');
+                          debugPrint('[PREVIEW] user.id: ${user.id}');
+
+                          if (!context.mounted) return;
+
+                          // Step 5 — show success animation
+                          setState(() {
+                            _isLoading = false;
+                            _isSuccess = true;
+                          });
+
+                          await Future.delayed(
+                            const Duration(milliseconds: 600),
+                          );
+                          if (!context.mounted) return;
+
+                          // Step 6 — student is NOT approved yet — teacher must approve
+                          AuthFlowState.instance.faceRegistered = false;
+
+                          if (AuthFlowState.instance.isFaceReset) {
+                            AuthFlowState.instance.isFaceReset = false;
+                            Navigator.of(
+                              context,
+                            ).pushReplacementNamed('/face_updated_success');
+                          } else {
+                            Navigator.of(
+                              context,
+                            ).pushReplacementNamed('/registration_success');
+                          }
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          setState(() => _isLoading = false);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Upload failed: $e'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
                         }
                       },
                       style: ElevatedButton.styleFrom(
