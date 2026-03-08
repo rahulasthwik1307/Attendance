@@ -59,8 +59,9 @@ class _DashboardScreenState extends State<DashboardScreen>
           });
         }
       }
-    } catch (e) {
-      debugPrint('Error fetching profile: $e');
+    } catch (e, stack) {
+      debugPrint('[DASHBOARD] error: $e');
+      debugPrint('[DASHBOARD] stack: $stack');
     }
   }
 

@@ -102,6 +102,9 @@ class SmartAttendanceApp extends StatelessWidget {
                 page = const preview.FaceCapturePreviewScreen();
                 break;
               case '/dashboard':
+                debugPrint(
+                  '[ROUTE] /dashboard guard check: faceRegistered=${AuthFlowState.instance.faceRegistered}',
+                );
                 if (AuthFlowState.instance.canAccessDashboard) {
                   page = const dashboard.DashboardScreen();
                 } else {

@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/app_styles.dart';
+import '../../utils/auth_flow_state.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
-import '../../utils/auth_flow_state.dart';
 import '../../services/auth_service.dart';
-import '../../services/supabase_service.dart';
 
 class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key});
@@ -58,26 +57,6 @@ class _SignInScreenState extends State<SignInScreen> {
       );
 
       if (user != null) {
-        // Fetch student profile
-        // ignore: unused_local_variable
-        final profileData = await supabase
-            .from('students')
-            .select(
-              '*, users!inner(full_name), classes!inner(name, section), departments!inner(name)',
-            )
-            .eq('id', user.id)
-            .maybeSingle();
-
-        // ── Step 1: Check if student has embedding_a (face registered?) ──────
-        final studentData = await supabase
-            .from('students')
-            .select('embedding_a')
-            .eq('id', user.id)
-            .maybeSingle();
-
-        final bool hasEmbedding =
-            studentData != null && studentData['embedding_a'] != null;
-
         if (!mounted) return;
         setState(() {
           _isLoading = false;
@@ -87,48 +66,42 @@ class _SignInScreenState extends State<SignInScreen> {
         await Future.delayed(const Duration(milliseconds: 600));
         if (!mounted) return;
 
-        // Set password as set (since they signed in successfully with one)
-        AuthFlowState.instance.passwordSet = true;
+        final currentUser = Supabase.instance.client.auth.currentUser;
+        if (currentUser == null) return;
 
-        if (!hasEmbedding) {
-          // Face not registered yet → go to registration
-          AuthFlowState.instance.faceRegistered = false;
-          Navigator.of(context).pushReplacementNamed('/register');
-          return;
-        }
-
-        // ── Step 2: Check teacher approval status ─────────────────────────────
-        final faceRegData = await supabase
-            .from('face_registrations')
-            .select('approved')
-            .eq('student_id', user.id)
-            .maybeSingle();
-
-        // Also check is_approved directly from students table as fallback
-        final approvalData = await supabase
+        final data = await Supabase.instance.client
             .from('students')
-            .select('is_approved')
-            .eq('id', user.id)
+            .select('embedding_a, is_approved')
+            .eq('id', currentUser.id)
             .maybeSingle();
 
-        final bool isApproved =
-            (faceRegData != null && faceRegData['approved'] == true) ||
-            (approvalData != null && approvalData['is_approved'] == true);
+        debugPrint('[SIGNIN] currentUser.id: ${currentUser.id}');
+        debugPrint('[SIGNIN] students data: $data');
 
-        if (!isApproved) {
-          // Face registered but not approved → waiting screen
-          AuthFlowState.instance.faceRegistered = false;
-          if (mounted) {
-            Navigator.of(context).pushReplacementNamed('/registration_success');
-          }
+        if (!mounted) return;
+
+        // Not a student record — go to home
+        if (data == null) {
+          Navigator.pushReplacementNamed(context, '/home');
           return;
         }
 
-        // ── Step 3: Approved — go to dashboard ────────────────────────────────
-        AuthFlowState.instance.faceRegistered = true;
-        if (mounted) {
-          Navigator.of(context).pushReplacementNamed('/dashboard');
+        // No embedding yet — not registered
+        if (data['embedding_a'] == null) {
+          Navigator.pushReplacementNamed(context, '/register');
+          return;
         }
+
+        // Has embedding but teacher not approved yet
+        if (data['is_approved'] != true) {
+          Navigator.pushReplacementNamed(context, '/registration_success');
+          return;
+        }
+
+        // Approved — go to dashboard
+        AuthFlowState.instance.passwordSet = true;
+        AuthFlowState.instance.faceRegistered = true;
+        Navigator.pushReplacementNamed(context, '/dashboard');
       }
     } on AuthException catch (error) {
       if (!mounted) return;

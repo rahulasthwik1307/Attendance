@@ -34,6 +34,9 @@ dependencies:
   # Camera version required by the liveness package
   camera: ^0.11.4
 
+  # Temp directory access for InputImage.fromFilePath
+  path_provider: ^2.1.5
+
   # --- Liveness detection logic-only package ---
   facial_liveness_verification: ^2.1.0
 
