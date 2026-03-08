@@ -96,12 +96,13 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
           children: [
             Expanded(
               child: SingleChildScrollView(
+                physics: const NeverScrollableScrollPhysics(),
                 padding: const EdgeInsets.symmetric(horizontal: 24.0),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 16),
                     Stack(
                       alignment: Alignment.center,
                       children: [
@@ -110,8 +111,8 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
                           animation: _rippleController,
                           builder: (context, child) {
                             return Container(
-                              width: 150 + (_rippleController.value * 50),
-                              height: 150 + (_rippleController.value * 50),
+                              width: 110 + (_rippleController.value * 40),
+                              height: 110 + (_rippleController.value * 40),
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 color: AppStyles.successGreen.withValues(
@@ -124,21 +125,21 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
                         ScaleTransition(
                           scale: _scaleAnimation,
                           child: Container(
-                            padding: const EdgeInsets.all(24),
+                            padding: const EdgeInsets.all(18),
                             decoration: const BoxDecoration(
                               color: AppStyles.successGreen,
                               shape: BoxShape.circle,
                             ),
                             child: const Icon(
                               Icons.check_rounded,
-                              size: 60,
+                              size: 48,
                               color: Colors.white,
                             ),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 12),
                     const FadeSlideY(
                       delay: Duration(milliseconds: 300),
                       child: Text(
@@ -165,7 +166,7 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
                         ),
                       ),
                     ),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 16),
 
                     // ── Detail card (matching qr_success_screen style) ──────
                     AnimatedOpacity(
@@ -229,7 +230,7 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
                         ),
                       ),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 12),
 
                     // ── Progress bar + redirect text ─────────────────
                     FadeSlideY(
@@ -263,16 +264,16 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
                         ],
                       ),
                     ),
-                    const SizedBox(height: 16),
                   ],
                 ),
               ),
             ),
             // ── Dashboard button pinned at bottom ──────────────
             Container(
-              padding: const EdgeInsets.all(16),
+              color: Colors.white,
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
               child: SizedBox(
-                height: 48,
+                height: 52,
                 width: double.infinity,
                 child: AnimatedButton(
                   onPressed: () {
