@@ -789,6 +789,26 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
         _countdownTimer?.cancel();
 
+        // Save college attendance record
+        try {
+          final user = Supabase.instance.client.auth.currentUser;
+          if (user != null) {
+            final todayStr = DateTime.now().toIso8601String().split('T')[0];
+            await Supabase.instance.client.from('college_attendance').upsert({
+              'student_id': user.id,
+              'date': todayStr,
+              'marked_at': DateTime.now().toUtc().toIso8601String(),
+              'face_verified': true,
+              'status': 'present',
+            }, onConflict: 'student_id,date');
+            debugPrint('[FACE_VER] College attendance saved');
+          }
+        } catch (e) {
+          debugPrint('[FACE_VER] Failed to save college attendance: $e');
+        }
+
+        if (!mounted) return;
+
         final String? mode =
             ModalRoute.of(context)?.settings.arguments as String?;
         if (mode == 'password_reset') {

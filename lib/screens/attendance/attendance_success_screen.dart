@@ -24,6 +24,7 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
   int _elapsed = 0;
   late Timer _timer;
   late String _markedAtTime;
+  late String _markedAtDate;
 
   @override
   void initState() {
@@ -55,6 +56,22 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
     final minute = now.minute.toString().padLeft(2, '0');
     final period = now.hour >= 12 ? 'PM' : 'AM';
     _markedAtTime = '$hour:$minute $period';
+
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    _markedAtDate = '${months[now.month - 1]} ${now.day}, ${now.year}';
 
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
@@ -213,6 +230,7 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
                               iconColor: Colors.purple.shade400,
                               label: 'Marked At',
                               value: _markedAtTime,
+                              valueSubtitle: _markedAtDate,
                             ),
                             _divider(isDark),
                             _DetailRow(
@@ -307,6 +325,7 @@ class _DetailRow extends StatelessWidget {
   final Color iconColor;
   final String label;
   final String value;
+  final String? valueSubtitle;
   final Color? valueColor;
 
   const _DetailRow({
@@ -314,6 +333,7 @@ class _DetailRow extends StatelessWidget {
     required this.iconColor,
     required this.label,
     required this.value,
+    this.valueSubtitle,
     this.valueColor,
   });
 
@@ -351,6 +371,16 @@ class _DetailRow extends StatelessWidget {
                       (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
                 ),
               ),
+              if (valueSubtitle != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  valueSubtitle!,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppStyles.textGray,
+                  ),
+                ),
+              ],
             ],
           ),
         ],

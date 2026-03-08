@@ -28,6 +28,10 @@ class _DashboardScreenState extends State<DashboardScreen>
   void initState() {
     super.initState();
     _fetchProfile();
+    // Refresh when returning to dashboard
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
@@ -35,6 +39,12 @@ class _DashboardScreenState extends State<DashboardScreen>
     _pulseAnimation = Tween<double>(begin: 1.0, end: 1.03).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    setState(() {});
   }
 
   @override
@@ -340,6 +350,8 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
 
   bool _isPresentToday = false;
   bool _isLoading = true;
+  String _markedAtTime = '';
+  bool _isPastCutoff = false;
 
   @override
   void initState() {
@@ -364,22 +376,47 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
     _checkTodayAttendance();
   }
 
+  @override
+  void didUpdateWidget(covariant _TodayStatusCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _cardController.reset();
+    _checkTodayAttendance();
+  }
+
   Future<void> _checkTodayAttendance() async {
+    if (mounted) setState(() => _isLoading = true);
     try {
       final user = supabase.auth.currentUser;
       if (user != null) {
         final todayStr = DateTime.now().toIso8601String().split('T')[0];
+        final now = DateTime.now();
+        final cutoff = DateTime(now.year, now.month, now.day, 16, 0); // 4 PM
 
-        final record = await supabase
+        final records = await supabase
             .from('college_attendance')
-            .select('id')
+            .select('id, marked_at, status')
             .eq('student_id', user.id)
             .eq('date', todayStr)
-            .maybeSingle();
+            .order('marked_at', ascending: false)
+            .limit(1);
+
+        final record = records.isNotEmpty ? records.first : null;
 
         if (mounted) {
+          String timeStr = '';
+          if (record != null && record['marked_at'] != null) {
+            final markedAt = DateTime.parse(record['marked_at']).toLocal();
+            final hour = markedAt.hour;
+            final minute = markedAt.minute.toString().padLeft(2, '0');
+            final period = hour >= 12 ? 'PM' : 'AM';
+            final displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+            timeStr = '$displayHour:$minute $period';
+          }
+
           setState(() {
-            _isPresentToday = record != null;
+            _isPresentToday = record != null && record['status'] == 'present';
+            _markedAtTime = timeStr;
+            _isPastCutoff = now.isAfter(cutoff);
             _isLoading = false;
           });
           _cardController.forward();
@@ -387,9 +424,7 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
       }
     } catch (e) {
       debugPrint('Error checking today attendance: $e');
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -412,13 +447,24 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
 
     final color = _isPresentToday
         ? AppStyles.successGreen
+        : (!_isPresentToday && _isPastCutoff)
+        ? AppStyles.errorRed
         : AppStyles.amberWarning;
     final message = _isPresentToday
         ? 'You are Present Today'
+        : (!_isPresentToday && _isPastCutoff)
+        ? 'Absent Today'
         : 'Not Yet Marked';
     final iconData = _isPresentToday
         ? Icons.check_rounded
+        : (!_isPresentToday && _isPastCutoff)
+        ? Icons.cancel_rounded
         : Icons.pending_actions_rounded;
+    final subtitle = _isPresentToday
+        ? 'Marked at $_markedAtTime \u00b7 Face Verified'
+        : (!_isPresentToday && _isPastCutoff)
+        ? 'Attendance window has closed'
+        : 'College hours end at 4:00 PM';
 
     return AnimatedBuilder(
       animation: _cardController,
@@ -467,66 +513,20 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
                       color: color,
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  if (_isPresentToday)
-                    Wrap(
-                      spacing: 8,
-                      children: [
-                        _StatusPill(
-                          icon: Icons.location_on_rounded,
-                          label: 'Campus',
-                          color: color,
-                        ),
-                        _StatusPill(
-                          icon: Icons.face_retouching_natural_rounded,
-                          label: 'Face Verified',
-                          color: color,
-                        ),
-                      ],
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: color.withValues(alpha: 0.8),
                     ),
+                  ),
                 ],
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _StatusPill extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  const _StatusPill({
-    required this.icon,
-    required this.label,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.25), width: 1),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 11),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: color,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -849,30 +849,111 @@ class _ArcPainter extends CustomPainter {
   bool shouldRepaint(covariant _ArcPainter old) => old.progress != progress;
 }
 
-class _HeroAttendanceCard extends StatelessWidget {
+class _HeroAttendanceCard extends StatefulWidget {
   final ThemeData theme;
   const _HeroAttendanceCard({required this.theme});
 
   @override
+  State<_HeroAttendanceCard> createState() => _HeroAttendanceCardState();
+}
+
+class _HeroAttendanceCardState extends State<_HeroAttendanceCard> {
+  String _timeDisplay = '--:-- --';
+  String _dateDisplay = 'No attendance yet';
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchLastAttendance();
+  }
+
+  @override
+  void didUpdateWidget(covariant _HeroAttendanceCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _fetchLastAttendance();
+  }
+
+  Future<void> _fetchLastAttendance() async {
+    if (mounted) setState(() => _isLoading = true);
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+
+      final records = await supabase
+          .from('college_attendance')
+          .select('date, marked_at, status')
+          .eq('student_id', user.id)
+          .eq('status', 'present')
+          .order('marked_at', ascending: false)
+          .limit(1);
+
+      final record = records.isNotEmpty ? records.first : null;
+
+      if (record != null && mounted) {
+        final markedAt = DateTime.parse(record['marked_at']).toLocal();
+        final hour = markedAt.hour;
+        final minute = markedAt.minute.toString().padLeft(2, '0');
+        final period = hour >= 12 ? 'PM' : 'AM';
+        final displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+        final timeStr = '$displayHour:$minute $period';
+
+        final date = DateTime.parse(record['date']);
+        final months = [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ];
+        final dateStr =
+            '${months[date.month - 1]} ${date.day}, ${date.year} \u2022 Present';
+
+        if (mounted) {
+          setState(() {
+            _timeDisplay = timeStr;
+            _dateDisplay = dateStr;
+            _isLoading = false;
+          });
+        }
+      } else {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    } catch (e) {
+      debugPrint('Error fetching last attendance: $e');
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final isDark = theme.brightness == Brightness.dark;
+    final isDark = widget.theme.brightness == Brightness.dark;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 24),
       decoration: BoxDecoration(
-        color: theme.primaryColor,
+        color: widget.theme.primaryColor,
         borderRadius: BorderRadius.circular(20),
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            theme.primaryColor,
-            theme.primaryColor.withValues(alpha: 0.75),
+            widget.theme.primaryColor,
+            widget.theme.primaryColor.withValues(alpha: 0.75),
           ],
         ),
         boxShadow: [
           BoxShadow(
-            color: theme.primaryColor.withValues(alpha: isDark ? 0.3 : 0.25),
+            color: widget.theme.primaryColor.withValues(
+              alpha: isDark ? 0.3 : 0.25,
+            ),
             blurRadius: 24,
             offset: const Offset(0, 8),
           ),
@@ -907,9 +988,9 @@ class _HeroAttendanceCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 16),
-          const Text(
-            '09:00 AM',
-            style: TextStyle(
+          Text(
+            _isLoading ? '--:-- --' : _timeDisplay,
+            style: const TextStyle(
               fontSize: 42,
               fontWeight: FontWeight.w800,
               color: Colors.white,
@@ -928,9 +1009,9 @@ class _HeroAttendanceCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
-              const Text(
-                'Oct 24, 2024 • Present',
-                style: TextStyle(
+              Text(
+                _isLoading ? 'Loading...' : _dateDisplay,
+                style: const TextStyle(
                   fontSize: 13,
                   color: Colors.white70,
                   fontWeight: FontWeight.w500,
