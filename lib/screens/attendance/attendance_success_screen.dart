@@ -198,21 +198,6 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
                         child: Column(
                           children: [
                             _DetailRow(
-                              icon: Icons.menu_book_rounded,
-                              iconColor: AppStyles.primaryBlue,
-                              label: 'Subject',
-                              value: 'DBMS',
-                            ),
-                            _divider(isDark),
-                            _DetailRow(
-                              icon: Icons.schedule_rounded,
-                              iconColor: Colors.orange.shade600,
-                              label: 'Period',
-                              value: '3rd Period',
-                              valueSubtitle: '11:10 AM',
-                            ),
-                            _divider(isDark),
-                            _DetailRow(
                               icon: Icons.access_time_filled_rounded,
                               iconColor: Colors.purple.shade400,
                               label: 'Marked At',
@@ -311,7 +296,6 @@ class _DetailRow extends StatelessWidget {
   final Color iconColor;
   final String label;
   final String value;
-  final String? valueSubtitle;
   final Color? valueColor;
 
   const _DetailRow({
@@ -319,7 +303,6 @@ class _DetailRow extends StatelessWidget {
     required this.iconColor,
     required this.label,
     required this.value,
-    this.valueSubtitle,
     this.valueColor,
   });
 
@@ -357,16 +340,6 @@ class _DetailRow extends StatelessWidget {
                       (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
                 ),
               ),
-              if (valueSubtitle != null) ...[
-                const SizedBox(height: 2),
-                Text(
-                  valueSubtitle!,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppStyles.textGray,
-                  ),
-                ),
-              ],
             ],
           ),
         ],

@@ -14,6 +14,7 @@ import 'package:facial_liveness_verification/facial_liveness_verification.dart'
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -214,23 +215,80 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       end: 0.0,
     ).animate(CurvedAnimation(parent: _ringController, curve: Curves.linear));
 
-    // Show location card and start flow
-    _locationCardController.forward();
-
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await Future.delayed(const Duration(milliseconds: 2500));
+      _locationCardController.forward();
+
+      await Future.delayed(const Duration(milliseconds: 500));
       if (!mounted) return;
+
+      // Real location check
+      final bool locationOk = await _checkGeofence();
+      if (!mounted) return;
+
+      if (!locationOk) {
+        setState(() {
+          _locationVerified = false;
+        });
+        // Show error and go back after 2 seconds
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You must be on campus to mark attendance.'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        await Future.delayed(const Duration(seconds: 3));
+        if (mounted) Navigator.of(context).pop();
+        return;
+      }
 
       setState(() => _locationVerified = true);
-
       await Future.delayed(const Duration(milliseconds: 1000));
       if (!mounted) return;
-
       await _locationCardController.reverse();
-
-      // Start camera initialization
       _initializeCamera();
     });
+  }
+
+  // ── CHANGE THESE COORDINATES BEFORE EXECUTION ──
+  // Currently set to test location — replace with college coordinates tomorrow
+  static const double _campusLat = 17.409672;
+  static const double _campusLng = 78.591148;
+  static const double _campusRadiusMeters = 200.0;
+
+  Future<bool> _checkGeofence() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return false;
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) return false;
+      }
+      if (permission == LocationPermission.deniedForever) return false;
+
+      final Position position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+
+      final double distance = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        _campusLat,
+        _campusLng,
+      );
+
+      debugPrint(
+        '[GEOFENCE] Distance from campus: ${distance.toStringAsFixed(1)}m',
+      );
+      return distance <= _campusRadiusMeters;
+    } catch (e) {
+      debugPrint('[GEOFENCE] Error: $e');
+      return false;
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
