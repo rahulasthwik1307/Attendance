@@ -168,8 +168,9 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
                     const SizedBox(height: 32),
 
                     // ── Detail card (matching qr_success_screen style) ──────
-                    FadeSlideY(
-                      delay: const Duration(milliseconds: 500),
+                    AnimatedOpacity(
+                      opacity: 1.0,
+                      duration: const Duration(milliseconds: 400),
                       child: Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(vertical: 6),
@@ -270,22 +271,19 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
             // ── Dashboard button pinned at bottom ──────────────
             Container(
               padding: const EdgeInsets.all(16),
-              child: FadeSlideY(
-                delay: const Duration(milliseconds: 700),
-                child: SizedBox(
-                  height: 48,
-                  width: double.infinity,
-                  child: AnimatedButton(
-                    onPressed: () {
-                      _timer.cancel();
-                      Navigator.of(context).pushReplacementNamed('/dashboard');
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppStyles.successGreen,
-                      elevation: 2,
-                    ),
-                    child: const Text('Go to Dashboard'),
+              child: SizedBox(
+                height: 48,
+                width: double.infinity,
+                child: AnimatedButton(
+                  onPressed: () {
+                    _timer.cancel();
+                    Navigator.of(context).pushReplacementNamed('/dashboard');
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppStyles.successGreen,
+                    elevation: 2,
                   ),
+                  child: const Text('Go to Dashboard'),
                 ),
               ),
             ),

@@ -98,9 +98,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // ─── Challenge verification timeout ─────────────────────────────────────
   DateTime? _challengeStartTime;
   int _lastKnownBlinkCount = 0;
-
   int _captureProgress = 0;
-  String _progressLabel = '';
 
   // ignore: unused_field
   String? _errorMessage;
@@ -638,7 +636,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _handleCapture(Face face, CameraImage cameraImage) async {
     final now = DateTime.now();
-    if (now.difference(_lastCaptureTime).inMilliseconds < 800) return;
+    if (now.difference(_lastCaptureTime).inMilliseconds < 300) return;
 
     // Check yaw for front pose (±15°)
     final double? yawRaw = face.headEulerAngleY;
@@ -654,10 +652,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       return;
     }
 
-    _updateInstruction(
-      'Capturing ${_liveEmbeddings.length + 1}/$_framesPerPhase',
-    );
-
     // Grab frame
     final Uint8List? jpegBytes = await _captureCurrentFrame();
     if (jpegBytes == null) return;
@@ -665,17 +659,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     // Update progress before heavy embedding
     setState(() {
       _captureProgress++;
-      _progressLabel = 'Capturing $_captureProgress/$_framesPerPhase';
       _borderColor = AppStyles.successGreen;
     });
     HapticFeedback.lightImpact();
 
-    await Future.delayed(const Duration(milliseconds: 40));
-
-    setState(() => _showFlash = true);
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) setState(() => _showFlash = false);
-    });
     Future.delayed(const Duration(milliseconds: 150), () {
       if (mounted && _phase == _Phase.capturing) {
         setState(() => _borderColor = AppStyles.primaryBlue);
@@ -778,7 +765,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _clearSmoothing();
           _challengeVerified = false;
           _captureProgress = 0;
-          _progressLabel = '';
           _challengeStartTime = null;
           _blinkCountdownController.reset();
           _steadyStartTime = null;
@@ -1197,8 +1183,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         break;
       case _Phase.capturing:
         _updateInstruction(
-          'Capturing 1/$_framesPerPhase',
-          subtitle: 'Hold still, scanning your face',
+          'Hold still…',
+          subtitle: 'Scanning your face silently',
         );
         break;
       case _Phase.processing:
@@ -1368,19 +1354,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                               inherit: false,
                             ),
                           ),
-                          if (_captureProgress > 0)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: Text(
-                                _progressLabel,
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: AppStyles.primaryBlue,
-                                  fontWeight: FontWeight.w500,
-                                  inherit: false,
-                                ),
-                              ),
-                            ),
                         ],
                       ),
                       const Spacer(),
@@ -1701,7 +1674,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
                             // ── Dynamic Layout Column ──
                             Positioned(
-                              top: (circleTop - 100) + circleSize + 20,
+                              top: (circleTop - 100) + circleSize + 32,
                               left: 16,
                               right: 16,
                               child: AnimatedOpacity(
@@ -1711,113 +1684,36 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    // Timer ring (below circle, compact)
-                                    AnimatedOpacity(
-                                      duration: const Duration(
-                                        milliseconds: 400,
-                                      ),
-                                      opacity:
-                                          (_cameraPreviewReady &&
-                                              !(_phase == _Phase.liveness &&
-                                                  _instructionTitle.contains(
-                                                    'Blink',
-                                                  )))
-                                          ? 1.0
-                                          : 0.0,
-                                      child: ScaleTransition(
-                                        scale: _timerPulseAnim,
-                                        child: AnimatedBuilder(
-                                          animation: _ringController,
-                                          builder: (context, _) {
-                                            return SizedBox(
-                                              width: 44,
-                                              height: 44,
-                                              child: CustomPaint(
-                                                painter: _MiniRingPainter(
-                                                  progress: _ringProgress.value,
-                                                  color: timerColor,
-                                                ),
-                                                child: Center(
-                                                  child: Text(
-                                                    '${_secondsRemaining}s',
-                                                    style: TextStyle(
-                                                      fontSize: 12,
-                                                      fontWeight:
-                                                          FontWeight.w800,
-                                                      color: timerColor,
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            );
-                                          },
-                                        ),
-                                      ),
-                                    ),
-
-                                    const SizedBox(height: 6),
-
-                                    // Attempt counter
-                                    AnimatedOpacity(
-                                      duration: const Duration(
-                                        milliseconds: 400,
-                                      ),
-                                      opacity:
-                                          (_cameraPreviewReady &&
-                                              !(_phase == _Phase.liveness &&
-                                                  _instructionTitle.contains(
-                                                    'Blink',
-                                                  )))
-                                          ? 1.0
-                                          : 0.0,
-                                      child: Text(
-                                        'Attempt $_attemptCount of 3',
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w500,
-                                          color: Colors.grey.shade500,
-                                        ),
-                                      ),
-                                    ),
-
-                                    const SizedBox(height: 10),
-
-                                    // Blink countdown indicator
-                                    Builder(
-                                      builder: (context) {
-                                        final bool showCountdown =
-                                            (_instructionTitle.contains(
-                                              'Blink',
-                                            ) ||
-                                            _instructionSubtitle.contains(
-                                              'Blink',
-                                            ));
-
-                                        return AnimatedOpacity(
+                                    // Single timer slot — swaps between 60s ring and blink countdown
+                                    SizedBox(
+                                      height: 56,
+                                      child: Center(
+                                        child: AnimatedSwitcher(
                                           duration: const Duration(
                                             milliseconds: 300,
                                           ),
-                                          opacity: showCountdown ? 1.0 : 0.0,
-                                          child: Visibility(
-                                            visible:
-                                                showCountdown ||
-                                                _blinkCountdownController
-                                                    .isAnimating,
-                                            child: Column(
-                                              children: [
-                                                AnimatedBuilder(
-                                                  animation:
-                                                      _blinkCountdownController,
-                                                  builder: (context, child) {
-                                                    final double remaining =
-                                                        3.0 *
-                                                        (1.0 -
-                                                            _blinkCountdownController
-                                                                .value);
-                                                    return SizedBox(
-                                                      width: 50,
-                                                      height: 50,
-                                                      child: Stack(
+                                          child:
+                                              (_phase == _Phase.liveness &&
+                                                  (_instructionTitle.contains(
+                                                        'Blink',
+                                                      ) ||
+                                                      _instructionSubtitle
+                                                          .contains('Blink')) &&
+                                                  !_challengeVerified)
+                                              ? SizedBox(
+                                                  key: const ValueKey('blink'),
+                                                  width: 50,
+                                                  height: 50,
+                                                  child: AnimatedBuilder(
+                                                    animation:
+                                                        _blinkCountdownController,
+                                                    builder: (context, child) {
+                                                      final double remaining =
+                                                          3.0 *
+                                                          (1.0 -
+                                                              _blinkCountdownController
+                                                                  .value);
+                                                      return Stack(
                                                         alignment:
                                                             Alignment.center,
                                                         children: [
@@ -1882,17 +1778,69 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                                                             ),
                                                           ),
                                                         ],
-                                                      ),
-                                                    );
-                                                  },
+                                                      );
+                                                    },
+                                                  ),
+                                                )
+                                              : ScaleTransition(
+                                                  key: const ValueKey('ring'),
+                                                  scale: _timerPulseAnim,
+                                                  child: AnimatedBuilder(
+                                                    animation: _ringController,
+                                                    builder: (context, _) {
+                                                      return SizedBox(
+                                                        width: 44,
+                                                        height: 44,
+                                                        child: CustomPaint(
+                                                          painter:
+                                                              _MiniRingPainter(
+                                                                progress:
+                                                                    _ringProgress
+                                                                        .value,
+                                                                color:
+                                                                    timerColor,
+                                                              ),
+                                                          child: Center(
+                                                            child: Text(
+                                                              '${_secondsRemaining}s',
+                                                              style: TextStyle(
+                                                                fontSize: 12,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w800,
+                                                                color:
+                                                                    timerColor,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
                                                 ),
-                                                const SizedBox(height: 14),
-                                              ],
-                                            ),
-                                          ),
-                                        );
-                                      },
+                                        ),
+                                      ),
                                     ),
+
+                                    const SizedBox(height: 6),
+
+                                    // Attempt counter
+                                    AnimatedOpacity(
+                                      duration: const Duration(
+                                        milliseconds: 400,
+                                      ),
+                                      opacity: _cameraPreviewReady ? 1.0 : 0.0,
+                                      child: Text(
+                                        'Attempt $_attemptCount of 3',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.grey.shade500,
+                                        ),
+                                      ),
+                                    ),
+
+                                    const SizedBox(height: 10),
 
                                     // HUD strip (Liveness → Scanning → Done)
                                     if (_phase != _Phase.initializing &&
@@ -2147,7 +2095,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     _livenessService.resetCalibration();
     _liveEmbeddings.clear();
     _captureProgress = 0;
-    _progressLabel = '';
     _challengeVerified = false;
     _challengeStartTime = null;
     _blinkCountdownController.reset();
