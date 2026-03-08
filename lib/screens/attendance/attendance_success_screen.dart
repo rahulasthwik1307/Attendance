@@ -23,6 +23,7 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
   double _progress = 0.0;
   int _elapsed = 0;
   late Timer _timer;
+  late String _markedAtTime;
 
   @override
   void initState() {
@@ -44,6 +45,16 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
     )..forward();
 
     _checkController.forward();
+
+    final now = DateTime.now();
+    final hour = now.hour > 12
+        ? now.hour - 12
+        : now.hour == 0
+        ? 12
+        : now.hour;
+    final minute = now.minute.toString().padLeft(2, '0');
+    final period = now.hour >= 12 ? 'PM' : 'AM';
+    _markedAtTime = '$hour:$minute $period';
 
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
@@ -201,7 +212,7 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
                               icon: Icons.access_time_filled_rounded,
                               iconColor: Colors.purple.shade400,
                               label: 'Marked At',
-                              value: '09:05 AM',
+                              value: _markedAtTime,
                             ),
                             _divider(isDark),
                             _DetailRow(
