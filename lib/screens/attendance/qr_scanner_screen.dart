@@ -117,12 +117,15 @@ class _QrScannerScreenState extends State<QrScannerScreen>
           .update({'is_used': true})
           .eq('token', scannedToken);
 
-      // ── Step 6: Navigate to attendance success screen ───────────────
+      // ── Step 6: Navigate to face verification ───────────────────────
       if (mounted && !_hasNavigated) {
         _hasNavigated = true;
-        Navigator.of(
-          context,
-        ).pushReplacementNamed('/attendance_success', arguments: sessionId);
+        final DateTime? endTime =
+            ModalRoute.of(context)?.settings.arguments as DateTime?;
+        Navigator.of(context).pushReplacementNamed(
+          '/qr-face-verify',
+          arguments: {'session_id': sessionId, 'end_time': endTime},
+        );
       }
     } catch (e) {
       _showError(e.toString());

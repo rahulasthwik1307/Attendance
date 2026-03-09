@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:geolocator/geolocator.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/app_styles.dart';
 import '../../widgets/fade_slide_y.dart';
 
@@ -24,39 +26,122 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
   }
 
   Future<void> _runChecks() async {
-    // Check 1: Attendance
-    await Future.delayed(const Duration(milliseconds: 1200));
-    if (!mounted) return;
-
-    // For demo purposes, we assume success. To test failure, change to _CheckState.error
+    // ── Check 1: College Attendance ──────────────────────────────
     setState(() {
-      _attendanceState = _CheckState.success;
-      _locationState = _CheckState.checking;
+      _attendanceState = _CheckState.checking;
     });
 
-    if (_attendanceState == _CheckState.error) {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        setState(() => _attendanceState = _CheckState.error);
+        _handleFailure();
+        return;
+      }
+
+      final todayStr = DateTime.now().toIso8601String().split('T')[0];
+      final records = await Supabase.instance.client
+          .from('college_attendance')
+          .select('id, status')
+          .eq('student_id', user.id)
+          .eq('date', todayStr)
+          .eq('status', 'present')
+          .limit(1);
+
+      if (records.isEmpty) {
+        setState(() => _attendanceState = _CheckState.error);
+        _handleFailure();
+        return;
+      }
+
+      setState(() {
+        _attendanceState = _CheckState.success;
+        _locationState = _CheckState.checking;
+      });
+    } catch (e) {
+      debugPrint('[PRECHECK] Attendance check error: $e');
+      setState(() => _attendanceState = _CheckState.error);
       _handleFailure();
       return;
     }
 
-    // Check 2: Location
-    await Future.delayed(const Duration(milliseconds: 1000));
-    if (!mounted) return;
+    // ── Check 2: Geofence from Supabase ─────────────────────────
+    try {
+      // Fetch admin geofence settings
+      final geoData = await Supabase.instance.client
+          .from('geofence_settings')
+          .select('latitude, longitude, radius_meters')
+          .limit(1)
+          .maybeSingle();
 
-    setState(() {
-      _locationState = _CheckState.success;
-    });
+      if (geoData == null) {
+        setState(() => _locationState = _CheckState.error);
+        _handleFailure();
+        return;
+      }
 
-    if (_locationState == _CheckState.error) {
+      final double campusLat = (geoData['latitude'] as num).toDouble();
+      final double campusLng = (geoData['longitude'] as num).toDouble();
+      final double campusRadius = (geoData['radius_meters'] as num).toDouble();
+
+      // Check device location permission
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        setState(() => _locationState = _CheckState.error);
+        _handleFailure();
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          setState(() => _locationState = _CheckState.error);
+          _handleFailure();
+          return;
+        }
+      }
+      if (permission == LocationPermission.deniedForever) {
+        setState(() => _locationState = _CheckState.error);
+        _handleFailure();
+        return;
+      }
+
+      final Position position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+
+      final double distance = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        campusLat,
+        campusLng,
+      );
+
+      debugPrint(
+        '[PRECHECK] Distance from campus: ${distance.toStringAsFixed(1)}m, radius: ${campusRadius}m',
+      );
+
+      if (distance > campusRadius) {
+        setState(() => _locationState = _CheckState.error);
+        _handleFailure();
+        return;
+      }
+
+      setState(() => _locationState = _CheckState.success);
+    } catch (e) {
+      debugPrint('[PRECHECK] Location check error: $e');
+      setState(() => _locationState = _CheckState.error);
       _handleFailure();
       return;
     }
 
-    // Both passed
+    // ── Both passed — navigate to QR scanner ────────────────────
     await Future.delayed(const Duration(milliseconds: 600));
     if (!mounted) return;
 
-    // Forward the absolute end time from dashboard
     final DateTime? endTime =
         ModalRoute.of(context)?.settings.arguments as DateTime?;
     Navigator.of(
@@ -172,8 +257,8 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
                 child: _CheckRow(
                   title: 'College Attendance',
                   subtitleChecking: 'Verifying minimum attendance...',
-                  subtitleSuccess: 'Attendance marked — verified',
-                  subtitleError: 'Attendance requirement not met',
+                  subtitleSuccess: 'Daily attendance marked — verified',
+                  subtitleError: 'Mark your daily face attendance first',
                   icon: Icons.checklist_rounded,
                   state: _attendanceState,
                   isDark: isDark,

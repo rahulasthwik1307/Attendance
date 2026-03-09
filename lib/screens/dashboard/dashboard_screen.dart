@@ -1049,7 +1049,7 @@ class _ActionTile extends StatelessWidget {
       child: InkWell(
         onTap: () {
           if (label == 'Scan QR — Class Attendance') {
-            // QR scanner will be implemented with backend
+            Navigator.of(context).pushNamed('/qr-precheck');
             return;
           }
           if (label == 'Reset Face Data') {
