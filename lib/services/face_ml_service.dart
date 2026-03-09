@@ -287,34 +287,56 @@ class FaceMlService {
       );
     }
 
-    // Scores vs embedding A
-    final List<double> scoresA =
-        liveEmbeddings
-            .map((e) => cosineSimilarity(e, storedEmbeddingA))
-            .toList()
-          ..sort();
+    debugPrint('[FACE_VER] ═══ VERIFICATION DEBUG ═══');
+    debugPrint('[FACE_VER] Live frames: ${liveEmbeddings.length}');
+    debugPrint('[FACE_VER] StoredA length: ${storedEmbeddingA.length}');
+    debugPrint('[FACE_VER] StoredB length: ${storedEmbeddingB.length}');
+    debugPrint(
+      '[FACE_VER] StoredA[0..4]: ${storedEmbeddingA.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
+    );
+    debugPrint(
+      '[FACE_VER] StoredB[0..4]: ${storedEmbeddingB.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
+    );
 
-    // Scores vs embedding B
-    final List<double> scoresB =
-        liveEmbeddings
-            .map((e) => cosineSimilarity(e, storedEmbeddingB))
-            .toList()
-          ..sort();
+    double abSimilarity = cosineSimilarity(storedEmbeddingA, storedEmbeddingB);
+    debugPrint(
+      '[FACE_VER] A vs B similarity: ${abSimilarity.toStringAsFixed(4)} ${abSimilarity > 0.999 ? "WARNING IDENTICAL - REGISTRATION BUG" : "OK"}',
+    );
 
-    // Median of each
+    final List<double> scoresA = liveEmbeddings
+        .map((e) => cosineSimilarity(e, storedEmbeddingA))
+        .toList();
+
+    final List<double> scoresB = liveEmbeddings
+        .map((e) => cosineSimilarity(e, storedEmbeddingB))
+        .toList();
+
+    for (int i = 0; i < liveEmbeddings.length; i++) {
+      debugPrint(
+        '[FACE_VER] Frame $i → scoreA=${scoresA[i].toStringAsFixed(4)} scoreB=${scoresB[i].toStringAsFixed(4)}',
+      );
+    }
+
+    scoresA.sort();
+    scoresB.sort();
+
     final double medianA = scoresA[scoresA.length ~/ 2];
     final double medianB = scoresB[scoresB.length ~/ 2];
 
-    // Take the better match
+    if (medianA < 0.55 || medianB < 0.55) {
+      return VerificationResult(
+        isMatch: false,
+        score: math.min(medianA, medianB),
+        message: 'Face not recognized',
+      );
+    }
     final double bestScore = math.max(medianA, medianB);
 
-    // Adaptive threshold based on feature norm (image quality proxy)
-    final double adaptiveThreshold = _adaptiveThreshold(
-      liveEmbeddings,
-      threshold,
+    debugPrint(
+      '[FACE_VER] medianA=${medianA.toStringAsFixed(4)} medianB=${medianB.toStringAsFixed(4)} best=${bestScore.toStringAsFixed(4)} threshold=$threshold',
     );
 
-    if (bestScore >= adaptiveThreshold) {
+    if (bestScore >= threshold) {
       return VerificationResult(
         isMatch: true,
         score: bestScore,
@@ -322,7 +344,6 @@ class FaceMlService {
       );
     }
 
-    // Smart failure message based on score
     String message;
     if (bestScore > 0.50) {
       message = 'Try in better lighting';
@@ -633,21 +654,6 @@ class FaceMlService {
       sum += x * x;
     }
     return math.sqrt(sum);
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // ADAPTIVE THRESHOLD — adjust based on image quality
-  // Feature norm (magnitude before L2) is a proxy for image quality.
-  // High norm = sharp, well-lit image → use stricter threshold
-  // Low norm = blurry or bad image → use lenient threshold
-  // ─────────────────────────────────────────────────────────────────────────
-  double _adaptiveThreshold(
-    List<List<double>> embeddings,
-    double baseThreshold,
-  ) {
-    // For simplicity in Phase 1, use the base threshold as-is.
-    // Phase 3 can add feature norm computation for adaptive adjustment.
-    return baseThreshold;
   }
 
   // ─────────────────────────────────────────────────────────────────────────

@@ -461,10 +461,11 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
         ? Icons.cancel_rounded
         : Icons.pending_actions_rounded;
     final subtitle = _isPresentToday
-        ? 'Marked at $_markedAtTime \u00b7 Face Verified'
+        ? 'Marked at $_markedAtTime'
         : (!_isPresentToday && _isPastCutoff)
         ? 'Attendance window has closed'
         : 'College hours end at 4:00 PM';
+    final faceVerifiedLine = _isPresentToday ? 'Face Verified ✔' : '';
 
     return AnimatedBuilder(
       animation: _cardController,
@@ -522,6 +523,17 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
                       color: color.withValues(alpha: 0.8),
                     ),
                   ),
+                  if (faceVerifiedLine.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      faceVerifiedLine,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: color,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

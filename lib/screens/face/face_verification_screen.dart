@@ -252,8 +252,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   // ── CHANGE THESE COORDINATES BEFORE EXECUTION ──
   // Currently set to test location — replace with college coordinates tomorrow
-  static const double _campusLat = 17.409672;
-  static const double _campusLng = 78.591148;
+  static const double _campusLat = 17.40252;
+  static const double _campusLng = 78.65267;
   static const double _campusRadiusMeters = 200.0;
 
   Future<bool> _checkGeofence() async {
@@ -308,7 +308,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
-
       await _cameraController!.initialize();
 
       // Set to device minimum zoom for widest field of view
@@ -373,7 +372,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       final isExpired = (now - cachedAt) > (24 * 60 * 60 * 1000);
       final user = Supabase.instance.client.auth.currentUser;
 
-      if (user != null && cachedStudentId == user.id && !isExpired) {
+      if (user != null &&
+          cachedStudentId == user.id &&
+          !isExpired &&
+          cachedStudentId != null) {
         final embAJson = prefs.getString('emb_a');
         final embBJson = prefs.getString('emb_b');
         if (embAJson != null && embBJson != null) {
@@ -414,6 +416,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           .map((e) => (e as num).toDouble())
           .toList();
 
+      // Clear any previous user's cached embeddings first
+      await prefs.remove('emb_a');
+      await prefs.remove('emb_b');
+      await prefs.remove('emb_student_id');
+      await prefs.remove('emb_cached_at');
       // Cache for next time
       await prefs.setString('emb_a', jsonEncode(_embeddingA));
       await prefs.setString('emb_b', jsonEncode(_embeddingB));
@@ -694,7 +701,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _handleCapture(Face face, CameraImage cameraImage) async {
     final now = DateTime.now();
-    if (now.difference(_lastCaptureTime).inMilliseconds < 300) return;
+    if (now.difference(_lastCaptureTime).inMilliseconds < 600) return;
 
     // Check yaw for front pose (±15°)
     final double? yawRaw = face.headEulerAngleY;
@@ -763,7 +770,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         liveEmbeddings: _liveEmbeddings,
         storedEmbeddingA: _embeddingA!,
         storedEmbeddingB: _embeddingB!,
-        threshold: 0.60,
+        threshold: 0.72,
       );
 
       debugPrint(

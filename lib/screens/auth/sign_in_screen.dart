@@ -80,14 +80,20 @@ class _SignInScreenState extends State<SignInScreen> {
 
         if (!mounted) return;
 
-        // Not a student record — go to home
+        // Not a student record — go to register
         if (data == null) {
-          Navigator.pushReplacementNamed(context, '/home');
+          AuthFlowState.instance.passwordSet = true;
+          AuthFlowState.instance.faceRegistered = false;
+          AuthFlowState.instance.isFirstTimeUser = true;
+          Navigator.pushReplacementNamed(context, '/register');
           return;
         }
 
         // No embedding yet — not registered
         if (data['embedding_a'] == null) {
+          AuthFlowState.instance.passwordSet = true;
+          AuthFlowState.instance.faceRegistered = false;
+          AuthFlowState.instance.isFirstTimeUser = true;
           Navigator.pushReplacementNamed(context, '/register');
           return;
         }

@@ -817,12 +817,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     try {
       // FIXED: Embeddings already generated during capture phase on main thread.
       // No more compute() isolate calls — avoids BackgroundIsolateBinaryMessenger crash.
-      final List<List<double>> embASource = [
-        ..._frontEmbeddings,
-        ..._leftEmbeddings,
-      ];
+      final List<List<double>> embASource = [..._frontEmbeddings];
       final List<List<double>> embBSource = [
-        ..._frontEmbeddings,
+        ..._leftEmbeddings,
         ..._rightEmbeddings,
       ];
 
