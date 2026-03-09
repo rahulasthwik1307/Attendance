@@ -277,7 +277,7 @@ class FaceMlService {
     required List<List<double>> liveEmbeddings,
     required List<double> storedEmbeddingA,
     required List<double> storedEmbeddingB,
-    double threshold = 0.6,
+    double threshold = 0.72,
   }) {
     if (liveEmbeddings.isEmpty) {
       return VerificationResult(
@@ -298,43 +298,34 @@ class FaceMlService {
       '[FACE_VER] StoredB[0..4]: ${storedEmbeddingB.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
     );
 
-    double abSimilarity = cosineSimilarity(storedEmbeddingA, storedEmbeddingB);
-    debugPrint(
-      '[FACE_VER] A vs B similarity: ${abSimilarity.toStringAsFixed(4)} ${abSimilarity > 0.999 ? "WARNING IDENTICAL - REGISTRATION BUG" : "OK"}',
-    );
-
+    // FIXED: Compare ONLY against embedding_a (front average)
+    // This is what daily camera verification uses. embedding_b is no longer needed.
     final List<double> scoresA = liveEmbeddings
         .map((e) => cosineSimilarity(e, storedEmbeddingA))
         .toList();
 
-    final List<double> scoresB = liveEmbeddings
-        .map((e) => cosineSimilarity(e, storedEmbeddingB))
-        .toList();
-
     for (int i = 0; i < liveEmbeddings.length; i++) {
       debugPrint(
-        '[FACE_VER] Frame $i → scoreA=${scoresA[i].toStringAsFixed(4)} scoreB=${scoresB[i].toStringAsFixed(4)}',
+        '[FACE_VER] Frame $i → scoreA=${scoresA[i].toStringAsFixed(4)}',
       );
     }
 
     scoresA.sort();
-    scoresB.sort();
-
     final double medianA = scoresA[scoresA.length ~/ 2];
-    final double medianB = scoresB[scoresB.length ~/ 2];
 
-    if (medianA < 0.55 || medianB < 0.55) {
+    debugPrint(
+      '[FACE_VER] medianA=${medianA.toStringAsFixed(4)} threshold=$threshold',
+    );
+
+    if (medianA < 0.55) {
       return VerificationResult(
         isMatch: false,
-        score: math.min(medianA, medianB),
+        score: medianA,
         message: 'Face not recognized',
       );
     }
-    final double bestScore = math.max(medianA, medianB);
 
-    debugPrint(
-      '[FACE_VER] medianA=${medianA.toStringAsFixed(4)} medianB=${medianB.toStringAsFixed(4)} best=${bestScore.toStringAsFixed(4)} threshold=$threshold',
-    );
+    final double bestScore = medianA;
 
     if (bestScore >= threshold) {
       return VerificationResult(
