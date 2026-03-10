@@ -54,4 +54,4 @@ flutter:
     # ── MobileFaceNet model ─────────────────────────────
     # Drop your mobilefacenet.tflite file into assets/models/
     # before running flutter pub get
-    - assets/models/mobilefacenet.tflite
+    - assets/models/mobile_arcface_fp16.tflite

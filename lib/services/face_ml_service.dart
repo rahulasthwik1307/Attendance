@@ -1,7 +1,7 @@
 ﻿// lib/services/face_ml_service.dart
 //
 // Handles everything ML-related for face registration and verification:
-//   • MobileFaceNet embedding generation (128-dim, L2 normalized)
+//   • Mobile ArcFace FP16 embedding generation (512-dim, L2 normalized)
 //   • Image preprocessing: crop → 5-point align → resize 112x112
 //                          → histogram equalization → normalize [-1,1]
 //   • EAR (Eye Aspect Ratio) blink detection with personalized threshold
@@ -77,20 +77,20 @@ class FaceMlService {
       final options = InterpreterOptions()..threads = 2;
 
       _interpreter = await Interpreter.fromAsset(
-        'assets/models/mobilefacenet.tflite',
+        'assets/models/mobile_arcface_fp16.tflite',
         options: options,
       );
 
       _isInitialized = true;
     } catch (e) {
-      throw Exception('Failed to load MobileFaceNet model: $e');
+      throw Exception('Failed to load Mobile ArcFace FP16 model: $e');
     }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   // GENERATE EMBEDDING from a raw camera image bytes + detected face
   //
-  // Returns a 192-dim L2-normalized float vector (MobileFaceNet output).
+  // Returns a 512-dim L2-normalized float vector (Mobile ArcFace FP16 output).
   // Returns null if preprocessing fails (bad crop, no landmarks).
   // ─────────────────────────────────────────────────────────────────────────
   Future<List<double>?> generateEmbedding({
@@ -189,10 +189,21 @@ class FaceMlService {
 
     try {
       // ── Step 2: Decode JPEG ────────────────────────────────────────────
-      final img.Image? decoded = img.decodeJpg(jpegBytes);
+      img.Image? decoded = img.decodeJpg(jpegBytes);
       if (decoded == null) {
         debugPrint('[FACE_REG] generateEmbedding: JPEG decode failed');
         return null;
+      }
+
+      // ── Step 2b: Force RGB (3 channels) ────────────────────────────────
+      // Some devices produce grayscale or RGBA JPEGs which cause tensor
+      // shape mismatch with the model's [1,112,112,3] input.
+      if (decoded.numChannels == 1) {
+        debugPrint('[FACE_REG] Converting grayscale → RGB');
+        decoded = decoded.convert(numChannels: 3);
+      } else if (decoded.numChannels == 4) {
+        debugPrint('[FACE_REG] Converting RGBA → RGB');
+        decoded = decoded.convert(numChannels: 3);
       }
 
       // ── Step 3: Full preprocessing pipeline ───────────────────────────
@@ -205,11 +216,11 @@ class FaceMlService {
       // ── Step 4: Float32 tensor [-1, 1] ────────────────────────────────
       final Float32List tensor = _imageToTensor(processed);
 
-      // ── Step 5: Run MobileFaceNet ──────────────────────────────────────
-      // Output dimension: 192 (verified from model tensor shape).
+      // ── Step 5: Run Mobile ArcFace FP16 ─────────────────────────────────
+      // Output dimension: 512 (verified from model tensor shape).
       // Shape mismatch at runtime will throw — caught by the catch block.
-      final List<List<double>> output = [List.filled(192, 0.0)];
-      _interpreter!.run(tensor.reshape([1, 112, 112, 3]), output);
+      final List<List<double>> output = [List.filled(512, 0.0)];
+      _interpreter!.run(tensor.reshape([1, 3, 112, 112]), output); // NCHW
       debugPrint(
         '[FACE_REG] Model run complete, raw[0]=${output[0][0].toStringAsFixed(4)}',
       );
@@ -277,7 +288,7 @@ class FaceMlService {
     required List<List<double>> liveEmbeddings,
     required List<double> storedEmbeddingA,
     required List<double> storedEmbeddingB,
-    double threshold = 0.72,
+    double threshold = 0.55,
   }) {
     if (liveEmbeddings.isEmpty) {
       return VerificationResult(
@@ -453,7 +464,14 @@ class FaceMlService {
 
       // Step 4: Histogram equalization — normalizes lighting variation
       // This is what makes indoor registration → outdoor verification work
-      return _histogramEqualize(resized);
+      img.Image equalized = _histogramEqualize(resized);
+
+      // Step 5: Ensure final output is RGB (3 channels) for model input
+      if (equalized.numChannels != 3) {
+        debugPrint('[FACE_REG] _preprocess: forcing final image to 3-ch RGB');
+        equalized = equalized.convert(numChannels: 3);
+      }
+      return equalized;
     } catch (e) {
       return null;
     }
@@ -603,19 +621,26 @@ class FaceMlService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // TENSOR CONVERSION — pixel [0,255] → float32 [-1.0, 1.0]
+  // TENSOR CONVERSION — pixel [0,255] → float32 [-1.0, 1.0]  (NCHW layout)
   // Formula: (pixel - 127.5) / 128.0 per channel
+  // mobile_arcface_fp16.tflite expects NCHW: [1, 3, 112, 112]
   // ─────────────────────────────────────────────────────────────────────────
   Float32List _imageToTensor(img.Image face) {
-    final Float32List tensor = Float32List(1 * 112 * 112 * 3);
+    final Float32List tensor = Float32List(1 * 3 * 112 * 112); // NCHW
     int idx = 0;
 
-    for (int y = 0; y < 112; y++) {
-      for (int x = 0; x < 112; x++) {
-        final pixel = face.getPixel(x, y);
-        tensor[idx++] = (pixel.r.toDouble() - 127.5) / 128.0;
-        tensor[idx++] = (pixel.g.toDouble() - 127.5) / 128.0;
-        tensor[idx++] = (pixel.b.toDouble() - 127.5) / 128.0;
+    // Fill all R channel, then all G, then all B (channels-first order)
+    for (int c = 0; c < 3; c++) {
+      for (int y = 0; y < 112; y++) {
+        for (int x = 0; x < 112; x++) {
+          final pixel = face.getPixel(x, y);
+          final double value = c == 0
+              ? pixel.r.toDouble()
+              : c == 1
+              ? pixel.g.toDouble()
+              : pixel.b.toDouble();
+          tensor[idx++] = (value - 127.5) / 128.0;
+        }
       }
     }
 
