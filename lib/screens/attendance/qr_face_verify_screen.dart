@@ -150,6 +150,9 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     "Something went wrong": "Please try again",
   };
 
+  // Camera release guard — prevents new screen from grabbing camera before old one releases
+  static CameraController? _activeCameraController;
+
   @override
   void initState() {
     super.initState();
@@ -300,6 +303,20 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         // Zoom not supported on this device — continue anyway
       }
 
+      // Release any previously active controller before proceeding
+      if (_activeCameraController != null &&
+          _activeCameraController != _cameraController) {
+        try {
+          await _activeCameraController!.stopImageStream();
+        } catch (_) {}
+        await _activeCameraController!.dispose();
+        _activeCameraController = null;
+        await Future.delayed(const Duration(milliseconds: 400));
+      }
+      _activeCameraController = _cameraController;
+
+      if (!mounted) return;
+      await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
       setState(() {
         _cameraInitialized = true;
@@ -319,6 +336,9 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
       _setPhase(_Phase.positioning);
 
+      if (!mounted) return;
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
       if (mounted) setState(() => _cameraPreviewReady = true);
 
       _ringController.forward();
@@ -1348,10 +1368,20 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     _instructionDebounceTimer?.cancel();
 
     if (_cameraController != null && _cameraInitialized) {
-      try {
-        _cameraController!.stopImageStream();
-      } catch (_) {}
-      _cameraController!.dispose();
+      final controllerToDispose = _cameraController;
+      _cameraController = null;
+      Future(() async {
+        try {
+          await controllerToDispose!.stopImageStream();
+        } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 200));
+        try {
+          await controllerToDispose!.dispose();
+        } catch (_) {}
+        if (_activeCameraController == controllerToDispose) {
+          _activeCameraController = null;
+        }
+      });
     }
 
     _mlService.faceDetector.close();

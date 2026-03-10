@@ -313,16 +313,6 @@ class FaceMlService {
       );
     }
 
-    // NEW: Every frame must be at least 0.45 (prevents constant fake high scores)
-    final bool allFramesGood = scoresA.every((s) => s >= 0.45);
-    if (!allFramesGood) {
-      return VerificationResult(
-        isMatch: false,
-        score: scoresA.reduce((a, b) => math.min(a, b)),
-        message: 'Face not recognized',
-      );
-    }
-
     scoresA.sort();
     final double medianA = scoresA[scoresA.length ~/ 2];
 

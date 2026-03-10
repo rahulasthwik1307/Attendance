@@ -5,7 +5,7 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -20,8 +20,6 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../services/face_ml_service.dart';
 import '../../utils/app_styles.dart';
@@ -59,7 +57,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   late AnimationController _locationCardController;
   late Animation<double> _locationFade;
   bool _locationVerified = false;
-  bool _showModeSelection = false;
 
   // ─── Timer ring ─────────────────────────────────────────────────────────
   late AnimationController _timerPulseController;
@@ -99,7 +96,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   String _instructionSubtitle = 'Please wait';
   Color _borderColor = AppStyles.primaryBlue;
   bool _challengeVerified = false;
-  bool _isPhotoTestMode = false;
 
   // ─── Challenge verification timeout ─────────────────────────────────────
   DateTime? _challengeStartTime;
@@ -254,12 +250,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       if (!mounted) return;
       await _locationCardController.reverse();
 
-      // Pre-load embeddings for both paths
-      await _mlService.initialize();
-      await _loadEmbeddings();
-      if (!mounted) return;
-
-      setState(() => _showModeSelection = true);
+      // Auto-start camera immediately after location check passes
+      await _initializeCamera();
     });
   }
 
@@ -1376,198 +1368,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     });
   }
 
-  Widget _buildPhotoTestWaiting() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 24),
-          Text(
-            'Analyzing photo\u2026',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Colors.grey.shade700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildModeSelection() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Choose Verification Method',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF1A202C),
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'How would you like to verify your face?',
-              style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 40),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  setState(() => _showModeSelection = false);
-                  _initializeCamera();
-                },
-                icon: const Icon(Icons.camera_alt_rounded),
-                label: const Text(
-                  'Start Camera',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppStyles.primaryBlue,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  setState(() {
-                    _showModeSelection = false;
-                    _isPhotoTestMode = true;
-                  });
-                  _testWithPhoto();
-                },
-                icon: const Icon(Icons.upload_file_rounded),
-                label: const Text(
-                  'Upload Photo [TEST]',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                ),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppStyles.primaryBlue,
-                  side: const BorderSide(
-                    color: AppStyles.primaryBlue,
-                    width: 1.5,
-                  ),
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ─── TEMPORARY TEST ONLY — remove before production ───────────────────────
-  Future<void> _testWithPhoto() async {
-    try {
-      final picker = ImagePicker();
-      final XFile? file = await picker.pickImage(source: ImageSource.gallery);
-      if (file == null) return;
-
-      final Uint8List jpegBytes = await file.readAsBytes();
-
-      // Fix EXIF rotation before face detection
-      final img.Image? decoded = img.decodeImage(jpegBytes);
-      if (decoded == null) return;
-      final img.Image oriented = img.bakeOrientation(decoded);
-      final Uint8List fixedBytes = Uint8List.fromList(img.encodeJpg(oriented));
-
-      // Write to temp file so ML Kit can read it correctly
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/test_photo.jpg');
-      await tempFile.writeAsBytes(fixedBytes);
-
-      final inputImage = InputImage.fromFilePath(tempFile.path);
-      final List<Face> faces = await _mlService.faceDetector.processImage(
-        inputImage,
-      );
-
-      if (faces.isEmpty) {
-        debugPrint('[PHOTO_TEST] No face detected in photo');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('No face detected in photo'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-        return;
-      }
-
-      final Face face = faces.first;
-      final List<double>? emb = await _mlService.generateEmbedding(
-        jpegBytes: fixedBytes,
-        face: face,
-      );
-
-      if (emb == null) {
-        debugPrint('[PHOTO_TEST] Could not generate embedding from photo');
-        return;
-      }
-
-      if (_embeddingA == null || _embeddingB == null) {
-        debugPrint(
-          '[PHOTO_TEST] Stored embeddings not loaded yet \u2014 fetch failed',
-        );
-        return;
-      }
-
-      final result = _mlService.verifyFace(
-        liveEmbeddings: [emb],
-        storedEmbeddingA: _embeddingA!,
-        storedEmbeddingB: _embeddingB!,
-        threshold: 0.72,
-      );
-
-      debugPrint('[PHOTO_TEST] ═══════════════════════════════');
-      debugPrint('[PHOTO_TEST] Score: ${result.score.toStringAsFixed(4)}');
-      debugPrint('[PHOTO_TEST] Match: ${result.isMatch}');
-      debugPrint('[PHOTO_TEST] Message: ${result.message}');
-      debugPrint('[PHOTO_TEST] ═══════════════════════════════');
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch}',
-            ),
-            backgroundColor: result.isMatch ? Colors.green : Colors.red,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      }
-    } catch (e) {
-      debugPrint('[PHOTO_TEST] Error: $e');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isPhotoTestMode = false;
-          _showModeSelection = true;
-        });
-      }
-    }
-  }
-
   // ─────────────────────────────────────────────────────────────────────────
   // DISPOSE
   // ─────────────────────────────────────────────────────────────────────────
@@ -1712,728 +1512,637 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
               // ── Camera Preview — uses Expanded to fill available space ──
               Expanded(
-                child:
-                    _showModeSelection &&
-                        !_cameraPreviewReady &&
-                        !_isPhotoTestMode
-                    ? _buildModeSelection()
-                    : _isPhotoTestMode
-                    ? _buildPhotoTestWaiting()
-                    : AnimatedOpacity(
-                        opacity: _locationVerified ? 1.0 : 0.0,
-                        duration: const Duration(milliseconds: 400),
-                        curve: Curves.easeIn,
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            final double availW = constraints.maxWidth;
-                            final double availH = constraints.maxHeight;
-                            final double circleSize = availW * 0.80;
-                            final double circleTop =
-                                availH * 0.40 - circleSize / 2;
+                child: AnimatedOpacity(
+                  opacity: _locationVerified ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 400),
+                  curve: Curves.easeIn,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final double availW = constraints.maxWidth;
+                      final double availH = constraints.maxHeight;
+                      final double circleSize = availW * 0.80;
+                      final double circleTop = availH * 0.40 - circleSize / 2;
 
-                            _uiCircleSize = circleSize;
-                            _uiAvailW = availW;
-                            _uiAvailH = availH;
+                      _uiCircleSize = circleSize;
+                      _uiAvailW = availW;
+                      _uiAvailH = availH;
 
-                            double offsetX = 0;
-                            double offsetY = 0;
-                            if (_cameraInitialized && _bufFaceCX.isNotEmpty) {
-                              final Size? previewSize =
-                                  _cameraController?.value.previewSize;
-                              final double sensorW = previewSize?.height ?? 3.0;
-                              if (sensorW > 0) {
-                                final double scale = availW / sensorW;
-                                final double faceUIX =
-                                    _bufAvg(_bufFaceCX) * scale;
-                                final double faceUIY =
-                                    _bufAvg(_bufFaceCY) * scale;
-                                final double circleUIX = availW / 2;
-                                final double circleUIY =
-                                    circleTop - 100 + circleSize / 2;
+                      double offsetX = 0;
+                      double offsetY = 0;
+                      if (_cameraInitialized && _bufFaceCX.isNotEmpty) {
+                        final Size? previewSize =
+                            _cameraController?.value.previewSize;
+                        final double sensorW = previewSize?.height ?? 3.0;
+                        if (sensorW > 0) {
+                          final double scale = availW / sensorW;
+                          final double faceUIX = _bufAvg(_bufFaceCX) * scale;
+                          final double faceUIY = _bufAvg(_bufFaceCY) * scale;
+                          final double circleUIX = availW / 2;
+                          final double circleUIY =
+                              circleTop - 100 + circleSize / 2;
 
-                                offsetX = (faceUIX - circleUIX).clamp(
-                                  -6.0,
-                                  6.0,
-                                );
-                                offsetY = (faceUIY - circleUIY).clamp(
-                                  -6.0,
-                                  6.0,
-                                );
-                              }
-                            }
+                          offsetX = (faceUIX - circleUIX).clamp(-6.0, 6.0);
+                          offsetY = (faceUIY - circleUIY).clamp(-6.0, 6.0);
+                        }
+                      }
 
-                            return SizedBox(
-                              width: availW,
-                              height: availH,
+                      return SizedBox(
+                        width: availW,
+                        height: availH,
+                        child: Stack(
+                          children: [
+                            // Background
+                            Positioned.fill(
+                              child: Container(
+                                color: AppStyles.backgroundLight,
+                              ),
+                            ),
+
+                            // Face Interactive Overlay Group
+                            AnimatedPositioned(
+                              duration: const Duration(milliseconds: 120),
+                              curve: Curves.easeOut,
+                              left: offsetX,
+                              top: offsetY,
+                              right: -offsetX,
+                              bottom: -offsetY,
                               child: Stack(
                                 children: [
-                                  // Background
-                                  Positioned.fill(
-                                    child: Container(
-                                      color: AppStyles.backgroundLight,
-                                    ),
-                                  ),
-
-                                  // Face Interactive Overlay Group
-                                  AnimatedPositioned(
-                                    duration: const Duration(milliseconds: 120),
-                                    curve: Curves.easeOut,
-                                    left: offsetX,
-                                    top: offsetY,
-                                    right: -offsetX,
-                                    bottom: -offsetY,
-                                    child: Stack(
-                                      children: [
-                                        // Circle clip for the camera preview
-                                        Positioned(
-                                          left: (availW - circleSize) / 2,
-                                          top: circleTop - 100,
-                                          child: ClipOval(
-                                            child: SizedBox(
-                                              width: circleSize,
-                                              height: circleSize,
-                                              child: OverflowBox(
-                                                maxWidth: availW,
-                                                maxHeight: availH,
-                                                child: Transform.translate(
-                                                  offset: Offset(0, -circleTop),
-                                                  child: Stack(
-                                                    children: [
-                                                      _buildCameraPreview(
-                                                        availW,
-                                                      ),
-                                                      // Scan line inside clip
-                                                      Positioned.fill(
-                                                        child: AnimatedBuilder(
-                                                          animation:
-                                                              _scanLineController,
-                                                          builder: (context, child) {
-                                                            return CustomPaint(
-                                                              size: Size(
-                                                                circleSize,
-                                                                circleSize,
-                                                              ),
-                                                              painter: _ScanLinePainter(
-                                                                scanValue:
-                                                                    _scanLineController
-                                                                        .value,
-                                                                circleSize:
-                                                                    circleSize,
-                                                              ),
-                                                            );
-                                                          },
-                                                        ),
-                                                      ),
-                                                      Positioned.fill(
-                                                        child: AnimatedOpacity(
-                                                          duration:
-                                                              const Duration(
-                                                                milliseconds:
-                                                                    200,
-                                                              ),
-                                                          curve: Curves.easeOut,
-                                                          opacity:
-                                                              (_phase ==
-                                                                      _Phase
-                                                                          .processing ||
-                                                                  _phase ==
-                                                                      _Phase
-                                                                          .done)
-                                                              ? 0.12
-                                                              : 0.0,
-                                                          child: Container(
-                                                            color: Colors.black,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-
-                                        // Pulsing circle border + progress
-                                        Positioned(
-                                          left: (availW - circleSize) / 2,
-                                          top: circleTop - 100,
-                                          child: ScaleTransition(
-                                            scale:
-                                                Tween<double>(
-                                                  begin: 1.0,
-                                                  end: 1.05,
-                                                ).animate(
-                                                  CurvedAnimation(
-                                                    parent:
-                                                        _successBounceController,
-                                                    curve: Curves.elasticOut,
-                                                  ),
-                                                ),
-                                            child: TweenAnimationBuilder<double>(
-                                              tween: Tween<double>(
-                                                begin: 0.0,
-                                                end:
-                                                    _captureProgress /
-                                                    _framesPerPhase,
-                                              ),
-                                              duration: const Duration(
-                                                milliseconds: 800,
-                                              ),
-                                              curve: Curves.elasticOut,
-                                              builder:
-                                                  (
-                                                    context,
-                                                    animatedProgress,
-                                                    child,
-                                                  ) {
-                                                    double tilt = 0.0;
-                                                    if (animatedProgress >
-                                                            0.4 &&
-                                                        animatedProgress <
-                                                            0.9) {
-                                                      tilt =
-                                                          math.sin(
-                                                            (animatedProgress -
-                                                                    0.4) *
-                                                                math.pi *
-                                                                4,
-                                                          ) *
-                                                          0.03;
-                                                    }
-                                                    return Transform.rotate(
-                                                      angle: tilt,
-                                                      child: AnimatedBuilder(
-                                                        animation:
-                                                            _pulseController,
-                                                        builder: (context, _) {
-                                                          return CustomPaint(
-                                                            size: Size(
-                                                              circleSize,
-                                                              circleSize,
-                                                            ),
-                                                            painter: _BorderPainter(
-                                                              pulseValue:
-                                                                  _pulseController
-                                                                      .value,
-                                                              baseColor:
-                                                                  _borderColor,
-                                                              progress:
-                                                                  animatedProgress,
-                                                              phase: _phase,
-                                                              flowValue: 0.0,
-                                                            ),
-                                                          );
-                                                        },
-                                                      ),
-                                                    );
-                                                  },
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-
-                                  // Fill Light Overlay
-                                  Positioned.fill(
-                                    child: AnimatedOpacity(
-                                      duration: const Duration(
-                                        milliseconds: 600,
-                                      ),
-                                      curve: Curves.easeOut,
-                                      opacity: _phase == _Phase.capturing
-                                          ? 0.3
-                                          : 0.0,
-                                      child: CustomPaint(
-                                        painter: _FillLightPainter(
-                                          circleCenter: Offset(
-                                            availW / 2,
-                                            (circleTop - 100) + circleSize / 2,
-                                          ),
-                                          circleRadius: circleSize / 2,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-
-                                  // Studio Flash on Capture
-                                  Positioned.fill(
-                                    child: AnimatedOpacity(
-                                      duration: const Duration(
-                                        milliseconds: 100,
-                                      ),
-                                      curve: Curves.easeOut,
-                                      opacity: _showFlash ? 0.3 : 0.0,
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          gradient: RadialGradient(
-                                            center: FractionalOffset(
-                                              0.5,
-                                              ((circleTop - 100) +
-                                                      circleSize / 2) /
-                                                  availH,
-                                            ),
-                                            radius: 0.8,
-                                            colors: [
-                                              Colors.white,
-                                              Colors.white.withValues(
-                                                alpha: 0.0,
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-
-                                  // Confetti Particle Burst
+                                  // Circle clip for the camera preview
                                   Positioned(
                                     left: (availW - circleSize) / 2,
                                     top: circleTop - 100,
-                                    child: AnimatedBuilder(
-                                      animation: _particleController,
-                                      builder: (context, _) => CustomPaint(
-                                        size: Size(circleSize, circleSize),
-                                        painter: _ParticleBurstPainter(
-                                          _particleController.value,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-
-                                  // ── Dynamic Layout Column ──
-                                  Positioned(
-                                    top: (circleTop - 100) + circleSize + 32,
-                                    left: 16,
-                                    right: 16,
-                                    child: AnimatedOpacity(
-                                      opacity: _cameraPreviewReady ? 1.0 : 0.0,
-                                      duration: const Duration(
-                                        milliseconds: 500,
-                                      ),
-                                      curve: Curves.easeIn,
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          // Single timer slot — swaps between 60s ring and blink countdown
-                                          SizedBox(
-                                            height: 56,
-                                            child: Center(
-                                              child: AnimatedSwitcher(
-                                                duration: const Duration(
-                                                  milliseconds: 300,
-                                                ),
-                                                child:
-                                                    (_phase ==
-                                                            _Phase.liveness &&
-                                                        (_instructionTitle
-                                                                .contains(
-                                                                  'Blink',
-                                                                ) ||
-                                                            _instructionSubtitle
-                                                                .contains(
-                                                                  'Blink',
-                                                                )) &&
-                                                        !_challengeVerified)
-                                                    ? SizedBox(
-                                                        key: const ValueKey(
-                                                          'blink',
-                                                        ),
-                                                        width: 50,
-                                                        height: 50,
-                                                        child: AnimatedBuilder(
-                                                          animation:
-                                                              _blinkCountdownController,
-                                                          builder: (context, child) {
-                                                            final double
-                                                            remaining =
-                                                                3.0 *
-                                                                (1.0 -
-                                                                    _blinkCountdownController
-                                                                        .value);
-                                                            return Stack(
-                                                              alignment:
-                                                                  Alignment
-                                                                      .center,
-                                                              children: [
-                                                                SizedBox(
-                                                                  width: 50,
-                                                                  height: 50,
-                                                                  child: CircularProgressIndicator(
-                                                                    value:
-                                                                        1.0 -
-                                                                        _blinkCountdownController
-                                                                            .value,
-                                                                    strokeWidth:
-                                                                        4.0,
-                                                                    color: Colors
-                                                                        .orangeAccent,
-                                                                    backgroundColor: Colors
-                                                                        .orangeAccent
-                                                                        .withValues(
-                                                                          alpha:
-                                                                              0.15,
-                                                                        ),
-                                                                  ),
-                                                                ),
-                                                                AnimatedSwitcher(
-                                                                  duration:
-                                                                      const Duration(
-                                                                        milliseconds:
-                                                                            300,
-                                                                      ),
-                                                                  transitionBuilder:
-                                                                      (
-                                                                        Widget
-                                                                        child,
-                                                                        Animation<
-                                                                          double
-                                                                        >
-                                                                        animation,
-                                                                      ) {
-                                                                        return ScaleTransition(
-                                                                          scale:
-                                                                              animation,
-                                                                          child: FadeTransition(
-                                                                            opacity:
-                                                                                animation,
-                                                                            child:
-                                                                                child,
-                                                                          ),
-                                                                        );
-                                                                      },
-                                                                  child: Text(
-                                                                    '${remaining.ceil()}',
-                                                                    key: ValueKey<int>(
-                                                                      remaining
-                                                                          .ceil(),
-                                                                    ),
-                                                                    style: const TextStyle(
-                                                                      fontSize:
-                                                                          18,
-                                                                      fontWeight:
-                                                                          FontWeight
-                                                                              .w800,
-                                                                      color: Colors
-                                                                          .orangeAccent,
-                                                                    ),
-                                                                  ),
-                                                                ),
-                                                              ],
-                                                            );
-                                                          },
-                                                        ),
-                                                      )
-                                                    : ScaleTransition(
-                                                        key: const ValueKey(
-                                                          'ring',
-                                                        ),
-                                                        scale: _timerPulseAnim,
-                                                        child: AnimatedBuilder(
-                                                          animation:
-                                                              _ringController,
-                                                          builder: (context, _) {
-                                                            return SizedBox(
-                                                              width: 44,
-                                                              height: 44,
-                                                              child: CustomPaint(
-                                                                painter: _MiniRingPainter(
-                                                                  progress:
-                                                                      _ringProgress
-                                                                          .value,
-                                                                  color:
-                                                                      timerColor,
-                                                                ),
-                                                                child: Center(
-                                                                  child: Text(
-                                                                    '${_secondsRemaining}s',
-                                                                    style: TextStyle(
-                                                                      fontSize:
-                                                                          12,
-                                                                      fontWeight:
-                                                                          FontWeight
-                                                                              .w800,
-                                                                      color:
-                                                                          timerColor,
-                                                                    ),
-                                                                  ),
-                                                                ),
-                                                              ),
-                                                            );
-                                                          },
-                                                        ),
-                                                      ),
-                                              ),
-                                            ),
-                                          ),
-
-                                          const SizedBox(height: 6),
-
-                                          // Attempt counter
-                                          AnimatedOpacity(
-                                            duration: const Duration(
-                                              milliseconds: 400,
-                                            ),
-                                            opacity: _cameraPreviewReady
-                                                ? 1.0
-                                                : 0.0,
-                                            child: Text(
-                                              'Attempt $_attemptCount of 3',
-                                              style: TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w500,
-                                                color: Colors.grey.shade500,
-                                              ),
-                                            ),
-                                          ),
-
-                                          const SizedBox(height: 10),
-
-                                          // HUD strip (Liveness → Scanning → Done)
-                                          if (_phase != _Phase.initializing &&
-                                              _phase != _Phase.processing &&
-                                              _phase != _Phase.done)
-                                            ClipRRect(
-                                              borderRadius:
-                                                  BorderRadius.circular(16),
-                                              child: BackdropFilter(
-                                                filter: ImageFilter.blur(
-                                                  sigmaX: 10,
-                                                  sigmaY: 10,
-                                                ),
-                                                child: Container(
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: 16,
-                                                        vertical: 12,
-                                                      ),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.black54,
-                                                    gradient: LinearGradient(
-                                                      begin: Alignment.topLeft,
-                                                      end:
-                                                          Alignment.bottomRight,
-                                                      colors: [
-                                                        Colors.black.withValues(
-                                                          alpha: 0.6,
-                                                        ),
-                                                        Colors.transparent,
-                                                      ],
-                                                    ),
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          16,
-                                                        ),
-                                                    border: Border.all(
-                                                      color: Colors.white
-                                                          .withValues(
-                                                            alpha: 0.5,
-                                                          ),
-                                                      width: 0.5,
-                                                    ),
-                                                  ),
+                                    child: ClipOval(
+                                      child: SizedBox(
+                                        width: circleSize,
+                                        height: circleSize,
+                                        child: OverflowBox(
+                                          maxWidth: availW,
+                                          maxHeight: availH,
+                                          child: Transform.translate(
+                                            offset: Offset(0, -circleTop),
+                                            child: Stack(
+                                              children: [
+                                                _buildCameraPreview(availW),
+                                                // Scan line inside clip
+                                                Positioned.fill(
                                                   child: AnimatedBuilder(
-                                                    animation: _pulseController,
-                                                    builder: (context, _) {
-                                                      return Row(
-                                                        mainAxisAlignment:
-                                                            MainAxisAlignment
-                                                                .spaceBetween,
-                                                        children: [
-                                                          _NeonChip(
-                                                            label: 'Liveness',
-                                                            isActive:
-                                                                _phase ==
-                                                                    _Phase
-                                                                        .positioning ||
-                                                                _phase ==
-                                                                    _Phase
-                                                                        .liveness,
-                                                            isDone:
-                                                                _challengeVerified,
-                                                            pulseValue:
-                                                                _pulseController
-                                                                    .value,
-                                                          ),
-                                                          _ShimmerLine(
-                                                            isDone:
-                                                                _challengeVerified,
-                                                            pulseController:
-                                                                _pulseController,
-                                                          ),
-                                                          _NeonChip(
-                                                            label: 'Scanning',
-                                                            isActive:
-                                                                _phase ==
-                                                                _Phase
-                                                                    .capturing,
-                                                            isDone:
-                                                                _liveEmbeddings
-                                                                    .length >=
-                                                                _framesPerPhase,
-                                                            pulseValue:
-                                                                _pulseController
-                                                                    .value,
-                                                          ),
-                                                          _ShimmerLine(
-                                                            isDone:
-                                                                _liveEmbeddings
-                                                                    .length >=
-                                                                _framesPerPhase,
-                                                            pulseController:
-                                                                _pulseController,
-                                                          ),
-                                                          _NeonChip(
-                                                            label: 'Done',
-                                                            isActive:
-                                                                _phase ==
-                                                                _Phase.done,
-                                                            isDone:
-                                                                _phase ==
-                                                                _Phase.done,
-                                                            pulseValue:
-                                                                _pulseController
-                                                                    .value,
-                                                          ),
-                                                        ],
+                                                    animation:
+                                                        _scanLineController,
+                                                    builder: (context, child) {
+                                                      return CustomPaint(
+                                                        size: Size(
+                                                          circleSize,
+                                                          circleSize,
+                                                        ),
+                                                        painter: _ScanLinePainter(
+                                                          scanValue:
+                                                              _scanLineController
+                                                                  .value,
+                                                          circleSize:
+                                                              circleSize,
+                                                        ),
                                                       );
                                                     },
                                                   ),
                                                 ),
-                                              ),
-                                            ),
-
-                                          const SizedBox(height: 18),
-
-                                          // Instruction card
-                                          SlideTransition(
-                                            position:
-                                                Tween<Offset>(
-                                                  begin: const Offset(0, 0.06),
-                                                  end: const Offset(0, 0),
-                                                ).animate(
-                                                  CurvedAnimation(
-                                                    parent: _textFadeController,
+                                                Positioned.fill(
+                                                  child: AnimatedOpacity(
+                                                    duration: const Duration(
+                                                      milliseconds: 200,
+                                                    ),
                                                     curve: Curves.easeOut,
-                                                  ),
-                                                ),
-                                            child: FadeTransition(
-                                              opacity: _textFadeController,
-                                              child: Container(
-                                                decoration: BoxDecoration(
-                                                  color: Colors.white,
-                                                  borderRadius:
-                                                      BorderRadius.circular(16),
-                                                  border: Border.all(
-                                                    color:
-                                                        _phase == _Phase.error
-                                                        ? AppStyles.errorRed
-                                                              .withValues(
-                                                                alpha: 0.3,
-                                                              )
-                                                        : AppStyles.primaryBlue
-                                                              .withValues(
-                                                                alpha: 0.1,
-                                                              ),
-                                                    width: 1.5,
-                                                  ),
-                                                  boxShadow: [
-                                                    BoxShadow(
-                                                      color: Colors.black
-                                                          .withValues(
-                                                            alpha: 0.05,
-                                                          ),
-                                                      blurRadius: 10,
-                                                      offset: const Offset(
-                                                        0,
-                                                        4,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                                padding: EdgeInsets.symmetric(
-                                                  horizontal: 16,
-                                                  vertical:
-                                                      _instructionTitle ==
-                                                          'Move to the center of the circle'
-                                                      ? 6
-                                                      : 10,
-                                                ),
-                                                child: Column(
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment.center,
-                                                  children: [
-                                                    Text(
-                                                      _instructionTitle,
-                                                      textAlign:
-                                                          TextAlign.center,
-                                                      style: TextStyle(
-                                                        fontSize: 20,
-                                                        fontWeight:
-                                                            FontWeight.w700,
-                                                        color:
+                                                    opacity:
+                                                        (_phase ==
+                                                                _Phase
+                                                                    .processing ||
                                                             _phase ==
-                                                                _Phase.error
-                                                            ? AppStyles.errorRed
-                                                            : AppStyles
-                                                                  .primaryBlue,
-                                                      ),
+                                                                _Phase.done)
+                                                        ? 0.12
+                                                        : 0.0,
+                                                    child: Container(
+                                                      color: Colors.black,
                                                     ),
-                                                    _instructionTitle ==
-                                                            'Move to the center of the circle'
-                                                        ? const SizedBox.shrink()
-                                                        : const SizedBox(
-                                                            height: 2,
-                                                          ),
-                                                    Text(
-                                                      _instructionSubtitle,
-                                                      textAlign:
-                                                          TextAlign.center,
-                                                      style: TextStyle(
-                                                        fontSize: 14,
-                                                        color: Colors
-                                                            .grey
-                                                            .shade600,
-                                                        fontWeight:
-                                                            FontWeight.w500,
-                                                      ),
-                                                    ),
-                                                    if (_phase ==
-                                                        _Phase.error) ...[
-                                                      const SizedBox(
-                                                        height: 16,
-                                                      ),
-                                                      TextButton(
-                                                        onPressed: _onRetry,
-                                                        child: const Text(
-                                                          'Try Again',
-                                                          style: TextStyle(
-                                                            color: AppStyles
-                                                                .primaryBlue,
-                                                            fontWeight:
-                                                                FontWeight.w600,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ],
+                                                  ),
                                                 ),
-                                              ),
+                                              ],
                                             ),
                                           ),
-                                        ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+
+                                  // Pulsing circle border + progress
+                                  Positioned(
+                                    left: (availW - circleSize) / 2,
+                                    top: circleTop - 100,
+                                    child: ScaleTransition(
+                                      scale:
+                                          Tween<double>(
+                                            begin: 1.0,
+                                            end: 1.05,
+                                          ).animate(
+                                            CurvedAnimation(
+                                              parent: _successBounceController,
+                                              curve: Curves.elasticOut,
+                                            ),
+                                          ),
+                                      child: TweenAnimationBuilder<double>(
+                                        tween: Tween<double>(
+                                          begin: 0.0,
+                                          end:
+                                              _captureProgress /
+                                              _framesPerPhase,
+                                        ),
+                                        duration: const Duration(
+                                          milliseconds: 800,
+                                        ),
+                                        curve: Curves.elasticOut,
+                                        builder:
+                                            (context, animatedProgress, child) {
+                                              double tilt = 0.0;
+                                              if (animatedProgress > 0.4 &&
+                                                  animatedProgress < 0.9) {
+                                                tilt =
+                                                    math.sin(
+                                                      (animatedProgress - 0.4) *
+                                                          math.pi *
+                                                          4,
+                                                    ) *
+                                                    0.03;
+                                              }
+                                              return Transform.rotate(
+                                                angle: tilt,
+                                                child: AnimatedBuilder(
+                                                  animation: _pulseController,
+                                                  builder: (context, _) {
+                                                    return CustomPaint(
+                                                      size: Size(
+                                                        circleSize,
+                                                        circleSize,
+                                                      ),
+                                                      painter: _BorderPainter(
+                                                        pulseValue:
+                                                            _pulseController
+                                                                .value,
+                                                        baseColor: _borderColor,
+                                                        progress:
+                                                            animatedProgress,
+                                                        phase: _phase,
+                                                        flowValue: 0.0,
+                                                      ),
+                                                    );
+                                                  },
+                                                ),
+                                              );
+                                            },
                                       ),
                                     ),
                                   ),
                                 ],
                               ),
-                            );
-                          },
+                            ),
+
+                            // Fill Light Overlay
+                            Positioned.fill(
+                              child: AnimatedOpacity(
+                                duration: const Duration(milliseconds: 600),
+                                curve: Curves.easeOut,
+                                opacity: _phase == _Phase.capturing ? 0.3 : 0.0,
+                                child: CustomPaint(
+                                  painter: _FillLightPainter(
+                                    circleCenter: Offset(
+                                      availW / 2,
+                                      (circleTop - 100) + circleSize / 2,
+                                    ),
+                                    circleRadius: circleSize / 2,
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                            // Studio Flash on Capture
+                            Positioned.fill(
+                              child: AnimatedOpacity(
+                                duration: const Duration(milliseconds: 100),
+                                curve: Curves.easeOut,
+                                opacity: _showFlash ? 0.3 : 0.0,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    gradient: RadialGradient(
+                                      center: FractionalOffset(
+                                        0.5,
+                                        ((circleTop - 100) + circleSize / 2) /
+                                            availH,
+                                      ),
+                                      radius: 0.8,
+                                      colors: [
+                                        Colors.white,
+                                        Colors.white.withValues(alpha: 0.0),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                            // Confetti Particle Burst
+                            Positioned(
+                              left: (availW - circleSize) / 2,
+                              top: circleTop - 100,
+                              child: AnimatedBuilder(
+                                animation: _particleController,
+                                builder: (context, _) => CustomPaint(
+                                  size: Size(circleSize, circleSize),
+                                  painter: _ParticleBurstPainter(
+                                    _particleController.value,
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                            // ── Dynamic Layout Column ──
+                            Positioned(
+                              top: (circleTop - 100) + circleSize + 32,
+                              left: 16,
+                              right: 16,
+                              child: AnimatedOpacity(
+                                opacity: _cameraPreviewReady ? 1.0 : 0.0,
+                                duration: const Duration(milliseconds: 500),
+                                curve: Curves.easeIn,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    // Single timer slot — swaps between 60s ring and blink countdown
+                                    SizedBox(
+                                      height: 56,
+                                      child: Center(
+                                        child: AnimatedSwitcher(
+                                          duration: const Duration(
+                                            milliseconds: 300,
+                                          ),
+                                          child:
+                                              (_phase == _Phase.liveness &&
+                                                  (_instructionTitle.contains(
+                                                        'Blink',
+                                                      ) ||
+                                                      _instructionSubtitle
+                                                          .contains('Blink')) &&
+                                                  !_challengeVerified)
+                                              ? SizedBox(
+                                                  key: const ValueKey('blink'),
+                                                  width: 50,
+                                                  height: 50,
+                                                  child: AnimatedBuilder(
+                                                    animation:
+                                                        _blinkCountdownController,
+                                                    builder: (context, child) {
+                                                      final double remaining =
+                                                          3.0 *
+                                                          (1.0 -
+                                                              _blinkCountdownController
+                                                                  .value);
+                                                      return Stack(
+                                                        alignment:
+                                                            Alignment.center,
+                                                        children: [
+                                                          SizedBox(
+                                                            width: 50,
+                                                            height: 50,
+                                                            child: CircularProgressIndicator(
+                                                              value:
+                                                                  1.0 -
+                                                                  _blinkCountdownController
+                                                                      .value,
+                                                              strokeWidth: 4.0,
+                                                              color: Colors
+                                                                  .orangeAccent,
+                                                              backgroundColor: Colors
+                                                                  .orangeAccent
+                                                                  .withValues(
+                                                                    alpha: 0.15,
+                                                                  ),
+                                                            ),
+                                                          ),
+                                                          AnimatedSwitcher(
+                                                            duration:
+                                                                const Duration(
+                                                                  milliseconds:
+                                                                      300,
+                                                                ),
+                                                            transitionBuilder:
+                                                                (
+                                                                  Widget child,
+                                                                  Animation<
+                                                                    double
+                                                                  >
+                                                                  animation,
+                                                                ) {
+                                                                  return ScaleTransition(
+                                                                    scale:
+                                                                        animation,
+                                                                    child: FadeTransition(
+                                                                      opacity:
+                                                                          animation,
+                                                                      child:
+                                                                          child,
+                                                                    ),
+                                                                  );
+                                                                },
+                                                            child: Text(
+                                                              '${remaining.ceil()}',
+                                                              key:
+                                                                  ValueKey<int>(
+                                                                    remaining
+                                                                        .ceil(),
+                                                                  ),
+                                                              style: const TextStyle(
+                                                                fontSize: 18,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w800,
+                                                                color: Colors
+                                                                    .orangeAccent,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      );
+                                                    },
+                                                  ),
+                                                )
+                                              : ScaleTransition(
+                                                  key: const ValueKey('ring'),
+                                                  scale: _timerPulseAnim,
+                                                  child: AnimatedBuilder(
+                                                    animation: _ringController,
+                                                    builder: (context, _) {
+                                                      return SizedBox(
+                                                        width: 44,
+                                                        height: 44,
+                                                        child: CustomPaint(
+                                                          painter:
+                                                              _MiniRingPainter(
+                                                                progress:
+                                                                    _ringProgress
+                                                                        .value,
+                                                                color:
+                                                                    timerColor,
+                                                              ),
+                                                          child: Center(
+                                                            child: Text(
+                                                              '${_secondsRemaining}s',
+                                                              style: TextStyle(
+                                                                fontSize: 12,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w800,
+                                                                color:
+                                                                    timerColor,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+                                                ),
+                                        ),
+                                      ),
+                                    ),
+
+                                    const SizedBox(height: 6),
+
+                                    // Attempt counter
+                                    AnimatedOpacity(
+                                      duration: const Duration(
+                                        milliseconds: 400,
+                                      ),
+                                      opacity: _cameraPreviewReady ? 1.0 : 0.0,
+                                      child: Text(
+                                        'Attempt $_attemptCount of 3',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w500,
+                                          color: Colors.grey.shade500,
+                                        ),
+                                      ),
+                                    ),
+
+                                    const SizedBox(height: 10),
+
+                                    // HUD strip (Liveness → Scanning → Done)
+                                    if (_phase != _Phase.initializing &&
+                                        _phase != _Phase.processing &&
+                                        _phase != _Phase.done)
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(16),
+                                        child: BackdropFilter(
+                                          filter: ImageFilter.blur(
+                                            sigmaX: 10,
+                                            sigmaY: 10,
+                                          ),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 16,
+                                              vertical: 12,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black54,
+                                              gradient: LinearGradient(
+                                                begin: Alignment.topLeft,
+                                                end: Alignment.bottomRight,
+                                                colors: [
+                                                  Colors.black.withValues(
+                                                    alpha: 0.6,
+                                                  ),
+                                                  Colors.transparent,
+                                                ],
+                                              ),
+                                              borderRadius:
+                                                  BorderRadius.circular(16),
+                                              border: Border.all(
+                                                color: Colors.white.withValues(
+                                                  alpha: 0.5,
+                                                ),
+                                                width: 0.5,
+                                              ),
+                                            ),
+                                            child: AnimatedBuilder(
+                                              animation: _pulseController,
+                                              builder: (context, _) {
+                                                return Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment
+                                                          .spaceBetween,
+                                                  children: [
+                                                    _NeonChip(
+                                                      label: 'Liveness',
+                                                      isActive:
+                                                          _phase ==
+                                                              _Phase
+                                                                  .positioning ||
+                                                          _phase ==
+                                                              _Phase.liveness,
+                                                      isDone:
+                                                          _challengeVerified,
+                                                      pulseValue:
+                                                          _pulseController
+                                                              .value,
+                                                    ),
+                                                    _ShimmerLine(
+                                                      isDone:
+                                                          _challengeVerified,
+                                                      pulseController:
+                                                          _pulseController,
+                                                    ),
+                                                    _NeonChip(
+                                                      label: 'Scanning',
+                                                      isActive:
+                                                          _phase ==
+                                                          _Phase.capturing,
+                                                      isDone:
+                                                          _liveEmbeddings
+                                                              .length >=
+                                                          _framesPerPhase,
+                                                      pulseValue:
+                                                          _pulseController
+                                                              .value,
+                                                    ),
+                                                    _ShimmerLine(
+                                                      isDone:
+                                                          _liveEmbeddings
+                                                              .length >=
+                                                          _framesPerPhase,
+                                                      pulseController:
+                                                          _pulseController,
+                                                    ),
+                                                    _NeonChip(
+                                                      label: 'Done',
+                                                      isActive:
+                                                          _phase == _Phase.done,
+                                                      isDone:
+                                                          _phase == _Phase.done,
+                                                      pulseValue:
+                                                          _pulseController
+                                                              .value,
+                                                    ),
+                                                  ],
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+
+                                    const SizedBox(height: 18),
+
+                                    // Instruction card
+                                    SlideTransition(
+                                      position:
+                                          Tween<Offset>(
+                                            begin: const Offset(0, 0.06),
+                                            end: const Offset(0, 0),
+                                          ).animate(
+                                            CurvedAnimation(
+                                              parent: _textFadeController,
+                                              curve: Curves.easeOut,
+                                            ),
+                                          ),
+                                      child: FadeTransition(
+                                        opacity: _textFadeController,
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            color: Colors.white,
+                                            borderRadius: BorderRadius.circular(
+                                              16,
+                                            ),
+                                            border: Border.all(
+                                              color: _phase == _Phase.error
+                                                  ? AppStyles.errorRed
+                                                        .withValues(alpha: 0.3)
+                                                  : AppStyles.primaryBlue
+                                                        .withValues(alpha: 0.1),
+                                              width: 1.5,
+                                            ),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: Colors.black.withValues(
+                                                  alpha: 0.05,
+                                                ),
+                                                blurRadius: 10,
+                                                offset: const Offset(0, 4),
+                                              ),
+                                            ],
+                                          ),
+                                          padding: EdgeInsets.symmetric(
+                                            horizontal: 16,
+                                            vertical:
+                                                _instructionTitle ==
+                                                    'Move to the center of the circle'
+                                                ? 6
+                                                : 10,
+                                          ),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Text(
+                                                _instructionTitle,
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(
+                                                  fontSize: 20,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: _phase == _Phase.error
+                                                      ? AppStyles.errorRed
+                                                      : AppStyles.primaryBlue,
+                                                ),
+                                              ),
+                                              _instructionTitle ==
+                                                      'Move to the center of the circle'
+                                                  ? const SizedBox.shrink()
+                                                  : const SizedBox(height: 2),
+                                              Text(
+                                                _instructionSubtitle,
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  color: Colors.grey.shade600,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                              if (_phase == _Phase.error) ...[
+                                                const SizedBox(height: 16),
+                                                TextButton(
+                                                  onPressed: _onRetry,
+                                                  child: const Text(
+                                                    'Try Again',
+                                                    style: TextStyle(
+                                                      color:
+                                                          AppStyles.primaryBlue,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
+                      );
+                    },
+                  ),
+                ),
               ),
             ],
           ),
