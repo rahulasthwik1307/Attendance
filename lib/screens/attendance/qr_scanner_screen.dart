@@ -23,6 +23,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   bool _hasNavigated = false;
   bool _timerInitialized = false;
   bool _isProcessing = false;
+  String _subjectPeriodLabel = 'Loading...';
+  bool _infoLoaded = false;
 
   @override
   void initState() {
@@ -43,6 +45,57 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     _bracketGlowOpacity = Tween<double>(begin: 0.5, end: 1.0).animate(
       CurvedAnimation(parent: _bracketGlowController, curve: Curves.easeInOut),
     );
+  }
+
+  Future<void> _fetchSessionInfo(String sessionId) async {
+    try {
+      final sessionData = await supabase
+          .from('attendance_sessions')
+          .select('subject_id, period_id')
+          .eq('id', sessionId)
+          .maybeSingle();
+      if (sessionData == null) return;
+
+      final results = await Future.wait([
+        supabase
+            .from('subjects')
+            .select('name')
+            .eq('id', sessionData['subject_id'])
+            .maybeSingle(),
+        supabase
+            .from('periods')
+            .select('period_number')
+            .eq('id', sessionData['period_id'])
+            .maybeSingle(),
+      ]);
+
+      final subjectName = results[0]?['name'] as String? ?? '';
+      final periodNum = results[1]?['period_number'] as int? ?? 1;
+
+      String getOrdinal(int n) {
+        if (n >= 11 && n <= 13) return 'th';
+        switch (n % 10) {
+          case 1:
+            return 'st';
+          case 2:
+            return 'nd';
+          case 3:
+            return 'rd';
+          default:
+            return 'th';
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _subjectPeriodLabel =
+              '$periodNum${getOrdinal(periodNum)} Period — $subjectName';
+          _infoLoaded = true;
+        });
+      }
+    } catch (e) {
+      debugPrint('[QR_SCANNER] Failed to fetch session info: $e');
+    }
   }
 
   // ── Real Supabase QR validation flow ─────────────────────────────────
@@ -75,6 +128,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
       final tokenRecord = tokenRows[0];
       final String sessionId = tokenRecord['session_id'];
+
+      if (!_infoLoaded) _fetchSessionInfo(sessionId);
 
       // ── Step 2: Verify attendance session is active ─────────────────
       final sessionRows = await supabase
@@ -357,20 +412,11 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '3rd Period — DBMS',
+                                _subjectPeriodLabel,
                                 style: TextStyle(
                                   color: AppStyles.textDark,
                                   fontWeight: FontWeight.bold,
                                   fontSize: 14,
-                                ),
-                              ),
-                              SizedBox(height: 1),
-                              Text(
-                                'Room 301',
-                                style: TextStyle(
-                                  color: AppStyles.textGray,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                               SizedBox(height: 2),

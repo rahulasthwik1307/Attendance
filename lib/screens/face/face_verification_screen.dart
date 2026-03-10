@@ -705,6 +705,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // CAPTURE HANDLER — front-only, 5 frames
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _handleCapture(Face face, CameraImage cameraImage) async {
+    if (_liveEmbeddings.length >= _framesPerPhase) return;
+
     final now = DateTime.now();
     if (now.difference(_lastCaptureTime).inMilliseconds < 600) return;
 
@@ -726,19 +728,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     final Uint8List? jpegBytes = await _captureCurrentFrame();
     if (jpegBytes == null) return;
 
-    // Update progress before heavy embedding
-    setState(() {
-      _captureProgress++;
-      _borderColor = AppStyles.successGreen;
-    });
-    HapticFeedback.lightImpact();
-
-    Future.delayed(const Duration(milliseconds: 150), () {
-      if (mounted && _phase == _Phase.capturing) {
-        setState(() => _borderColor = AppStyles.primaryBlue);
-      }
-    });
-
     // Generate embedding
     final emb = await _mlService.generateEmbedding(
       jpegBytes: jpegBytes,
@@ -746,6 +735,19 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     );
     if (emb != null) {
       _liveEmbeddings.add(emb);
+
+      // Update progress only when embedding succeeded
+      setState(() {
+        _captureProgress++;
+        _borderColor = AppStyles.successGreen;
+      });
+      HapticFeedback.lightImpact();
+
+      Future.delayed(const Duration(milliseconds: 150), () {
+        if (mounted && _phase == _Phase.capturing) {
+          setState(() => _borderColor = AppStyles.primaryBlue);
+        }
+      });
     }
 
     _lastCaptureTime = DateTime.now();
@@ -775,7 +777,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         liveEmbeddings: _liveEmbeddings,
         storedEmbeddingA: _embeddingA!,
         storedEmbeddingB: _embeddingB!,
-        threshold: 0.60,
+        threshold: 0.65,
       );
 
       debugPrint(

@@ -317,7 +317,7 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
                           // Step 4 — save URL to students table
                           final updateResult = await Supabase.instance.client
                               .from('students')
-                              .update({'registration_photo': photoUrl})
+                              .update({'registration_photo_url': photoUrl})
                               .eq('id', user.id)
                               .select();
 

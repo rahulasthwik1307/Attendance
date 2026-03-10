@@ -10,8 +10,9 @@
 // This file does NOT touch Supabase, camera, or UI.
 // It is a pure service called by face screens.
 
-import 'dart:io';
 import 'dart:math' as math;
+
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:facial_liveness_verification/facial_liveness_verification.dart'
@@ -95,109 +96,19 @@ class FaceMlService {
   // ─────────────────────────────────────────────────────────────────────────
   Future<List<double>?> generateEmbedding({
     required Uint8List jpegBytes,
-    required Face face, // used as fallback if re-detection fails
+    required Face face,
   }) async {
     if (!_isInitialized) await initialize();
 
-    // ── Step 1: Write JPEG to a temp file ─────────────────────────────────
-    // The `face` passed in was detected from the live YUV camera buffer whose
-    // coordinate system differs from the decoded JPEG (rotation, flip, etc.).
-    // Writing to a file and re-running ML Kit gives us a `Face` whose landmark
-    // coordinates are anchored to the decoded JPEG's pixel space.
-    File? tempFile;
-    Face? jpegFace;
     try {
-      final String tempPath =
-          '${Directory.systemTemp.path}/face_emb_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      tempFile = File(tempPath);
-      await tempFile.writeAsBytes(jpegBytes);
-
-      final InputImage staticInput = InputImage.fromFilePath(tempPath);
-
-      // Use a fresh detector with accurate mode for static images
-      final FaceDetector staticDetector = FaceDetector(
-        options: FaceDetectorOptions(
-          enableContours: true,
-          enableLandmarks: true,
-          enableClassification: true,
-          enableTracking: false,
-          performanceMode: FaceDetectorMode.accurate,
-          minFaceSize: 0.10,
-        ),
-      );
-
-      try {
-        final List<Face> detected = await staticDetector.processImage(
-          staticInput,
-        );
-        await staticDetector.close();
-
-        if (detected.isNotEmpty) {
-          // Pick the largest face in the JPEG
-          jpegFace = detected.reduce(
-            (a, b) => a.boundingBox.width >= b.boundingBox.width ? a : b,
-          );
-          debugPrint(
-            '[FACE_REG] Re-detect OK — using JPEG-space face '
-            '(box: ${jpegFace.boundingBox.width.toStringAsFixed(0)}×'
-            '${jpegFace.boundingBox.height.toStringAsFixed(0)})',
-          );
-        } else {
-          debugPrint(
-            '[FACE_REG] Re-detect: no face found in JPEG — using caller face as fallback',
-          );
-        }
-      } catch (e) {
-        await staticDetector.close();
-        debugPrint('[FACE_REG] Re-detect error: $e — using fallback face');
-      }
-    } catch (e) {
-      debugPrint('[FACE_REG] Temp file error: $e — using fallback face');
-    } finally {
-      // Clean up temp file (fire-and-forget)
-      try {
-        tempFile?.deleteSync();
-      } catch (_) {}
-    }
-
-    // Use the JPEG-space face if available;
-    // otherwise: scale the live-stream bounding box to JPEG dimensions.
-    Face activeFace;
-    if (jpegFace != null) {
-      activeFace = jpegFace;
-    } else {
-      // The live-stream face coordinates are in camera-buffer space
-      // (e.g. 480×640). Decode the JPEG to find its actual pixel dimensions,
-      // then compute a scale factor and produce a synthetically scaled face
-      // bounding box that maps into JPEG pixel coordinates.
-      //
-      // We cannot construct a `Face` with different coordinates since it is a
-      // final data class, so we fall back to the crop-with-padding approach
-      // which only needs the bounding box. We override _preprocess to use the
-      // decoded image dimensions as the reference for clamping.
-      //
-      // Simple approach: just pass the original face and let _cropWithPadding
-      // clamp the box to image bounds. This still works if the aspect ratios
-      // are close (same sensor, different buffer stage).
-      debugPrint(
-        '[FACE_REG] Fallback: using caller face (live-stream bbox) — '
-        'box W=${face.boundingBox.width.toStringAsFixed(0)} '
-        'H=${face.boundingBox.height.toStringAsFixed(0)}',
-      );
-      activeFace = face;
-    }
-
-    try {
-      // ── Step 2: Decode JPEG ────────────────────────────────────────────
+      // Decode JPEG
       img.Image? decoded = img.decodeJpg(jpegBytes);
       if (decoded == null) {
         debugPrint('[FACE_REG] generateEmbedding: JPEG decode failed');
         return null;
       }
 
-      // ── Step 2b: Force RGB (3 channels) ────────────────────────────────
-      // Some devices produce grayscale or RGBA JPEGs which cause tensor
-      // shape mismatch with the model's [1,112,112,3] input.
+      // Force RGB conversion immediately after decode
       if (decoded.numChannels == 1) {
         debugPrint('[FACE_REG] Converting grayscale → RGB');
         decoded = decoded.convert(numChannels: 3);
@@ -206,31 +117,20 @@ class FaceMlService {
         decoded = decoded.convert(numChannels: 3);
       }
 
-      // ── Step 3: Full preprocessing pipeline ───────────────────────────
-      final img.Image? processed = _preprocess(decoded, activeFace);
+      // Preprocess with the provided face
+      final img.Image? processed = _preprocess(decoded, face);
       if (processed == null) {
         debugPrint('[FACE_REG] generateEmbedding: _preprocess returned null');
         return null;
       }
 
-      // ── Step 4: Float32 tensor [-1, 1] ────────────────────────────────
+      // Convert to tensor (NCHW format) and run model
       final Float32List tensor = _imageToTensor(processed);
-
-      // ── Step 5: Run Mobile ArcFace FP16 ─────────────────────────────────
-      // Output dimension: 512 (verified from model tensor shape).
-      // Shape mismatch at runtime will throw — caught by the catch block.
       final List<List<double>> output = [List.filled(512, 0.0)];
-      _interpreter!.run(tensor.reshape([1, 3, 112, 112]), output); // NCHW
-      debugPrint(
-        '[FACE_REG] Model run complete, raw[0]=${output[0][0].toStringAsFixed(4)}',
-      );
+      _interpreter!.run(tensor.reshape([1, 3, 112, 112]), output);
 
-      // ── Step 6: L2 normalize ───────────────────────────────────────────
-      final List<double> embedding = _l2Normalize(output[0]);
-      debugPrint(
-        '[FACE_REG] Embedding generated — '
-        'norm=${_vectorNorm(embedding).toStringAsFixed(4)}',
-      );
+      // L2 normalize
+      final List<double> embedding = _l2Normalize(List<double>.from(output[0]));
       return embedding;
     } catch (e) {
       debugPrint('[FACE_REG] generateEmbedding error: $e');
@@ -288,7 +188,7 @@ class FaceMlService {
     required List<List<double>> liveEmbeddings,
     required List<double> storedEmbeddingA,
     required List<double> storedEmbeddingB,
-    double threshold = 0.60,
+    double threshold = 0.65,
   }) {
     if (liveEmbeddings.isEmpty) {
       return VerificationResult(
@@ -302,36 +202,52 @@ class FaceMlService {
     debugPrint('[FACE_VER] Live frames: ${liveEmbeddings.length}');
     debugPrint('[FACE_VER] StoredA length: ${storedEmbeddingA.length}');
     debugPrint('[FACE_VER] StoredB length: ${storedEmbeddingB.length}');
+    debugPrint(
+      '[FACE_VER] StoredA first 5: ${storedEmbeddingA.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
+    );
+    debugPrint(
+      '[FACE_VER] StoredB first 5: ${storedEmbeddingB.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
+    );
 
     final List<double> scoresA = liveEmbeddings
         .map((e) => cosineSimilarity(e, storedEmbeddingA))
         .toList();
+    final List<double> scoresB = liveEmbeddings
+        .map((e) => cosineSimilarity(e, storedEmbeddingB))
+        .toList();
 
+    final List<double> bestScores = [];
     for (int i = 0; i < liveEmbeddings.length; i++) {
+      final bestScore = math.max(scoresA[i], scoresB[i]);
+      bestScores.add(bestScore);
       debugPrint(
-        '[FACE_VER] Frame $i → scoreA=${scoresA[i].toStringAsFixed(4)}',
+        '[FACE_VER] Frame $i → scoreA=${scoresA[i].toStringAsFixed(4)} scoreB=${scoresB[i].toStringAsFixed(4)} bestScore=${bestScore.toStringAsFixed(4)}',
       );
     }
 
-    scoresA.sort();
-    final double medianA = scoresA[scoresA.length ~/ 2];
+    bestScores.sort();
+    final double bestScoreMedian = bestScores[bestScores.length ~/ 2];
 
     debugPrint(
-      '[FACE_VER] medianA=${medianA.toStringAsFixed(4)} threshold=$threshold',
+      '[FACE_VER] bestScoreMedian=${bestScoreMedian.toStringAsFixed(4)} threshold=$threshold',
     );
 
-    if (medianA >= threshold) {
+    if (bestScoreMedian >= threshold) {
       return VerificationResult(
         isMatch: true,
-        score: medianA,
+        score: bestScoreMedian,
         message: 'Verified',
       );
     }
 
-    String message = medianA > 0.50
+    String message = bestScoreMedian > 0.50
         ? 'Try in better lighting'
         : 'Face not recognized';
-    return VerificationResult(isMatch: false, score: medianA, message: message);
+    return VerificationResult(
+      isMatch: false,
+      score: bestScoreMedian,
+      message: message,
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -412,20 +328,47 @@ class FaceMlService {
   // ─────────────────────────────────────────────────────────────────────────
   img.Image? _preprocess(img.Image fullImage, Face face) {
     try {
+      debugPrint(
+        '[FACE_REG] _preprocess input channels: ${fullImage.numChannels}',
+      );
+
+      // SAFETY CHECK: Ensure input is RGB
+      img.Image workingImage = fullImage;
+      if (workingImage.numChannels != 3) {
+        debugPrint(
+          '[FACE_REG] _preprocess: input has ${workingImage.numChannels} channels, converting to RGB',
+        );
+        workingImage = workingImage.convert(numChannels: 3);
+      }
+
       // Step 1: Crop with 20% padding
       final img.Image? cropped = _cropWithPadding(
-        fullImage,
+        workingImage,
         face,
         padding: 0.20,
       );
       if (cropped == null) return null;
+      debugPrint('[FACE_REG] After crop channels: ${cropped.numChannels}');
 
       // Step 2: 5-point face alignment (most important step)
-      final img.Image? aligned = _alignFace(fullImage, face);
+      final img.Image? aligned = _alignFace(workingImage, face);
       if (aligned == null) {
         // If alignment fails (missing landmarks), fall back to simple crop+resize
-        return img.copyResize(cropped, width: 112, height: 112);
+        final img.Image resized = img.copyResize(
+          cropped,
+          width: 112,
+          height: 112,
+        );
+        debugPrint(
+          '[FACE_REG] Fallback resize channels: ${resized.numChannels}',
+        );
+        final result = resized.numChannels == 3
+            ? resized
+            : resized.convert(numChannels: 3);
+        debugPrint('[FACE_REG] Final fallback channels: ${result.numChannels}');
+        return result;
       }
+      debugPrint('[FACE_REG] After align channels: ${aligned.numChannels}');
 
       // Step 3: Resize to 112×112 (MobileFaceNet input size)
       final img.Image resized = img.copyResize(
@@ -433,18 +376,26 @@ class FaceMlService {
         width: 112,
         height: 112,
       );
+      debugPrint('[FACE_REG] After resize channels: ${resized.numChannels}');
 
       // Step 4: Histogram equalization — normalizes lighting variation
       // This is what makes indoor registration → outdoor verification work
       img.Image equalized = _histogramEqualize(resized);
+      debugPrint(
+        '[FACE_REG] After histogram channels: ${equalized.numChannels}',
+      );
 
       // Step 5: Ensure final output is RGB (3 channels) for model input
       if (equalized.numChannels != 3) {
         debugPrint('[FACE_REG] _preprocess: forcing final image to 3-ch RGB');
         equalized = equalized.convert(numChannels: 3);
       }
+      debugPrint(
+        '[FACE_REG] _preprocess output channels: ${equalized.numChannels}',
+      );
       return equalized;
     } catch (e) {
+      debugPrint('[FACE_REG] _preprocess error: $e');
       return null;
     }
   }
@@ -509,7 +460,8 @@ class FaceMlService {
     final double sinA = math.sin(-angle);
 
     // Create output 112×112 image
-    final img.Image output = img.Image(width: 112, height: 112);
+    // CRITICAL FIX: Create output with 3 channels (RGB)
+    final img.Image output = img.Image(width: 112, height: 112, numChannels: 3);
 
     for (int y = 0; y < 112; y++) {
       for (int x = 0; x < 112; x++) {
@@ -593,26 +545,43 @@ class FaceMlService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // TENSOR CONVERSION — pixel [0,255] → float32 [-1.0, 1.0]  (NCHW layout)
-  // Formula: (pixel - 127.5) / 128.0 per channel
+  // TENSOR CONVERSION — pixel [0,255] → float32 [0.0, 1.0]  (NCHW layout)
   // mobile_arcface_fp16.tflite expects NCHW: [1, 3, 112, 112]
   // ─────────────────────────────────────────────────────────────────────────
   Float32List _imageToTensor(img.Image face) {
+    // Model expects NCHW format: [1, 3, 112, 112]
     final Float32List tensor = Float32List(1 * 3 * 112 * 112); // NCHW
     int idx = 0;
 
-    // Fill all R channel, then all G, then all B (channels-first order)
+    // For NCHW format, we need to organize data as:
+    // All red channels first, then all green channels, then all blue channels
+    final List<double> reds = [];
+    final List<double> greens = [];
+    final List<double> blues = [];
+
+    // First collect all pixel values
+    for (int y = 0; y < 112; y++) {
+      for (int x = 0; x < 112; x++) {
+        final pixel = face.getPixel(x, y);
+        reds.add(pixel.r.toDouble() / 255.0);
+        greens.add(pixel.g.toDouble() / 255.0);
+        blues.add(pixel.b.toDouble() / 255.0);
+      }
+    }
+
+    // Write in NCHW order: all reds, then all greens, then all blues
     for (int c = 0; c < 3; c++) {
-      for (int y = 0; y < 112; y++) {
-        for (int x = 0; x < 112; x++) {
-          final pixel = face.getPixel(x, y);
-          final double value = c == 0
-              ? pixel.r.toDouble()
-              : c == 1
-              ? pixel.g.toDouble()
-              : pixel.b.toDouble();
-          tensor[idx++] = (value - 127.5) / 128.0;
-        }
+      final List<double> channelData;
+      if (c == 0) {
+        channelData = reds;
+      } else if (c == 1) {
+        channelData = greens;
+      } else {
+        channelData = blues;
+      }
+
+      for (int i = 0; i < channelData.length; i++) {
+        tensor[idx++] = channelData[i];
       }
     }
 
@@ -632,16 +601,6 @@ class FaceMlService {
 
     if (magnitude < 1e-10) return embedding;
     return embedding.map((v) => v / magnitude).toList();
-  }
-
-  // Returns the Euclidean norm of a vector (before normalization).
-  // Used purely for debug logging to verify embeddings are non-zero.
-  double _vectorNorm(List<double> v) {
-    double sum = 0.0;
-    for (final x in v) {
-      sum += x * x;
-    }
-    return math.sqrt(sum);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -678,6 +637,18 @@ class FaceMlService {
 
     // Normalize to 0-1 range (empirically tuned)
     return (variance / 500.0).clamp(0.0, 1.0);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CLEAR EMBEDDINGS CACHE
+  // ─────────────────────────────────────────────────────────────────────────
+  Future<void> clearEmbeddingsCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('emb_a');
+    await prefs.remove('emb_b');
+    await prefs.remove('emb_student_id');
+    await prefs.remove('emb_cached_at');
+    debugPrint('[FACE_ML] Cleared embeddings cache');
   }
 
   // ─────────────────────────────────────────────────────────────────────────

@@ -816,7 +816,10 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         }
 
         if (!mounted) return;
-        Navigator.of(context).pushReplacementNamed('/qr-success');
+        Navigator.of(context).pushReplacementNamed(
+          '/qr-success',
+          arguments: {'session_id': _sessionId},
+        );
       } else {
         // ── Failure ──
         setState(() => _borderColor = AppStyles.errorRed);

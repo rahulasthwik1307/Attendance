@@ -94,7 +94,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
   // First front frame saved as registration photo
   Uint8List? _registrationPhotoBytes;
-  Rect? _registrationFaceBbox;
+  Rect? _registrationPhotoBbox;
 
   // Embeddings per phase
   final List<List<double>> _frontEmbeddings = [];
@@ -636,21 +636,13 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     // Save first front frame as registration photo
     if (currentPhase == _Phase.front && _registrationPhotoBytes == null) {
       _registrationPhotoBytes = jpegBytes;
-      _registrationFaceBbox = face.boundingBox;
+      _registrationPhotoBbox = face.boundingBox;
       debugPrint(
         '[FACE_REG] ✓ FRONT photo saved — bbox=${face.boundingBox} yaw=${face.headEulerAngleY?.toStringAsFixed(1)}',
       );
     }
 
-    // Update progress BEFORE heavy embedding calculation to un-freeze UI
-    setState(() {
-      _captureProgress++;
-      _progressLabel = '$_captureProgress / ${_framesPerPhase * 3}';
-      _borderColor = AppStyles.successGreen;
-    });
-    HapticFeedback.lightImpact();
-
-    // Allow UI to render the progress ring update and green flash smoothly
+    // Allow UI to render the green flash smoothly
     await Future.delayed(const Duration(milliseconds: 40));
 
     // 5. Briefly trigger the flash effect
@@ -687,6 +679,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         _frontFrames.add(jpegBytes);
         if (emb != null) {
           _frontEmbeddings.add(emb);
+          setState(() {
+            _captureProgress++;
+            _progressLabel = '$_captureProgress / ${_framesPerPhase * 3}';
+            _borderColor = AppStyles.successGreen;
+          });
+          HapticFeedback.lightImpact();
         } else {
           debugPrint(
             '[FACE_REG] Failed to generate embedding for phase front (frame ${_frontFrames.length})',
@@ -697,6 +695,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         _leftFrames.add(jpegBytes);
         if (emb != null) {
           _leftEmbeddings.add(emb);
+          setState(() {
+            _captureProgress++;
+            _progressLabel = '$_captureProgress / ${_framesPerPhase * 3}';
+            _borderColor = AppStyles.successGreen;
+          });
+          HapticFeedback.lightImpact();
         } else {
           debugPrint(
             '[FACE_REG] Failed to generate embedding for phase left (frame ${_leftFrames.length})',
@@ -707,6 +711,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         _rightFrames.add(jpegBytes);
         if (emb != null) {
           _rightEmbeddings.add(emb);
+          setState(() {
+            _captureProgress++;
+            _progressLabel = '$_captureProgress / ${_framesPerPhase * 3}';
+            _borderColor = AppStyles.successGreen;
+          });
+          HapticFeedback.lightImpact();
         } else {
           debugPrint(
             '[FACE_REG] Failed to generate embedding for phase right (frame ${_rightFrames.length})',
@@ -841,24 +851,45 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       final String? photoUrl = await _uploadRegistrationPhoto();
 
       // ── Save to students table in Supabase
-      await _saveToSupabase(
-        embeddingA: embeddingA,
-        embeddingB: embeddingB,
-        photoUrl: photoUrl,
-      );
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) throw Exception('User not logged in');
+      final userId = user.id;
 
-      _setPhase(_Phase.done);
-      debugPrint(
-        '[FACE_REG] Registration COMPLETE ✓ — navigating to success screen',
-      );
+      try {
+        await Supabase.instance.client
+            .from('students')
+            .update({
+              'embedding_a': embeddingA,
+              'embedding_b': embeddingB,
+              'registration_photo_url': photoUrl,
+              'face_registered': true,
+            })
+            .eq('id', userId);
 
-      // Navigate to registration success screen
+        debugPrint(
+          '[FACE_REG] Supabase update SUCCESS: saved for user $userId',
+        );
+        debugPrint(
+          '[FACE_REG] Saved embedding_a first 5: ${embeddingA.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
+        );
+      } catch (e) {
+        debugPrint('[FACE_REG] Save failed: $e');
+        // Optionally show error to user
+        setState(() => _phase = _Phase.error);
+        return;
+      }
+
+      // After success, clear any local cache if you have one (optional but good)
+      await _mlService
+          .clearEmbeddingsCache(); // add this method in FaceMlService if not exist
+
       if (mounted) {
-        Navigator.of(context).pushReplacementNamed(
+        Navigator.pushReplacementNamed(
+          context,
           '/face_preview',
           arguments: {
             'photoBytes': _registrationPhotoBytes,
-            'faceBbox': _registrationFaceBbox,
+            'faceBbox': _registrationPhotoBbox,
           },
         );
       }
@@ -868,62 +899,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   }
 
   Future<String?> _uploadRegistrationPhoto() async {
-    if (_registrationPhotoBytes == null) return null;
-
-    try {
-      final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) return null;
-
-      final String fileName =
-          'registration_${user.id}_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final String filePath = '${user.id}/$fileName';
-
-      await Supabase.instance.client.storage
-          .from('face-registrations')
-          .uploadBinary(
-            filePath,
-            _registrationPhotoBytes!,
-            fileOptions: const FileOptions(
-              contentType: 'image/jpeg',
-              upsert: true,
-            ),
-          );
-
-      // Get public URL
-      final String publicUrl = Supabase.instance.client.storage
-          .from('face-registrations')
-          .getPublicUrl(filePath);
-
-      return publicUrl;
-    } catch (e) {
-      // Photo upload failure is non-fatal — teacher can still see profile
-      return null;
-    }
+    // Preview screen handles the photo upload with better quality
+    return null;
   }
 
-  Future<void> _saveToSupabase({
-    required List<double> embeddingA,
-    required List<double> embeddingB,
-    String? photoUrl,
-  }) async {
-    final user = Supabase.instance.client.auth.currentUser;
-    if (user == null) throw Exception('User not logged in');
-
-    // Update the students table row for this student
-    // The row already exists (created during signup) — we just update embeddings
-    await Supabase.instance.client
-        .from('students')
-        .update({
-          'embedding_a': embeddingA, // Supabase stores jsonb natively from List
-          'embedding_b': embeddingB,
-          'registration_photo': photoUrl,
-          'is_approved': false, // Teacher must approve before attendance works
-        })
-        .eq('id', user.id);
-
-    // Update local auth flow state
-    AuthFlowState.instance.faceRegistered = false; // Not approved yet
-  }
+  // _saveToSupabase — removed; Supabase save logic is now inline in _processAndUpload
 
   // ─────────────────────────────────────────────────────────────────────────
   // HELPERS
@@ -1648,8 +1628,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   void dispose() {
     _pulseController.dispose();
     _textFadeController.dispose();
-    _pulseController.dispose();
-    _textFadeController.dispose();
     _blinkCountdownController.dispose();
     _successBounceController.dispose();
     _particleController.dispose();
@@ -2357,7 +2335,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _leftFrames.clear();
     _rightFrames.clear();
     _registrationPhotoBytes = null;
-    _registrationFaceBbox = null;
     _captureProgress = 0;
     _progressLabel = '';
     _challengeVerified = false;
@@ -2372,7 +2349,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       _errorMessage = null;
     });
 
-    _setPhase(_Phase.left);
+    _setPhase(_Phase.liveness);
   }
 }
 

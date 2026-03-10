@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/app_styles.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
@@ -23,6 +24,10 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
   double _progress = 0.0;
   int _elapsed = 0;
 
+  String _subjectName = '';
+  String _periodInfo = '';
+  String _markedAt = '';
+
   @override
   void initState() {
     super.initState();
@@ -43,6 +48,10 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
 
     _checkController.forward();
 
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _fetchSuccessInfo();
+    });
+
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       _elapsed++;
       setState(() => _progress = _elapsed / _redirectDuration);
@@ -50,6 +59,84 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
         _goToDashboard();
       }
     });
+  }
+
+  Future<void> _fetchSuccessInfo() async {
+    try {
+      final args = ModalRoute.of(context)?.settings.arguments;
+      String? sessionId;
+      if (args is Map) sessionId = args['session_id'] as String?;
+      if (sessionId == null) return;
+
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) return;
+
+      final results = await Future.wait([
+        Supabase.instance.client
+            .from('attendance_sessions')
+            .select('subject_id, period_id')
+            .eq('id', sessionId)
+            .maybeSingle(),
+        Supabase.instance.client
+            .from('period_attendance')
+            .select('scanned_at')
+            .eq('session_id', sessionId)
+            .eq('student_id', user.id)
+            .maybeSingle(),
+      ]);
+
+      final sessionData = results[0];
+      final attendanceData = results[1];
+
+      if (sessionData == null) return;
+
+      final subjectResult = await Supabase.instance.client
+          .from('subjects')
+          .select('name')
+          .eq('id', sessionData['subject_id'])
+          .maybeSingle();
+
+      final periodResult = await Supabase.instance.client
+          .from('periods')
+          .select('period_number')
+          .eq('id', sessionData['period_id'])
+          .maybeSingle();
+
+      String getOrdinal(int n) {
+        if (n >= 11 && n <= 13) return 'th';
+        switch (n % 10) {
+          case 1:
+            return 'st';
+          case 2:
+            return 'nd';
+          case 3:
+            return 'rd';
+          default:
+            return 'th';
+        }
+      }
+
+      String markedAtFormatted = '';
+      if (attendanceData?['scanned_at'] != null) {
+        final dt = DateTime.parse(attendanceData!['scanned_at']).toLocal();
+        final hh = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+        final mm = dt.minute.toString().padLeft(2, '0');
+        final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+        markedAtFormatted = '$hh:$mm $ampm';
+      }
+
+      final int periodNum = periodResult?['period_number'] as int? ?? 1;
+
+      if (mounted) {
+        setState(() {
+          _subjectName = subjectResult?['name'] as String? ?? 'Unknown';
+          _periodInfo = '$periodNum${getOrdinal(periodNum)} Period';
+          _markedAt = markedAtFormatted;
+        });
+      }
+    } catch (e) {
+      debugPrint('[QR_SUCCESS] Failed to fetch info: $e');
+    }
   }
 
   void _goToDashboard() {
@@ -181,22 +268,21 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
                             icon: Icons.menu_book_rounded,
                             iconColor: AppStyles.primaryBlue,
                             label: 'Subject',
-                            value: 'DBMS',
+                            value: _subjectName.isEmpty ? '...' : _subjectName,
                           ),
                           _divider(isDark),
                           _DetailRow(
                             icon: Icons.schedule_rounded,
                             iconColor: Colors.orange.shade600,
                             label: 'Period',
-                            value: '3rd Period',
-                            valueSubtitle: '11:10 AM',
+                            value: _periodInfo.isEmpty ? '...' : _periodInfo,
                           ),
                           _divider(isDark),
                           _DetailRow(
                             icon: Icons.access_time_filled_rounded,
                             iconColor: Colors.purple.shade400,
                             label: 'Marked At',
-                            value: '11:14 AM',
+                            value: _markedAt.isEmpty ? '...' : _markedAt,
                           ),
                           _divider(isDark),
                           _DetailRow(
@@ -298,7 +384,6 @@ class _DetailRow extends StatelessWidget {
   final Color iconColor;
   final String label;
   final String value;
-  final String? valueSubtitle;
   final Color? valueColor;
 
   const _DetailRow({
@@ -306,7 +391,6 @@ class _DetailRow extends StatelessWidget {
     required this.iconColor,
     required this.label,
     required this.value,
-    this.valueSubtitle,
     this.valueColor,
   });
 
@@ -331,30 +415,15 @@ class _DetailRow extends StatelessWidget {
             style: const TextStyle(fontSize: 14, color: AppStyles.textGray),
           ),
           const Spacer(),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color:
-                      valueColor ??
-                      (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
-                ),
-              ),
-              if (valueSubtitle != null) ...[
-                const SizedBox(height: 2),
-                Text(
-                  valueSubtitle!,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppStyles.textGray,
-                  ),
-                ),
-              ],
-            ],
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color:
+                  valueColor ??
+                  (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
+            ),
           ),
         ],
       ),
