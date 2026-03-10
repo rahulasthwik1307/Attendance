@@ -783,7 +783,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         liveEmbeddings: _liveEmbeddings,
         storedEmbeddingA: _embeddingA!,
         storedEmbeddingB: _embeddingB!,
-        threshold: 0.72,
+        threshold: 0.60,
       );
 
       debugPrint(

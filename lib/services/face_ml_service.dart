@@ -281,14 +281,14 @@ class FaceMlService {
   //
   // Takes MEDIAN of scores for stability (not average — median ignores
   // outlier frames caused by micro-blinks or shadows).
-  // Takes the BEST score between embedding_a and embedding_b comparison.
-  // Returns true if best median score >= threshold.
+  // Every frame must score >= 0.45 to prevent constant fake-high scores.
+  // Returns true if median score >= threshold.
   // ─────────────────────────────────────────────────────────────────────────
   VerificationResult verifyFace({
     required List<List<double>> liveEmbeddings,
     required List<double> storedEmbeddingA,
     required List<double> storedEmbeddingB,
-    double threshold = 0.55,
+    double threshold = 0.60,
   }) {
     if (liveEmbeddings.isEmpty) {
       return VerificationResult(
@@ -302,15 +302,7 @@ class FaceMlService {
     debugPrint('[FACE_VER] Live frames: ${liveEmbeddings.length}');
     debugPrint('[FACE_VER] StoredA length: ${storedEmbeddingA.length}');
     debugPrint('[FACE_VER] StoredB length: ${storedEmbeddingB.length}');
-    debugPrint(
-      '[FACE_VER] StoredA[0..4]: ${storedEmbeddingA.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
-    );
-    debugPrint(
-      '[FACE_VER] StoredB[0..4]: ${storedEmbeddingB.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
-    );
 
-    // FIXED: Compare ONLY against embedding_a (front average)
-    // This is what daily camera verification uses. embedding_b is no longer needed.
     final List<double> scoresA = liveEmbeddings
         .map((e) => cosineSimilarity(e, storedEmbeddingA))
         .toList();
@@ -321,6 +313,16 @@ class FaceMlService {
       );
     }
 
+    // NEW: Every frame must be at least 0.45 (prevents constant fake high scores)
+    final bool allFramesGood = scoresA.every((s) => s >= 0.45);
+    if (!allFramesGood) {
+      return VerificationResult(
+        isMatch: false,
+        score: scoresA.reduce((a, b) => math.min(a, b)),
+        message: 'Face not recognized',
+      );
+    }
+
     scoresA.sort();
     final double medianA = scoresA[scoresA.length ~/ 2];
 
@@ -328,38 +330,18 @@ class FaceMlService {
       '[FACE_VER] medianA=${medianA.toStringAsFixed(4)} threshold=$threshold',
     );
 
-    if (medianA < 0.55) {
-      return VerificationResult(
-        isMatch: false,
-        score: medianA,
-        message: 'Face not recognized',
-      );
-    }
-
-    final double bestScore = medianA;
-
-    if (bestScore >= threshold) {
+    if (medianA >= threshold) {
       return VerificationResult(
         isMatch: true,
-        score: bestScore,
+        score: medianA,
         message: 'Verified',
       );
     }
 
-    String message;
-    if (bestScore > 0.50) {
-      message = 'Try in better lighting';
-    } else if (bestScore > 0.40) {
-      message = 'Face straight at camera';
-    } else {
-      message = 'Face not recognized';
-    }
-
-    return VerificationResult(
-      isMatch: false,
-      score: bestScore,
-      message: message,
-    );
+    String message = medianA > 0.50
+        ? 'Try in better lighting'
+        : 'Face not recognized';
+    return VerificationResult(isMatch: false, score: medianA, message: message);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
