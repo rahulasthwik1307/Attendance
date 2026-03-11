@@ -38,6 +38,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/face_ml_service.dart';
+import '../../services/face_landmark_service.dart';
 import '../../utils/app_styles.dart';
 import '../../utils/auth_flow_state.dart';
 
@@ -78,6 +79,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
   // ─── ML ──────────────────────────────────────────────────────────────────
   final FaceMlService _mlService = FaceMlService();
+  final FaceLandmarkService _landmarkService = FaceLandmarkService();
   final LivenessChallengeService _livenessService = LivenessChallengeService();
   bool _isProcessingFrame = false;
   DateTime _lastFrameTime = DateTime.now();
@@ -261,8 +263,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         _cameraInitialized = true;
       });
 
-      // Initialize ML service
-      await _mlService.initialize();
+      // Initialize ML services
+      await _landmarkService.initialize();
 
       // Start camera stream for face detection
       await _cameraController!.startImageStream(_onCameraFrame);
@@ -668,7 +670,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     // Generate embedding immediately on main thread.
     // SKILL.md compliant for registration (only 9 frames).
-    final emb = await _mlService.generateEmbedding(
+    final emb = await _landmarkService.generateEmbedding(
       jpegBytes: jpegBytes,
       face: face,
     );
@@ -853,9 +855,15 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         '[FACE_REG] Processing embeddings: front=${_frontEmbeddings.length}, left=${_leftEmbeddings.length}, right=${_rightEmbeddings.length}',
       );
 
-      final List<double> embeddingA = _mlService.averageEmbeddings(embASource);
-      final List<double> embeddingB = _mlService.averageEmbeddings(embBSource);
-      final List<double> embeddingC = _mlService.averageEmbeddings(embCSource);
+      final List<double> embeddingA = _landmarkService.averageEmbeddings(
+        embASource,
+      );
+      final List<double> embeddingB = _landmarkService.averageEmbeddings(
+        embBSource,
+      );
+      final List<double> embeddingC = _landmarkService.averageEmbeddings(
+        embCSource,
+      );
 
       if (embeddingA.isEmpty || embeddingB.isEmpty || embeddingC.isEmpty) {
         _setError('Could not generate face embeddings. Please try again.');
@@ -924,7 +932,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       }
 
       // After success, clear any local cache if you have one (optional but good)
-      await _mlService
+      await _landmarkService
           .clearEmbeddingsCache(); // add this method in FaceMlService if not exist
 
       if (mounted) {

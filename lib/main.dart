@@ -36,7 +36,7 @@ import 'screens/auth/password_updated_screen.dart' as pw_updated;
 import 'screens/auth/password_change_success_screen.dart' as pw_change_success;
 import 'screens/face/face_updated_success_screen.dart' as face_updated_success;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'services/face_ml_service.dart';
+import 'services/face_landmark_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,8 +48,8 @@ void main() async {
     anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
   );
 
-  // Pre-warm MobileFaceNet model so the first face screen opens instantly
-  await FaceMlService().initialize();
+  // Pre-warm face landmark model so the first face screen opens instantly
+  await FaceLandmarkService().initialize();
 
   runApp(const SmartAttendanceApp());
 }

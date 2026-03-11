@@ -22,6 +22,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/face_ml_service.dart';
+import '../../services/face_landmark_service.dart';
 import '../../utils/app_styles.dart';
 import '../../utils/auth_flow_state.dart';
 
@@ -74,6 +75,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   // ─── ML ─────────────────────────────────────────────────────────────────
   final FaceMlService _mlService = FaceMlService();
+  final FaceLandmarkService _landmarkService = FaceLandmarkService();
   final LivenessChallengeService _livenessService = LivenessChallengeService();
   bool _isProcessingFrame = false;
   DateTime _lastFrameTime = DateTime.now();
@@ -112,7 +114,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // lower threshold since the quality is good.
   // ─────────────────────────────────────────────────────────────────────────
   double _calculateDynamicThreshold(List<double> scores) {
-    if (scores.isEmpty) return 0.65;
+    if (scores.isEmpty) return 0.75;
 
     // Calculate mean
     double mean = scores.reduce((a, b) => a + b) / scores.length;
@@ -125,11 +127,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     // Low variance means scores are very consistent (good quality)
     // High variance means scores are jumping around (poor quality)
     if (variance < 0.01) {
-      return 0.60; // Consistent scores = good lighting/pose
+      return 0.75; // Consistent scores = good lighting/pose
     } else if (variance < 0.05) {
-      return 0.62; // Moderately consistent
+      return 0.75; // Moderately consistent
     } else {
-      return 0.65; // Default threshold for inconsistent scores
+      return 0.75; // Default threshold for inconsistent scores
     }
   }
 
@@ -356,8 +358,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         _cameraInitialized = true;
       });
 
-      // Initialize ML service
-      await _mlService.initialize();
+      // Initialize ML services
+      await _landmarkService.initialize();
 
       // Load stored embeddings
       await _loadEmbeddings();
@@ -769,7 +771,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     if (jpegBytes == null) return;
 
     // Generate embedding
-    final emb = await _mlService.generateEmbedding(
+    final emb = await _landmarkService.generateEmbedding(
       jpegBytes: jpegBytes,
       face: face,
     );
@@ -815,16 +817,16 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     try {
       // Calculate dynamic threshold based on front scores
       final List<double> frontScores = _liveEmbeddings
-          .map((e) => _mlService.cosineSimilarity(e, _embeddingA!))
+          .map((e) => _landmarkService.cosineSimilarity(e, _embeddingA!))
           .toList();
       final double dynamicThreshold = _calculateDynamicThreshold(frontScores);
 
-      final result = _mlService.verifyFace(
+      final result = _landmarkService.verifyFace(
         liveEmbeddings: _liveEmbeddings,
         storedEmbeddingA: _embeddingA!,
         storedEmbeddingB: _embeddingB!,
         storedEmbeddingC: _embeddingC!,
-        threshold: dynamicThreshold,
+        threshold: 0.75,
       );
 
       debugPrint(

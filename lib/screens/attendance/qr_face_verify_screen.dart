@@ -21,6 +21,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/face_ml_service.dart';
+import '../../services/face_landmark_service.dart';
 import '../../utils/app_styles.dart';
 
 // ─── Verification phases ──────────────────────────────────────────────────────
@@ -67,6 +68,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
   // ─── ML ─────────────────────────────────────────────────────────────────
   final FaceMlService _mlService = FaceMlService();
+  final FaceLandmarkService _landmarkService = FaceLandmarkService();
   final LivenessChallengeService _livenessService = LivenessChallengeService();
   bool _isProcessingFrame = false;
   DateTime _lastFrameTime = DateTime.now();
@@ -323,8 +325,8 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         _cameraInitialized = true;
       });
 
-      // Initialize ML service
-      await _mlService.initialize();
+      // Initialize ML services
+      await _landmarkService.initialize();
 
       // Load stored embeddings
       await _loadEmbeddings();
@@ -743,7 +745,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     });
 
     // Generate embedding
-    final emb = await _mlService.generateEmbedding(
+    final emb = await _landmarkService.generateEmbedding(
       jpegBytes: jpegBytes,
       face: face,
     );
@@ -774,7 +776,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     _updateInstruction('Processing…', subtitle: 'Comparing your face');
 
     try {
-      final result = _mlService.verifyFace(
+      final result = _landmarkService.verifyFace(
         liveEmbeddings: _liveEmbeddings,
         storedEmbeddingA: _embeddingA!,
         storedEmbeddingB: _embeddingB!,
