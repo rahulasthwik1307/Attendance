@@ -124,10 +124,10 @@ class FaceMlService {
         return null;
       }
 
-      // Convert to tensor (NCHW format) and run model
+      // Convert to tensor (NHWC format) and run model
       final Float32List tensor = _imageToTensor(processed);
       final List<List<double>> output = [List.filled(512, 0.0)];
-      _interpreter!.run(tensor.reshape([1, 3, 112, 112]), output);
+      _interpreter!.run(tensor.reshape([1, 112, 112, 3]), output);
 
       // L2 normalize
       final List<double> embedding = _l2Normalize(List<double>.from(output[0]));
@@ -177,17 +177,21 @@ class FaceMlService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // VERIFY FACE — compare live embeddings against stored A and B
+  // VERIFY FACE — compare live embeddings against stored A, B, and C
   //
-  // Takes MEDIAN of scores for stability (not average — median ignores
-  // outlier frames caused by micro-blinks or shadows).
-  // Every frame must score >= 0.45 to prevent constant fake-high scores.
+  // A = front, B = left, C = right stored embeddings.
+  // For each live frame:
+  //   1. Compute scores against all three stored embeddings
+  //   2. Use front score as main score
+  //   3. Apply penalty if front frame accidentally matches left/right
+  // Takes MEDIAN of penalized scores for stability.
   // Returns true if median score >= threshold.
   // ─────────────────────────────────────────────────────────────────────────
   VerificationResult verifyFace({
     required List<List<double>> liveEmbeddings,
     required List<double> storedEmbeddingA,
     required List<double> storedEmbeddingB,
+    required List<double> storedEmbeddingC,
     double threshold = 0.65,
   }) {
     if (liveEmbeddings.isEmpty) {
@@ -200,13 +204,17 @@ class FaceMlService {
 
     debugPrint('[FACE_VER] ═══ VERIFICATION DEBUG ═══');
     debugPrint('[FACE_VER] Live frames: ${liveEmbeddings.length}');
-    debugPrint('[FACE_VER] StoredA length: ${storedEmbeddingA.length}');
-    debugPrint('[FACE_VER] StoredB length: ${storedEmbeddingB.length}');
+    debugPrint('[FACE_VER] StoredA (front) length: ${storedEmbeddingA.length}');
+    debugPrint('[FACE_VER] StoredB (left) length: ${storedEmbeddingB.length}');
+    debugPrint('[FACE_VER] StoredC (right) length: ${storedEmbeddingC.length}');
     debugPrint(
       '[FACE_VER] StoredA first 5: ${storedEmbeddingA.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
     );
     debugPrint(
       '[FACE_VER] StoredB first 5: ${storedEmbeddingB.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
+    );
+    debugPrint(
+      '[FACE_VER] StoredC first 5: ${storedEmbeddingC.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
     );
 
     final List<double> scoresA = liveEmbeddings
@@ -215,39 +223,70 @@ class FaceMlService {
     final List<double> scoresB = liveEmbeddings
         .map((e) => cosineSimilarity(e, storedEmbeddingB))
         .toList();
+    final List<double> scoresC = liveEmbeddings
+        .map((e) => cosineSimilarity(e, storedEmbeddingC))
+        .toList();
 
-    final List<double> bestScores = [];
+    final List<double> penalizedScores = [];
     for (int i = 0; i < liveEmbeddings.length; i++) {
-      final bestScore = math.max(scoresA[i], scoresB[i]);
-      bestScores.add(bestScore);
+      final double penalized = _calculatePenalizedScore(
+        scoresA[i],
+        scoresB[i],
+        scoresC[i],
+      );
+      penalizedScores.add(penalized);
       debugPrint(
-        '[FACE_VER] Frame $i → scoreA=${scoresA[i].toStringAsFixed(4)} scoreB=${scoresB[i].toStringAsFixed(4)} bestScore=${bestScore.toStringAsFixed(4)}',
+        '[FACE_VER] Frame $i → frontScore=${scoresA[i].toStringAsFixed(4)} leftScore=${scoresB[i].toStringAsFixed(4)} rightScore=${scoresC[i].toStringAsFixed(4)} penalized=${penalized.toStringAsFixed(4)}',
       );
     }
 
-    bestScores.sort();
-    final double bestScoreMedian = bestScores[bestScores.length ~/ 2];
+    penalizedScores.sort();
+    final double medianScore = penalizedScores[penalizedScores.length ~/ 2];
 
     debugPrint(
-      '[FACE_VER] bestScoreMedian=${bestScoreMedian.toStringAsFixed(4)} threshold=$threshold',
+      '[FACE_VER] medianScore=${medianScore.toStringAsFixed(4)} threshold=$threshold',
     );
 
-    if (bestScoreMedian >= threshold) {
+    if (medianScore >= threshold) {
       return VerificationResult(
         isMatch: true,
-        score: bestScoreMedian,
+        score: medianScore,
         message: 'Verified',
       );
     }
 
-    String message = bestScoreMedian > 0.50
+    String message = medianScore > 0.50
         ? 'Try in better lighting'
         : 'Face not recognized';
     return VerificationResult(
       isMatch: false,
-      score: bestScoreMedian,
+      score: medianScore,
       message: message,
     );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PENALIZED SCORE — adaptive penalty based on how well front face matches
+  // left/right stored embeddings. Uses graduated penalties to avoid
+  // false rejections while still catching potential spoofing attempts.
+  // ─────────────────────────────────────────────────────────────────────────
+  double _calculatePenalizedScore(
+    double frontScore,
+    double leftScore,
+    double rightScore,
+  ) {
+    // If left/right scores are extremely high (>0.85), apply small 5% penalty
+    // This handles cases where your face is very symmetrical
+    if (leftScore > 0.85 || rightScore > 0.85) {
+      return frontScore * 0.95; // Only 5% penalty
+    }
+    // If left/right scores are moderately high (>0.75), apply tiny 2% penalty
+    else if (leftScore > 0.75 || rightScore > 0.75) {
+      return frontScore * 0.98; // 2% penalty
+    }
+
+    // If left/right scores are normal, no penalty
+    return frontScore;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -545,43 +584,21 @@ class FaceMlService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // TENSOR CONVERSION — pixel [0,255] → float32 [0.0, 1.0]  (NCHW layout)
-  // mobile_arcface_fp16.tflite expects NCHW: [1, 3, 112, 112]
+  // TENSOR CONVERSION — pixel [0,255] → float32 [0.0, 1.0]  (NHWC layout)
+  // mobile_arcface_fp16.tflite expects NHWC: [1, 112, 112, 3]
   // ─────────────────────────────────────────────────────────────────────────
   Float32List _imageToTensor(img.Image face) {
-    // Model expects NCHW format: [1, 3, 112, 112]
-    final Float32List tensor = Float32List(1 * 3 * 112 * 112); // NCHW
+    // Model expects NHWC format: [1, 112, 112, 3]
+    final Float32List tensor = Float32List(1 * 112 * 112 * 3); // NHWC
     int idx = 0;
 
-    // For NCHW format, we need to organize data as:
-    // All red channels first, then all green channels, then all blue channels
-    final List<double> reds = [];
-    final List<double> greens = [];
-    final List<double> blues = [];
-
-    // First collect all pixel values
+    // NHWC format: pixels in row-major order with interleaved RGB
     for (int y = 0; y < 112; y++) {
       for (int x = 0; x < 112; x++) {
         final pixel = face.getPixel(x, y);
-        reds.add(pixel.r.toDouble() / 255.0);
-        greens.add(pixel.g.toDouble() / 255.0);
-        blues.add(pixel.b.toDouble() / 255.0);
-      }
-    }
-
-    // Write in NCHW order: all reds, then all greens, then all blues
-    for (int c = 0; c < 3; c++) {
-      final List<double> channelData;
-      if (c == 0) {
-        channelData = reds;
-      } else if (c == 1) {
-        channelData = greens;
-      } else {
-        channelData = blues;
-      }
-
-      for (int i = 0; i < channelData.length; i++) {
-        tensor[idx++] = channelData[i];
+        tensor[idx++] = pixel.r.toDouble() / 255.0;
+        tensor[idx++] = pixel.g.toDouble() / 255.0;
+        tensor[idx++] = pixel.b.toDouble() / 255.0;
       }
     }
 
@@ -646,6 +663,7 @@ class FaceMlService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('emb_a');
     await prefs.remove('emb_b');
+    await prefs.remove('emb_c');
     await prefs.remove('emb_student_id');
     await prefs.remove('emb_cached_at');
     debugPrint('[FACE_ML] Cleared embeddings cache');

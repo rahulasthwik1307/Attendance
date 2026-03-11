@@ -88,6 +88,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   List<double>? _embeddingA;
   List<double>? _embeddingB;
+  List<double>? _embeddingC;
 
   int _attemptCount = 1;
 
@@ -104,6 +105,33 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   // ignore: unused_field
   String? _errorMessage;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DYNAMIC THRESHOLD — adjusts threshold based on score consistency
+  // If scores are very consistent (low variance), we can use a slightly
+  // lower threshold since the quality is good.
+  // ─────────────────────────────────────────────────────────────────────────
+  double _calculateDynamicThreshold(List<double> scores) {
+    if (scores.isEmpty) return 0.65;
+
+    // Calculate mean
+    double mean = scores.reduce((a, b) => a + b) / scores.length;
+
+    // Calculate variance (how spread out the scores are)
+    double variance =
+        scores.map((s) => (s - mean) * (s - mean)).reduce((a, b) => a + b) /
+        scores.length;
+
+    // Low variance means scores are very consistent (good quality)
+    // High variance means scores are jumping around (poor quality)
+    if (variance < 0.01) {
+      return 0.60; // Consistent scores = good lighting/pose
+    } else if (variance < 0.05) {
+      return 0.62; // Moderately consistent
+    } else {
+      return 0.65; // Default threshold for inconsistent scores
+    }
+  }
 
   // ─── Face positioning state ─────────────────────────────────────────────
   DateTime? _steadyStartTime;
@@ -333,7 +361,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       // Load stored embeddings
       await _loadEmbeddings();
-      if (_embeddingA == null || _embeddingB == null) {
+      if (_embeddingA == null || _embeddingB == null || _embeddingC == null) {
         return; // error already set
       }
 
@@ -383,14 +411,18 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           cachedStudentId != null) {
         final embAJson = prefs.getString('emb_a');
         final embBJson = prefs.getString('emb_b');
-        if (embAJson != null && embBJson != null) {
+        final embCJson = prefs.getString('emb_c');
+        if (embAJson != null && embBJson != null && embCJson != null) {
           _embeddingA = (jsonDecode(embAJson) as List)
               .map((e) => (e as num).toDouble())
               .toList();
           _embeddingB = (jsonDecode(embBJson) as List)
               .map((e) => (e as num).toDouble())
               .toList();
-          debugPrint('[FACE_VER] Embeddings loaded from cache');
+          _embeddingC = (jsonDecode(embCJson) as List)
+              .map((e) => (e as num).toDouble())
+              .toList();
+          debugPrint('[FACE_VER] Embeddings A, B, C loaded from cache');
           return;
         }
       }
@@ -403,13 +435,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       final data = await Supabase.instance.client
           .from('students')
-          .select('embedding_a, embedding_b')
+          .select('embedding_a, embedding_b, embedding_c')
           .eq('id', user.id)
           .maybeSingle();
 
       if (data == null ||
           data['embedding_a'] == null ||
-          data['embedding_b'] == null) {
+          data['embedding_b'] == null ||
+          data['embedding_c'] == null) {
         _setError('Could not load face profile. Please try again.');
         return;
       }
@@ -420,18 +453,25 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _embeddingB = (data['embedding_b'] as List)
           .map((e) => (e as num).toDouble())
           .toList();
+      _embeddingC = (data['embedding_c'] as List)
+          .map((e) => (e as num).toDouble())
+          .toList();
 
       // Clear any previous user's cached embeddings first
       await prefs.remove('emb_a');
       await prefs.remove('emb_b');
+      await prefs.remove('emb_c');
       await prefs.remove('emb_student_id');
       await prefs.remove('emb_cached_at');
       // Cache for next time
       await prefs.setString('emb_a', jsonEncode(_embeddingA));
       await prefs.setString('emb_b', jsonEncode(_embeddingB));
+      await prefs.setString('emb_c', jsonEncode(_embeddingC));
       await prefs.setString('emb_student_id', user.id);
       await prefs.setInt('emb_cached_at', now);
-      debugPrint('[FACE_VER] Embeddings loaded from Supabase and cached');
+      debugPrint(
+        '[FACE_VER] Embeddings A, B, C loaded from Supabase and cached',
+      );
     } catch (e) {
       _setError('Could not load face profile. Please try again.');
     }
@@ -773,15 +813,22 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     _updateInstruction('Processing…', subtitle: 'Comparing your face');
 
     try {
+      // Calculate dynamic threshold based on front scores
+      final List<double> frontScores = _liveEmbeddings
+          .map((e) => _mlService.cosineSimilarity(e, _embeddingA!))
+          .toList();
+      final double dynamicThreshold = _calculateDynamicThreshold(frontScores);
+
       final result = _mlService.verifyFace(
         liveEmbeddings: _liveEmbeddings,
         storedEmbeddingA: _embeddingA!,
         storedEmbeddingB: _embeddingB!,
-        threshold: 0.65,
+        storedEmbeddingC: _embeddingC!,
+        threshold: dynamicThreshold,
       );
 
       debugPrint(
-        '[FACE_VER] Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | EmbALen: ${_embeddingA?.length} | EmbBLen: ${_embeddingB?.length}',
+        '[FACE_VER] Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | EmbALen: ${_embeddingA?.length} | EmbBLen: ${_embeddingB?.length} | EmbCLen: ${_embeddingC?.length} | DynThreshold: ${dynamicThreshold.toStringAsFixed(4)}',
       );
 
       if (result.isMatch) {

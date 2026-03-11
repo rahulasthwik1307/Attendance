@@ -673,6 +673,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       face: face,
     );
 
+    // ADD THIS DEBUG LOG
+    debugPrint(
+      '[FACE_REG] Generated embedding for phase ${currentPhase.name} - emb is ${emb == null ? "null" : "valid"}',
+    );
+
     // Store in correct list
     switch (currentPhase) {
       case _Phase.front:
@@ -828,10 +833,21 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       // FIXED: Embeddings already generated during capture phase on main thread.
       // No more compute() isolate calls — avoids BackgroundIsolateBinaryMessenger crash.
       final List<List<double>> embASource = [..._frontEmbeddings];
-      final List<List<double>> embBSource = [
-        ..._leftEmbeddings,
-        ..._rightEmbeddings,
-      ];
+      final List<List<double>> embBSource = [..._leftEmbeddings];
+      final List<List<double>> embCSource = [..._rightEmbeddings];
+
+      // Debug: verify source list lengths
+      debugPrint('[FACE_REG] embASource length: ${embASource.length}');
+      debugPrint('[FACE_REG] embBSource length: ${embBSource.length}');
+      debugPrint('[FACE_REG] embCSource length: ${embCSource.length}');
+
+      if (embASource.isEmpty || embBSource.isEmpty || embCSource.isEmpty) {
+        debugPrint(
+          '[FACE_REG] ERROR: Missing embeddings - front:${embASource.length}, left:${embBSource.length}, right:${embCSource.length}',
+        );
+        _setError('Failed to capture all face angles. Please try again.');
+        return;
+      }
 
       debugPrint(
         '[FACE_REG] Processing embeddings: front=${_frontEmbeddings.length}, left=${_leftEmbeddings.length}, right=${_rightEmbeddings.length}',
@@ -839,10 +855,37 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
       final List<double> embeddingA = _mlService.averageEmbeddings(embASource);
       final List<double> embeddingB = _mlService.averageEmbeddings(embBSource);
+      final List<double> embeddingC = _mlService.averageEmbeddings(embCSource);
 
-      if (embeddingA.isEmpty || embeddingB.isEmpty) {
+      if (embeddingA.isEmpty || embeddingB.isEmpty || embeddingC.isEmpty) {
         _setError('Could not generate face embeddings. Please try again.');
         return;
+      }
+
+      // Verify the three embeddings are different
+      debugPrint(
+        '[FACE_REG] embeddingA first 5: ${embeddingA.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
+      );
+      debugPrint(
+        '[FACE_REG] embeddingB first 5: ${embeddingB.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
+      );
+      debugPrint(
+        '[FACE_REG] embeddingC first 5: ${embeddingC.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
+      );
+
+      // Quick sanity check - if they're identical, something's wrong
+      bool allIdentical = true;
+      for (int i = 0; i < 5; i++) {
+        if ((embeddingA[i] - embeddingB[i]).abs() > 0.001 ||
+            (embeddingA[i] - embeddingC[i]).abs() > 0.001) {
+          allIdentical = false;
+          break;
+        }
+      }
+      if (allIdentical) {
+        debugPrint(
+          '[FACE_REG] WARNING: All three embeddings appear identical!',
+        );
       }
 
       _updateInstruction('Almost done!', subtitle: 'Saving your registration');
@@ -861,6 +904,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
             .update({
               'embedding_a': embeddingA,
               'embedding_b': embeddingB,
+              'embedding_c': embeddingC,
               'registration_photo_url': photoUrl,
               'face_registered': true,
             })

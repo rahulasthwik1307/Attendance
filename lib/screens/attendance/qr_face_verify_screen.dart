@@ -81,6 +81,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
   List<double>? _embeddingA;
   List<double>? _embeddingB;
+  List<double>? _embeddingC;
 
   int _attemptCount = 1;
 
@@ -327,7 +328,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
       // Load stored embeddings
       await _loadEmbeddings();
-      if (_embeddingA == null || _embeddingB == null) {
+      if (_embeddingA == null || _embeddingB == null || _embeddingC == null) {
         return; // error already set
       }
 
@@ -379,14 +380,18 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       if (user != null && cachedStudentId == user.id && !isExpired) {
         final embAJson = prefs.getString('emb_a');
         final embBJson = prefs.getString('emb_b');
-        if (embAJson != null && embBJson != null) {
+        final embCJson = prefs.getString('emb_c');
+        if (embAJson != null && embBJson != null && embCJson != null) {
           _embeddingA = (jsonDecode(embAJson) as List)
               .map((e) => (e as num).toDouble())
               .toList();
           _embeddingB = (jsonDecode(embBJson) as List)
               .map((e) => (e as num).toDouble())
               .toList();
-          debugPrint('[FACE_VER] Embeddings loaded from cache');
+          _embeddingC = (jsonDecode(embCJson) as List)
+              .map((e) => (e as num).toDouble())
+              .toList();
+          debugPrint('[FACE_VER] Embeddings A, B, C loaded from cache');
           return;
         }
       }
@@ -399,13 +404,14 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
       final data = await Supabase.instance.client
           .from('students')
-          .select('embedding_a, embedding_b')
+          .select('embedding_a, embedding_b, embedding_c')
           .eq('id', user.id)
           .maybeSingle();
 
       if (data == null ||
           data['embedding_a'] == null ||
-          data['embedding_b'] == null) {
+          data['embedding_b'] == null ||
+          data['embedding_c'] == null) {
         _setError('Could not load face profile. Please try again.');
         return;
       }
@@ -416,13 +422,19 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       _embeddingB = (data['embedding_b'] as List)
           .map((e) => (e as num).toDouble())
           .toList();
+      _embeddingC = (data['embedding_c'] as List)
+          .map((e) => (e as num).toDouble())
+          .toList();
 
       // Cache for next time
       await prefs.setString('emb_a', jsonEncode(_embeddingA));
       await prefs.setString('emb_b', jsonEncode(_embeddingB));
+      await prefs.setString('emb_c', jsonEncode(_embeddingC));
       await prefs.setString('emb_student_id', user.id);
       await prefs.setInt('emb_cached_at', now);
-      debugPrint('[FACE_VER] Embeddings loaded from Supabase and cached');
+      debugPrint(
+        '[FACE_VER] Embeddings A, B, C loaded from Supabase and cached',
+      );
     } catch (e) {
       _setError('Could not load face profile. Please try again.');
     }
@@ -766,11 +778,12 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         liveEmbeddings: _liveEmbeddings,
         storedEmbeddingA: _embeddingA!,
         storedEmbeddingB: _embeddingB!,
+        storedEmbeddingC: _embeddingC!,
         threshold: 0.60,
       );
 
       debugPrint(
-        '[FACE_VER] Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | EmbALen: ${_embeddingA?.length} | EmbBLen: ${_embeddingB?.length}',
+        '[FACE_VER] Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | EmbALen: ${_embeddingA?.length} | EmbBLen: ${_embeddingB?.length} | EmbCLen: ${_embeddingC?.length}',
       );
 
       if (result.isMatch) {
