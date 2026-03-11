@@ -116,15 +116,86 @@ class FaceLandmarkService {
         interpolation: img.Interpolation.linear,
       );
 
-      // Step 4 — Build flat Float32List and normalize [0,255] → [-1.0, 1.0]
+      // Step 3.5 — Adaptive gamma correction
+      double brightnessSum = 0.0;
+      for (int y = 0; y < 112; y++) {
+        for (int x = 0; x < 112; x++) {
+          final p = resized.getPixel(x, y);
+          brightnessSum +=
+              0.299 * p.r.toDouble() +
+              0.587 * p.g.toDouble() +
+              0.114 * p.b.toDouble();
+        }
+      }
+      final double avgBrightness = (brightnessSum / (112 * 112 * 255)).clamp(
+        0.01,
+        0.99,
+      );
+      double gamma = math.log(0.5) / math.log(avgBrightness);
+      gamma = gamma.clamp(0.5, 2.5);
+      debugPrint(
+        '[FACE_LANDMARK] Gamma correction applied: gamma=${gamma.toStringAsFixed(4)} avgBrightness=${avgBrightness.toStringAsFixed(4)}',
+      );
+      final img.Image gammaCorrected = img.Image(width: 112, height: 112);
+      for (int y = 0; y < 112; y++) {
+        for (int x = 0; x < 112; x++) {
+          final p = resized.getPixel(x, y);
+          final int newR = (255 * math.pow(p.r.toDouble() / 255.0, gamma))
+              .round()
+              .clamp(0, 255);
+          final int newG = (255 * math.pow(p.g.toDouble() / 255.0, gamma))
+              .round()
+              .clamp(0, 255);
+          final int newB = (255 * math.pow(p.b.toDouble() / 255.0, gamma))
+              .round()
+              .clamp(0, 255);
+          gammaCorrected.setPixelRgb(x, y, newR, newG, newB);
+        }
+      }
+
+      // Step 4 — Build flat Float32List with per-image standardization
+      // First pass: collect channel values
+      final List<double> rVals = [];
+      final List<double> gVals = [];
+      final List<double> bVals = [];
+      for (int y = 0; y < 112; y++) {
+        for (int x = 0; x < 112; x++) {
+          final pixel = gammaCorrected.getPixel(x, y);
+          rVals.add(pixel.r.toDouble());
+          gVals.add(pixel.g.toDouble());
+          bVals.add(pixel.b.toDouble());
+        }
+      }
+      double mean(List<double> v) => v.reduce((a, b) => a + b) / v.length;
+      double std(List<double> v, double m) {
+        double s = 0.0;
+        for (final val in v) {
+          s += (val - m) * (val - m);
+        }
+        return math.sqrt(s / v.length);
+      }
+
+      final double rMean = mean(rVals),
+          gMean = mean(gVals),
+          bMean = mean(bVals);
+      final double rStd = std(rVals, rMean),
+          gStd = std(gVals, gMean),
+          bStd = std(bVals, bMean);
+      debugPrint(
+        '[FACE_LANDMARK] Per-channel stats: rMean=${rMean.toStringAsFixed(2)} rStd=${rStd.toStringAsFixed(2)} gMean=${gMean.toStringAsFixed(2)} gStd=${gStd.toStringAsFixed(2)} bMean=${bMean.toStringAsFixed(2)} bStd=${bStd.toStringAsFixed(2)}',
+      );
+      // Second pass: normalize
       final inputBuffer = Float32List(1 * 112 * 112 * 3);
       int pixelIndex = 0;
       for (int y = 0; y < 112; y++) {
         for (int x = 0; x < 112; x++) {
-          final pixel = resized.getPixel(x, y);
-          inputBuffer[pixelIndex++] = (pixel.r.toDouble() / 127.5) - 1.0;
-          inputBuffer[pixelIndex++] = (pixel.g.toDouble() / 127.5) - 1.0;
-          inputBuffer[pixelIndex++] = (pixel.b.toDouble() / 127.5) - 1.0;
+          final pixel = gammaCorrected.getPixel(x, y);
+          inputBuffer[pixelIndex++] =
+              ((pixel.r.toDouble() - rMean) / (rStd + 1e-6)).clamp(-3.0, 3.0);
+          inputBuffer[pixelIndex++] =
+              ((pixel.g.toDouble() - gMean) / (gStd + 1e-6)).clamp(-3.0, 3.0);
+          inputBuffer[pixelIndex++] =
+              ((pixel.b.toDouble() - bMean) / (bStd + 1e-6)).clamp(-3.0, 3.0);
         }
       }
 
@@ -216,7 +287,7 @@ class FaceLandmarkService {
     required List<double> storedEmbeddingA,
     required List<double> storedEmbeddingB,
     required List<double> storedEmbeddingC,
-    double threshold = 0.30,
+    double threshold = 0.75,
   }) {
     if (liveEmbeddings.isEmpty) {
       return VerificationResult(
@@ -233,14 +304,25 @@ class FaceLandmarkService {
       '[FACE_VER] StoredA first 5: ${storedEmbeddingA.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
     );
 
-    // Compare each live embedding against storedEmbeddingA only
-    final List<double> frontScores = liveEmbeddings
-        .map((e) => cosineSimilarity(e, storedEmbeddingA))
-        .toList();
-
+    // Compare each live embedding against all three stored embeddings, take best
+    final List<double> frontScores = [];
     for (int i = 0; i < liveEmbeddings.length; i++) {
+      final double scoreA = cosineSimilarity(
+        liveEmbeddings[i],
+        storedEmbeddingA,
+      );
+      final double scoreB = cosineSimilarity(
+        liveEmbeddings[i],
+        storedEmbeddingB,
+      );
+      final double scoreC = cosineSimilarity(
+        liveEmbeddings[i],
+        storedEmbeddingC,
+      );
+      final double best = [scoreA, scoreB, scoreC].reduce(math.max);
+      frontScores.add(best);
       debugPrint(
-        '[FACE_VER] Frame $i → frontScore=${frontScores[i].toStringAsFixed(4)}',
+        '[FACE_VER] Frame $i → scoreA=${scoreA.toStringAsFixed(4)} scoreB=${scoreB.toStringAsFixed(4)} scoreC=${scoreC.toStringAsFixed(4)} best=${best.toStringAsFixed(4)}',
       );
     }
 
@@ -276,7 +358,7 @@ class FaceLandmarkService {
 
   // DYNAMIC THRESHOLD — adjusts based on score consistency (MobileFaceNet thresholds)
   double _calculateDynamicThreshold(List<double> scores) {
-    if (scores.isEmpty) return 0.30;
+    if (scores.isEmpty) return 0.75;
 
     // Calculate mean
     double mean = scores.reduce((a, b) => a + b) / scores.length;
@@ -286,13 +368,13 @@ class FaceLandmarkService {
         scores.map((s) => (s - mean) * (s - mean)).reduce((a, b) => a + b) /
         scores.length;
 
-    // MobileFaceNet thresholds
-    if (variance < 0.01) {
-      return 0.28; // Low variance — consistent scores
-    } else if (variance < 0.05) {
-      return 0.29; // Medium variance
+    // MobileFaceNet thresholds in working range
+    if (variance < 0.005) {
+      return 0.72; // Low variance — consistent scores, slightly relaxed
+    } else if (variance < 0.02) {
+      return 0.74; // Medium variance
     } else {
-      return 0.30; // High variance
+      return 0.75; // High variance
     }
   }
 
