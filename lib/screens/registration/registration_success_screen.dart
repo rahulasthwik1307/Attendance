@@ -46,18 +46,68 @@ class _RegistrationSuccessScreenState extends State<RegistrationSuccessScreen>
 
     final data = await Supabase.instance.client
         .from('students')
-        .select('is_approved')
+        .select('is_approved, is_rejected')
         .eq('id', user.id)
         .maybeSingle();
 
     if (!mounted) return;
 
-    if (data != null && data['is_approved'] == true) {
+    if (data == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not fetch status. Please try again.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final bool isApproved = data['is_approved'] == true;
+    final bool isRejected = data['is_rejected'] == true;
+
+    if (isApproved) {
       AuthFlowState.instance.passwordSet = true;
       AuthFlowState.instance.faceRegistered = true;
       Navigator.of(
         context,
       ).pushNamedAndRemoveUntil('/dashboard', (route) => false);
+    } else if (isRejected) {
+      // Show rejection dialog then redirect to home
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Text(
+            'Registration Rejected',
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red),
+          ),
+          content: const Text(
+            'Your face registration was rejected by your teacher. Please re-register your face.',
+            style: TextStyle(fontSize: 14, height: 1.5),
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppStyles.primaryBlue,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      // Reset auth flow state and go to home
+      AuthFlowState.instance.faceRegistered = false;
+      AuthFlowState.instance.passwordSet = true;
+      Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(

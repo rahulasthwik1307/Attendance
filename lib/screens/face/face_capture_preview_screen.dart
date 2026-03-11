@@ -295,29 +295,34 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
                             return;
                           }
 
-                          // Step 2 — upload cropped face photo to storage
+                          // Step 2 — upload cropped face photo to storage with timestamp to bust cache
+                          final String fileName =
+                              'preview_${DateTime.now().millisecondsSinceEpoch}.jpg';
+                          final String filePath = '${user.id}/$fileName';
+
                           await Supabase.instance.client.storage
                               .from('face-registrations')
                               .uploadBinary(
-                                '${user.id}/registration_${user.id}_preview.jpg',
+                                filePath,
                                 _croppedPhotoBytes!,
                                 fileOptions: const FileOptions(
                                   contentType: 'image/jpeg',
-                                  upsert: true,
+                                  upsert: false,
                                 ),
                               );
 
                           // Step 3 — get public URL
                           final photoUrl = Supabase.instance.client.storage
                               .from('face-registrations')
-                              .getPublicUrl(
-                                '${user.id}/registration_${user.id}_preview.jpg',
-                              );
+                              .getPublicUrl(filePath);
 
-                          // Step 4 — save URL to students table
+                          // Step 4 — save URL to students table and reset rejection state
                           final updateResult = await Supabase.instance.client
                               .from('students')
-                              .update({'registration_photo_url': photoUrl})
+                              .update({
+                                'registration_photo_url': photoUrl,
+                                'is_rejected': false,
+                              })
                               .eq('id', user.id)
                               .select();
 
