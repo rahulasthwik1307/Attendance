@@ -790,6 +790,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           setState(() => _borderColor = AppStyles.primaryBlue);
         }
       });
+    } else {
+      _updateInstruction(
+        'Improve lighting',
+        subtitle: 'Move away from bright windows or dark areas',
+        animate: false,
+      );
     }
 
     _lastCaptureTime = DateTime.now();

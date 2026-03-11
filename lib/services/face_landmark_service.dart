@@ -108,6 +108,26 @@ class FaceLandmarkService {
         '[FACE_LANDMARK] Cropped face: ${cropped.width}x${cropped.height}',
       );
 
+      // Step 2.5 — Brightness quality gate on cropped face
+      double cropBrightnessSum = 0.0;
+      for (int y = 0; y < cropH; y++) {
+        for (int x = 0; x < cropW; x++) {
+          final p = cropped.getPixel(x, y);
+          cropBrightnessSum +=
+              0.299 * p.r.toDouble() +
+              0.587 * p.g.toDouble() +
+              0.114 * p.b.toDouble();
+        }
+      }
+      final double avgCropBrightness =
+          cropBrightnessSum / (cropW * cropH * 255);
+      if (avgCropBrightness < 0.16 || avgCropBrightness > 0.94) {
+        debugPrint(
+          '[FACE_LANDMARK] Frame rejected: poor lighting avgCropBrightness=${avgCropBrightness.toStringAsFixed(4)}',
+        );
+        return null;
+      }
+
       // Step 3 — Resize to 112x112
       final img.Image resized = img.copyResize(
         cropped,
@@ -153,6 +173,41 @@ class FaceLandmarkService {
         }
       }
 
+      // Step 3.7 — Laplace sharpening
+      final img.Image sharpened = img.Image(width: 112, height: 112);
+      for (int y = 0; y < 112; y++) {
+        for (int x = 0; x < 112; x++) {
+          final center = gammaCorrected.getPixel(x, y);
+          final top = gammaCorrected.getPixel(x, (y - 1).clamp(0, 111));
+          final bottom = gammaCorrected.getPixel(x, (y + 1).clamp(0, 111));
+          final left = gammaCorrected.getPixel((x - 1).clamp(0, 111), y);
+          final right = gammaCorrected.getPixel((x + 1).clamp(0, 111), y);
+          final int sR =
+              (5 * center.r.toInt() -
+                      top.r.toInt() -
+                      bottom.r.toInt() -
+                      left.r.toInt() -
+                      right.r.toInt())
+                  .clamp(0, 255);
+          final int sG =
+              (5 * center.g.toInt() -
+                      top.g.toInt() -
+                      bottom.g.toInt() -
+                      left.g.toInt() -
+                      right.g.toInt())
+                  .clamp(0, 255);
+          final int sB =
+              (5 * center.b.toInt() -
+                      top.b.toInt() -
+                      bottom.b.toInt() -
+                      left.b.toInt() -
+                      right.b.toInt())
+                  .clamp(0, 255);
+          sharpened.setPixelRgb(x, y, sR, sG, sB);
+        }
+      }
+      debugPrint('[FACE_LANDMARK] Laplace sharpening applied');
+
       // Step 4 — Build flat Float32List with per-image standardization
       // First pass: collect channel values
       final List<double> rVals = [];
@@ -160,7 +215,7 @@ class FaceLandmarkService {
       final List<double> bVals = [];
       for (int y = 0; y < 112; y++) {
         for (int x = 0; x < 112; x++) {
-          final pixel = gammaCorrected.getPixel(x, y);
+          final pixel = sharpened.getPixel(x, y);
           rVals.add(pixel.r.toDouble());
           gVals.add(pixel.g.toDouble());
           bVals.add(pixel.b.toDouble());
@@ -189,7 +244,7 @@ class FaceLandmarkService {
       int pixelIndex = 0;
       for (int y = 0; y < 112; y++) {
         for (int x = 0; x < 112; x++) {
-          final pixel = gammaCorrected.getPixel(x, y);
+          final pixel = sharpened.getPixel(x, y);
           inputBuffer[pixelIndex++] =
               ((pixel.r.toDouble() - rMean) / (rStd + 1e-6)).clamp(-3.0, 3.0);
           inputBuffer[pixelIndex++] =

@@ -696,6 +696,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           debugPrint(
             '[FACE_REG] Failed to generate embedding for phase front (frame ${_frontFrames.length})',
           );
+          _updateInstruction(
+            'Improve lighting',
+            subtitle:
+                'Move to a well-lit area and avoid bright windows behind you',
+            animate: false,
+          );
         }
         break;
       case _Phase.left:
@@ -712,6 +718,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           debugPrint(
             '[FACE_REG] Failed to generate embedding for phase left (frame ${_leftFrames.length})',
           );
+          _updateInstruction(
+            'Improve lighting',
+            subtitle:
+                'Move to a well-lit area and avoid bright windows behind you',
+            animate: false,
+          );
         }
         break;
       case _Phase.right:
@@ -727,6 +739,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         } else {
           debugPrint(
             '[FACE_REG] Failed to generate embedding for phase right (frame ${_rightFrames.length})',
+          );
+          _updateInstruction(
+            'Improve lighting',
+            subtitle:
+                'Move to a well-lit area and avoid bright windows behind you',
+            animate: false,
           );
         }
         break;
