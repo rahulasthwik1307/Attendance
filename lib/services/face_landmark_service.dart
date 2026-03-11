@@ -128,6 +128,80 @@ class FaceLandmarkService {
         return null;
       }
 
+      // Anti-spoof Check 1 — Color Variance (Screen Detection)
+      double sumR = 0.0, sumG = 0.0, sumB = 0.0;
+      final int totalPixels = cropW * cropH;
+      for (int y = 0; y < cropH; y++) {
+        for (int x = 0; x < cropW; x++) {
+          final p = cropped.getPixel(x, y);
+          sumR += p.r.toDouble();
+          sumG += p.g.toDouble();
+          sumB += p.b.toDouble();
+        }
+      }
+      final double meanR = sumR / totalPixels;
+      final double meanG = sumG / totalPixels;
+      final double meanB = sumB / totalPixels;
+      double colorVarianceSum = 0.0;
+      for (int y = 0; y < cropH; y++) {
+        for (int x = 0; x < cropW; x++) {
+          final p = cropped.getPixel(x, y);
+          final double dr = p.r.toDouble() - meanR;
+          final double dg = p.g.toDouble() - meanG;
+          final double db = p.b.toDouble() - meanB;
+          colorVarianceSum += dr * dr + dg * dg + db * db;
+        }
+      }
+      final double colorVariance = colorVarianceSum / totalPixels;
+      if (colorVariance < 150.0) {
+        debugPrint(
+          '[FACE_LANDMARK] Anti-spoof rejected: low color variance=${colorVariance.toStringAsFixed(1)}',
+        );
+        return null;
+      }
+
+      // Anti-spoof Check 2 — LBP Texture Diversity (Skin Texture Detection)
+      final int lbpX = (cropW - 64) ~/ 2;
+      final int lbpY = (cropH - 64) ~/ 2;
+      final List<List<double>> grayRegion = List.generate(
+        64,
+        (ry) => List.generate(64, (rx) {
+          final p = cropped.getPixel(lbpX + rx, lbpY + ry);
+          return 0.299 * p.r.toDouble() +
+              0.587 * p.g.toDouble() +
+              0.114 * p.b.toDouble();
+        }),
+      );
+      final Set<int> lbpCodes = {};
+      for (int y = 1; y <= 62; y++) {
+        for (int x = 1; x <= 62; x++) {
+          final double center = grayRegion[y][x];
+          int code = 0;
+          if (grayRegion[y - 1][x - 1] >= center) code |= 1 << 7; // top-left
+          if (grayRegion[y - 1][x] >= center) code |= 1 << 6; // top
+          if (grayRegion[y - 1][x + 1] >= center) code |= 1 << 5; // top-right
+          if (grayRegion[y][x + 1] >= center) code |= 1 << 4; // right
+          if (grayRegion[y + 1][x + 1] >= center) {
+            code |= 1 << 3; // bottom-right
+          }
+          if (grayRegion[y + 1][x] >= center) code |= 1 << 2; // bottom
+          if (grayRegion[y + 1][x - 1] >= center) code |= 1 << 1; // bottom-left
+          if (grayRegion[y][x - 1] >= center) code |= 1 << 0; // left
+          lbpCodes.add(code);
+        }
+      }
+      final int lbpUniqueCodes = lbpCodes.length;
+      if (lbpUniqueCodes < 100) {
+        debugPrint(
+          '[FACE_LANDMARK] Anti-spoof rejected: low LBP diversity=$lbpUniqueCodes',
+        );
+        return null;
+      }
+
+      debugPrint(
+        '[FACE_LANDMARK] Anti-spoof passed: colorVariance=${colorVariance.toStringAsFixed(1)} lbpCodes=$lbpUniqueCodes',
+      );
+
       // Step 3 — Resize to 112x112
       final img.Image resized = img.copyResize(
         cropped,
