@@ -5,6 +5,8 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../utils/app_styles.dart';
 import '../../services/supabase_service.dart';
 
+Completer<void>? qrScannerReleaseCompleter;
+
 class QrScannerScreen extends StatefulWidget {
   const QrScannerScreen({super.key});
 
@@ -309,7 +311,15 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
   @override
   void dispose() {
-    _scannerController.dispose();
+    qrScannerReleaseCompleter = Completer<void>();
+    Future(() async {
+      try {
+        await _scannerController.dispose();
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 400));
+      qrScannerReleaseCompleter!.complete();
+      qrScannerReleaseCompleter = null;
+    });
     _scanLineController.dispose();
     _bracketGlowController.dispose();
     _countdownTimer?.cancel();

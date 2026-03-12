@@ -23,6 +23,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/face_ml_service.dart';
 import '../../services/face_landmark_service.dart';
 import '../../utils/app_styles.dart';
+import 'qr_scanner_screen.dart';
 
 // ─── Verification phases ──────────────────────────────────────────────────────
 enum _Phase {
@@ -296,6 +297,14 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       debugPrint('[CAM_INIT] Previous release complete');
     }
 
+    final scannerFuture = qrScannerReleaseCompleter?.future;
+    if (scannerFuture != null) {
+      debugPrint('[CAM_INIT] Waiting for QR scanner camera release...');
+      await scannerFuture;
+      debugPrint('[CAM_INIT] QR scanner camera released');
+    }
+    await Future.delayed(const Duration(milliseconds: 300));
+
     if (!mounted) {
       debugPrint('[CAM_INIT] Not mounted after waiting for release — aborting');
       return;
@@ -373,7 +382,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
       if (!mounted) return;
       // On second+ attempts Android surface texture needs extra time to bind
-      final int bindDelay = _cameraInitGeneration > 1 ? 800 : 200;
+      final int bindDelay = _cameraInitGeneration > 1 ? 1000 : 200;
       debugPrint(
         '[CAM_INIT] Waiting ${bindDelay}ms for surface texture bind (generation=$_cameraInitGeneration)',
       );
@@ -1604,6 +1613,9 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                                   left: (availW - circleSize) / 2,
                                   top: circleTop,
                                   child: Container(
+                                    key: ValueKey(
+                                      'camera_clip_$_cameraGeneration',
+                                    ),
                                     width: circleSize,
                                     height: circleSize,
                                     decoration: const BoxDecoration(
