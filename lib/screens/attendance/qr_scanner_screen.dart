@@ -144,14 +144,14 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         return;
       }
 
-      // ── Step 4: Upsert attendance as present in one operation ───────
+      // ── Step 4: Upsert attendance as pending — face verify will upgrade to present ───────
       try {
         await supabase.from('period_attendance').upsert({
           'session_id': sessionId,
           'student_id': supabase.auth.currentUser!.id,
           'scanned_at': DateTime.now().toIso8601String(),
           'face_verified': false,
-          'status': 'present',
+          'status': 'pending',
         }, onConflict: 'session_id,student_id');
         debugPrint('Upsert result: success for session $sessionId');
       } catch (upsertError) {

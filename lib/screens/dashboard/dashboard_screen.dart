@@ -24,6 +24,13 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   String _studentName = 'Student';
 
+  bool _teacherFinalized = false;
+  String _finalizedSubject = '';
+  String _finalizedPeriod = '';
+  bool _teacherFinalizedAbsent = false;
+  String _absentSubject = '';
+  String _absentPeriod = '';
+
   @override
   void initState() {
     super.initState();
@@ -228,7 +235,53 @@ class _DashboardScreenState extends State<DashboardScreen>
             children: [
               FadeSlideY(
                 delay: const Duration(milliseconds: 50),
-                child: const _AttendanceBanner(),
+                child: _AttendanceBanner(
+                  onSessionFinalized: () {
+                    if (mounted) setState(() {});
+                  },
+                  onTeacherFinalized: (subject, period) {
+                    if (mounted) {
+                      setState(() {
+                        _teacherFinalized = true;
+                        _finalizedSubject = subject;
+                        _finalizedPeriod = period;
+                        _teacherFinalizedAbsent = false;
+                        _absentSubject = '';
+                        _absentPeriod = '';
+                      });
+                    }
+                  },
+                  onTeacherFinalizedAbsent: (subject, period) {
+                    if (mounted) {
+                      setState(() {
+                        _teacherFinalized = false;
+                        _finalizedSubject = '';
+                        _finalizedPeriod = '';
+                        _teacherFinalizedAbsent = true;
+                        _absentSubject = subject;
+                        _absentPeriod = period;
+                      });
+                    }
+                  },
+                  onNewSession: () {
+                    if (mounted) {
+                      setState(() {
+                        _teacherFinalized = false;
+                        _finalizedSubject = '';
+                        _finalizedPeriod = '';
+                        _teacherFinalizedAbsent = false;
+                        _absentSubject = '';
+                        _absentPeriod = '';
+                      });
+                    }
+                  },
+                  teacherFinalized: _teacherFinalized,
+                  finalizedSubject: _finalizedSubject,
+                  finalizedPeriod: _finalizedPeriod,
+                  teacherFinalizedAbsent: _teacherFinalizedAbsent,
+                  absentSubject: _absentSubject,
+                  absentPeriod: _absentPeriod,
+                ),
               ),
               FadeSlideY(
                 delay: const Duration(milliseconds: 100),
@@ -575,19 +628,79 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
     _fetchAttendanceStats();
   }
 
+  @override
+  void didUpdateWidget(covariant _AttendancePercentageCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    debugPrint('[DASH_PCT] didUpdateWidget called — re-fetching stats');
+    _controller.reset();
+    _fetchAttendanceStats();
+  }
+
   Future<void> _fetchAttendanceStats() async {
     try {
       final user = supabase.auth.currentUser;
       if (user != null) {
+        debugPrint(
+          '[DASH_PCT] _fetchAttendanceStats called for user: ${user.id}',
+        );
+        // Get student's class_id first
+        final studentData = await supabase
+            .from('students')
+            .select('class_id')
+            .eq('id', user.id)
+            .maybeSingle();
+
+        if (studentData == null) {
+          debugPrint('[DASH_PCT] No student record found');
+          if (mounted) setState(() => _isLoading = false);
+          return;
+        }
+
+        final classId = studentData['class_id'] as String;
+        debugPrint('[DASH_PCT] Student class_id: $classId');
+
+        // Only count attendance from finalized sessions for this student's class
+        final sessions = await supabase
+            .from('attendance_sessions')
+            .select('id')
+            .eq('status', 'finalized')
+            .eq('class_id', classId);
+
+        final finalizedIds = (sessions as List)
+            .map((s) => s['id'] as String)
+            .toList();
+
+        debugPrint('[DASH_PCT] Finalized session IDs: $finalizedIds');
+
+        if (finalizedIds.isEmpty) {
+          if (mounted) {
+            setState(() {
+              _total = 0;
+              _present = 0;
+              _pct = 0.0;
+              _isLoading = false;
+            });
+            _progressAnim = Tween<double>(
+              begin: 0,
+              end: 0,
+            ).animate(_controller);
+            _counterAnim = IntTween(begin: 0, end: 0).animate(_controller);
+            _controller.forward();
+          }
+          return;
+        }
+
         final records = await supabase
             .from('period_attendance')
             .select('status')
             .eq('student_id', user.id)
+            .inFilter('session_id', finalizedIds)
             .inFilter('status', ['present', 'absent']);
 
         int total = records.length;
         int present = records.where((r) => r['status'] == 'present').length;
         double pct = total > 0 ? present / total : 0.0;
+        debugPrint('[DASH_PCT] total=$total present=$present pct=$pct');
 
         if (mounted) {
           setState(() {
@@ -1604,7 +1717,29 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
 }
 
 class _AttendanceBanner extends StatefulWidget {
-  const _AttendanceBanner();
+  final VoidCallback? onSessionFinalized;
+  final void Function(String subject, String period)? onTeacherFinalized;
+  final void Function(String subject, String period)? onTeacherFinalizedAbsent;
+  final VoidCallback? onNewSession;
+  final bool teacherFinalized;
+  final String finalizedSubject;
+  final String finalizedPeriod;
+  final bool teacherFinalizedAbsent;
+  final String absentSubject;
+  final String absentPeriod;
+
+  const _AttendanceBanner({
+    this.onSessionFinalized,
+    this.onTeacherFinalized,
+    this.onTeacherFinalizedAbsent,
+    this.onNewSession,
+    this.teacherFinalized = false,
+    this.finalizedSubject = '',
+    this.finalizedPeriod = '',
+    this.teacherFinalizedAbsent = false,
+    this.absentSubject = '',
+    this.absentPeriod = '',
+  });
 
   @override
   State<_AttendanceBanner> createState() => _AttendanceBannerState();
@@ -1612,6 +1747,8 @@ class _AttendanceBanner extends StatefulWidget {
 
 class _AttendanceBannerState extends State<_AttendanceBanner>
     with SingleTickerProviderStateMixin {
+  VoidCallback? get _onSessionFinalized => widget.onSessionFinalized;
+
   int _secondsRemaining = 0;
   Timer? _countdownTimer;
   String? _activeSessionId;
@@ -1685,7 +1822,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             callback: (payload) {
               final newRecord = payload.newRecord;
               final status = newRecord['status'] as String?;
-              if (status == 'present' && mounted) {
+              // Student scanned + face verified → show pending banner
+              if ((status == 'present' || status == 'pending') && mounted) {
                 setState(() {
                   _hasMarkedAttendance = true;
                 });
@@ -1697,9 +1835,9 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           )
           .subscribe();
 
-      // 4. Subscribe to Realtime for this class
+      // 4. Single unified channel for attendance_sessions — handles both active and finalized
       _subscription = supabase
-          .channel('public:attendance_sessions')
+          .channel('attendance_sessions_class_$_userClassId')
           .onPostgresChanges(
             event: PostgresChangeEvent.all,
             schema: 'public',
@@ -1709,21 +1847,127 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               column: 'class_id',
               value: _userClassId!,
             ),
-            callback: (payload) {
-              final recordId = payload.newRecord['id'] as String?;
-              if (recordId == _activeSessionId) {
-                return;
-              }
+            callback: (payload) async {
+              final newRecord = payload.newRecord;
+              final status = newRecord['status'] as String?;
+              final sessionId = newRecord['id'] as String?;
+
               debugPrint(
-                'AttendanceBanner: Realtime event received: ${payload.eventType} data: ${payload.newRecord}',
+                '[BANNER] attendance_sessions event: status=$status sessionId=$sessionId',
               );
-              _fetchActiveSession();
+
+              if (status == 'finalized' && mounted) {
+                debugPrint('[BANNER] Session finalized event received');
+                await _handleFinalization(sessionId);
+              } else if (status == 'active') {
+                _fetchActiveSession();
+              }
             },
           )
-          .subscribe();
+          .subscribe((status, [error]) {
+            debugPrint('[BANNER] Unified channel status: $status error=$error');
+          });
+
+      // 5. Polling fallback — checks every 15s for latest finalized session
+      _startFinalizationPolling();
     } catch (e) {
       debugPrint('Error initializing realtime: $e');
     }
+  }
+
+  Future<void> _handleFinalization(String? sessionId) async {
+    if (sessionId == null) return;
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    debugPrint(
+      '[BANNER] Checking period_attendance for sessionId=$sessionId studentId=${user.id}',
+    );
+    final record = await supabase
+        .from('period_attendance')
+        .select('status')
+        .eq('session_id', sessionId)
+        .eq('student_id', user.id)
+        .maybeSingle();
+
+    debugPrint('[BANNER] period_attendance result: $record');
+    final studentStatus = record?['status'] as String?;
+    debugPrint('[BANNER] Student status in finalized session: $studentStatus');
+
+    if (studentStatus == 'present' && mounted) {
+      final savedSubject = _subjectName.isNotEmpty
+          ? _subjectName
+          : widget.finalizedSubject;
+      final savedPeriod = _periodInfo.isNotEmpty
+          ? _periodInfo
+          : widget.finalizedPeriod;
+      setState(() {
+        _hasMarkedAttendance = false;
+        _isClosed = false;
+        _isVisible = true;
+      });
+      debugPrint('[BANNER] Showing green confirmed card');
+      widget.onTeacherFinalized?.call(savedSubject, savedPeriod);
+      _onSessionFinalized?.call();
+    } else if (studentStatus == 'absent' && mounted) {
+      final savedSubject = _subjectName.isNotEmpty ? _subjectName : '';
+      final savedPeriod = _periodInfo.isNotEmpty ? _periodInfo : '';
+      setState(() {
+        _hasMarkedAttendance = false;
+        _isClosed = false;
+        _isVisible = false;
+      });
+      debugPrint('[BANNER] Student absent — showing absent card');
+      widget.onTeacherFinalizedAbsent?.call(savedSubject, savedPeriod);
+      _onSessionFinalized?.call();
+    }
+  }
+
+  String? _lastCheckedFinalizedSessionId;
+
+  void _startFinalizationPolling() {
+    // Poll every 15s as fallback for when realtime misses events
+    Timer.periodic(const Duration(seconds: 15), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_userClassId == null) return;
+      // Only check if we're in a state where we might be waiting for finalization
+      if (!_hasMarkedAttendance &&
+          !widget.teacherFinalized &&
+          !widget.teacherFinalizedAbsent) {
+        return;
+      }
+
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+
+      try {
+        // Find the most recently finalized session for this class
+        final sessions = await supabase
+            .from('attendance_sessions')
+            .select('id')
+            .eq('class_id', _userClassId!)
+            .eq('status', 'finalized')
+            .order('finalized_at', ascending: false)
+            .limit(1);
+
+        if (sessions.isEmpty) return;
+        final latestId = sessions.first['id'] as String;
+
+        // Don't re-process the same session
+        if (latestId == _lastCheckedFinalizedSessionId) return;
+        _lastCheckedFinalizedSessionId = latestId;
+
+        debugPrint(
+          '[BANNER] Polling fallback: checking finalized session $latestId',
+        );
+        await _handleFinalization(latestId);
+      } catch (e) {
+        debugPrint('[BANNER] Polling fallback error: $e');
+      }
+    });
   }
 
   void _startPolling() {
@@ -1773,12 +2017,13 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               .select('status')
               .eq('session_id', fetchedSessionId)
               .eq('student_id', user.id)
-              .eq('status', 'present')
+              .inFilter('status', ['present', 'pending'])
               .maybeSingle();
           debugPrint('Period attendance query result: $attendanceRecord');
 
           if (attendanceRecord != null &&
-              attendanceRecord['status'] == 'present' &&
+              (attendanceRecord['status'] == 'present' ||
+                  attendanceRecord['status'] == 'pending') &&
               mounted) {
             debugPrint(
               'Setting hasMarkedAttendance to true and stopping all timers',
@@ -1914,13 +2159,18 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             _isClosed = false;
             _isVisible = true;
           });
+          widget.onNewSession?.call();
           _startTimer();
         } else {
           _closeBanner();
         }
       } else {
-        // If session status changed to finalized or no active session exists
-        _closeBanner();
+        // Only close if student hasn't submitted attendance (don't clear "waiting" card)
+        if (!_hasMarkedAttendance &&
+            !widget.teacherFinalized &&
+            !widget.teacherFinalizedAbsent) {
+          _closeBanner();
+        }
       }
     } catch (e) {
       debugPrint('Error fetching session data: $e');
@@ -1972,10 +2222,14 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
   @override
   Widget build(BuildContext context) {
-    if (!_isVisible) return const SizedBox.shrink();
+    if (!_isVisible &&
+        !widget.teacherFinalized &&
+        !widget.teacherFinalizedAbsent) {
+      return const SizedBox.shrink();
+    }
 
-    // Attendance already marked — green card
-    if (_hasMarkedAttendance) {
+    // Teacher finalized — green confirmed card (persists until next session)
+    if (widget.teacherFinalized) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 10.0),
         child: Container(
@@ -2008,7 +2262,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Attendance Marked',
+                      'Attendance Confirmed',
                       style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 15,
@@ -2018,11 +2272,158 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      'Attendance Marked for $_subjectName',
+                      '${widget.finalizedPeriod} — ${widget.finalizedSubject}',
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
                         color: AppStyles.successGreen.withValues(alpha: 0.8),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Teacher has marked you present ✓',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: AppStyles.successGreen.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Teacher finalized — red absent card (persists until next session)
+    if (widget.teacherFinalizedAbsent) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10.0),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: AppStyles.errorRed.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: AppStyles.errorRed.withValues(alpha: 0.25),
+              width: 1.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppStyles.errorRed.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.cancel_rounded,
+                  color: AppStyles.errorRed,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Marked Absent',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        color: AppStyles.errorRed,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${widget.absentPeriod} — ${widget.absentSubject}',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: AppStyles.errorRed.withValues(alpha: 0.8),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'You were not present for this class',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: AppStyles.errorRed.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Attendance already marked — amber pending card
+    if (_hasMarkedAttendance) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10.0),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: AppStyles.amberWarning.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: AppStyles.amberWarning.withValues(alpha: 0.25),
+              width: 1.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppStyles.amberWarning.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.hourglass_top_rounded,
+                  color: AppStyles.amberWarning,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Attendance Submitted',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        color: AppStyles.amberWarning,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '$_periodInfo — $_subjectName',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: AppStyles.amberWarning.withValues(alpha: 0.8),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Waiting for teacher to finalize',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: AppStyles.amberWarning.withValues(alpha: 0.7),
                       ),
                     ),
                   ],

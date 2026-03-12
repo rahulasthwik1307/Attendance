@@ -65,6 +65,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   CameraController? _cameraController;
   bool _cameraInitialized = false;
   bool _cameraPreviewReady = false;
+  int _cameraGeneration = 0;
 
   // ─── ML ─────────────────────────────────────────────────────────────────
   final FaceMlService _mlService = FaceMlService();
@@ -155,6 +156,8 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
   // Camera release guard — prevents new screen from grabbing camera before old one releases
   static CameraController? _activeCameraController;
+  static Future<void>? _cameraReleaseFuture;
+  static int _cameraInitGeneration = 0;
 
   @override
   void initState() {
@@ -282,12 +285,30 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   // CAMERA INITIALIZATION
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _initializeCamera() async {
+    debugPrint(
+      '[CAM_INIT] _initializeCamera called — waiting for any pending release',
+    );
+
+    // Wait for any previous camera to fully release before initializing
+    if (_cameraReleaseFuture != null) {
+      debugPrint('[CAM_INIT] Previous release in progress — awaiting...');
+      await _cameraReleaseFuture;
+      debugPrint('[CAM_INIT] Previous release complete');
+    }
+
+    if (!mounted) {
+      debugPrint('[CAM_INIT] Not mounted after waiting for release — aborting');
+      return;
+    }
+
     try {
+      debugPrint('[CAM_INIT] Getting available cameras');
       final cameras = await availableCameras();
       final frontCamera = cameras.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
+      debugPrint('[CAM_INIT] Front camera found: ${frontCamera.name}');
 
       _cameraController = CameraController(
         frontCamera,
@@ -296,53 +317,70 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
 
+      debugPrint('[CAM_INIT] Initializing CameraController');
       await _cameraController!.initialize();
+      debugPrint('[CAM_INIT] CameraController initialized');
 
-      // Set to device minimum zoom for widest field of view
+      // Increment generation so CameraPreview gets a new key and fully rebuilds
+      _cameraInitGeneration++;
+
       try {
         final minZoom = await _cameraController!.getMinZoomLevel();
         await _cameraController!.setZoomLevel(minZoom);
-      } catch (_) {
-        // Zoom not supported on this device — continue anyway
+        debugPrint('[CAM_INIT] Zoom set to minimum: $minZoom');
+      } catch (e) {
+        debugPrint('[CAM_INIT] Zoom not supported: $e');
       }
 
-      // Release any previously active controller before proceeding
-      if (_activeCameraController != null &&
-          _activeCameraController != _cameraController) {
-        try {
-          await _activeCameraController!.stopImageStream();
-        } catch (_) {}
-        await _activeCameraController!.dispose();
-        _activeCameraController = null;
-        await Future.delayed(const Duration(milliseconds: 400));
-      }
       _activeCameraController = _cameraController;
+      debugPrint('[CAM_INIT] _activeCameraController assigned');
 
-      if (!mounted) return;
+      if (!mounted) {
+        debugPrint(
+          '[CAM_INIT] Not mounted after initialize — disposing and aborting',
+        );
+        _activeCameraController = null;
+        await _cameraController!.dispose();
+        _cameraController = null;
+        return;
+      }
+
       await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
+
       setState(() {
         _cameraInitialized = true;
+        _cameraGeneration = _cameraInitGeneration;
       });
+      debugPrint(
+        '[CAM_INIT] _cameraInitialized = true, generation=$_cameraGeneration (static=$_cameraInitGeneration), building preview',
+      );
 
-      // Initialize ML services
       await _landmarkService.initialize();
+      debugPrint('[CAM_INIT] ML landmark service initialized');
 
-      // Load stored embeddings
       await _loadEmbeddings();
       if (_embeddingA == null || _embeddingB == null || _embeddingC == null) {
-        return; // error already set
+        debugPrint('[CAM_INIT] Embeddings missing — aborting');
+        return;
       }
+      debugPrint('[CAM_INIT] Embeddings loaded');
 
-      // Start camera stream for face detection
       await _cameraController!.startImageStream(_onCameraFrame);
+      debugPrint('[CAM_INIT] Image stream started');
 
       _setPhase(_Phase.positioning);
 
       if (!mounted) return;
-      await Future.delayed(const Duration(milliseconds: 200));
+      // On second+ attempts Android surface texture needs extra time to bind
+      final int bindDelay = _cameraInitGeneration > 1 ? 800 : 200;
+      debugPrint(
+        '[CAM_INIT] Waiting ${bindDelay}ms for surface texture bind (generation=$_cameraInitGeneration)',
+      );
+      await Future.delayed(Duration(milliseconds: bindDelay));
       if (!mounted) return;
-      if (mounted) setState(() => _cameraPreviewReady = true);
+      setState(() => _cameraPreviewReady = true);
+      debugPrint('[CAM_INIT] Camera preview ready');
 
       _ringController.forward();
       _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -354,7 +392,6 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         } else {
           setState(() => _secondsRemaining = 0);
           timer.cancel();
-          // Timer expired → navigate to failed
           if (mounted && _phase != _Phase.done) {
             Navigator.of(
               context,
@@ -363,6 +400,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         }
       });
     } catch (e) {
+      debugPrint('[CAM_INIT] ERROR: $e');
       _setError('Camera failed to start: $e');
     }
   }
@@ -818,6 +856,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                 .from('period_attendance')
                 .update({
                   'face_verified': true,
+                  'status': 'present',
                   'scanned_at': DateTime.now().toUtc().toIso8601String(),
                 })
                 .eq('session_id', _sessionId!)
@@ -1388,17 +1427,28 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     if (_cameraController != null && _cameraInitialized) {
       final controllerToDispose = _cameraController;
       _cameraController = null;
+      if (_activeCameraController == controllerToDispose) {
+        _activeCameraController = null;
+      }
+      // Store the release future so next screen can wait for it
+      final completer = Completer<void>();
+      _cameraReleaseFuture = completer.future;
       Future(() async {
+        debugPrint('[CAM_INIT] dispose: stopping image stream');
         try {
           await controllerToDispose!.stopImageStream();
-        } catch (_) {}
-        await Future.delayed(const Duration(milliseconds: 200));
+        } catch (e) {
+          debugPrint('[CAM_INIT] dispose: stopImageStream error: $e');
+        }
+        await Future.delayed(const Duration(milliseconds: 500));
+        debugPrint('[CAM_INIT] dispose: disposing controller');
         try {
           await controllerToDispose!.dispose();
-        } catch (_) {}
-        if (_activeCameraController == controllerToDispose) {
-          _activeCameraController = null;
+        } catch (e) {
+          debugPrint('[CAM_INIT] dispose: dispose error: $e');
         }
+        debugPrint('[CAM_INIT] dispose: complete');
+        completer.complete();
       });
     }
 
@@ -1553,59 +1603,59 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                                 Positioned(
                                   left: (availW - circleSize) / 2,
                                   top: circleTop,
-                                  child: ClipOval(
-                                    child: SizedBox(
-                                      width: circleSize,
-                                      height: circleSize,
-                                      child: OverflowBox(
-                                        maxWidth: availW,
-                                        maxHeight: availH,
-                                        child: Transform.translate(
-                                          offset: Offset(0, -circleTop),
-                                          child: Stack(
-                                            children: [
-                                              _buildCameraPreview(availW),
-                                              // Scan line inside clip
-                                              Positioned.fill(
-                                                child: AnimatedBuilder(
-                                                  animation:
-                                                      _scanLineController,
-                                                  builder: (context, child) {
-                                                    return CustomPaint(
-                                                      size: Size(
-                                                        circleSize,
-                                                        circleSize,
-                                                      ),
-                                                      painter: _ScanLinePainter(
-                                                        scanValue:
-                                                            _scanLineController
-                                                                .value,
-                                                        circleSize: circleSize,
-                                                      ),
-                                                    );
-                                                  },
+                                  child: Container(
+                                    width: circleSize,
+                                    height: circleSize,
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                    ),
+                                    clipBehavior: Clip.hardEdge,
+                                    child: OverflowBox(
+                                      maxWidth: availW,
+                                      maxHeight: availH,
+                                      child: Transform.translate(
+                                        offset: Offset(0, -circleTop),
+                                        child: Stack(
+                                          children: [
+                                            _buildCameraPreview(availW),
+                                            // Scan line inside clip
+                                            Positioned.fill(
+                                              child: AnimatedBuilder(
+                                                animation: _scanLineController,
+                                                builder: (context, child) {
+                                                  return CustomPaint(
+                                                    size: Size(
+                                                      circleSize,
+                                                      circleSize,
+                                                    ),
+                                                    painter: _ScanLinePainter(
+                                                      scanValue:
+                                                          _scanLineController
+                                                              .value,
+                                                      circleSize: circleSize,
+                                                    ),
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                            Positioned.fill(
+                                              child: AnimatedOpacity(
+                                                duration: const Duration(
+                                                  milliseconds: 200,
+                                                ),
+                                                curve: Curves.easeOut,
+                                                opacity:
+                                                    (_phase ==
+                                                            _Phase.processing ||
+                                                        _phase == _Phase.done)
+                                                    ? 0.12
+                                                    : 0.0,
+                                                child: Container(
+                                                  color: Colors.black,
                                                 ),
                                               ),
-                                              Positioned.fill(
-                                                child: AnimatedOpacity(
-                                                  duration: const Duration(
-                                                    milliseconds: 200,
-                                                  ),
-                                                  curve: Curves.easeOut,
-                                                  opacity:
-                                                      (_phase ==
-                                                              _Phase
-                                                                  .processing ||
-                                                          _phase == _Phase.done)
-                                                      ? 0.12
-                                                      : 0.0,
-                                                  child: Container(
-                                                    color: Colors.black,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
+                                            ),
+                                          ],
                                         ),
                                       ),
                                     ),
@@ -2139,7 +2189,17 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         child: SizedBox(
           width: sensorW,
           height: sensorH,
-          child: CameraPreview(_cameraController!),
+          child: Builder(
+            builder: (context) {
+              debugPrint(
+                '[CAM_PREVIEW] Building CameraPreview — generation=$_cameraGeneration controller=${_cameraController.hashCode} isInitialized=${_cameraController!.value.isInitialized}',
+              );
+              return CameraPreview(
+                _cameraController!,
+                key: ValueKey(_cameraGeneration),
+              );
+            },
+          ),
         ),
       ),
     );
