@@ -419,7 +419,6 @@ class _ProfileScreenState extends State<ProfileScreen>
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  // Top row: icon + status + percentage
                                   Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
@@ -440,7 +439,6 @@ class _ProfileScreenState extends State<ProfileScreen>
                                     ],
                                   ),
                                   const SizedBox(height: 4),
-                                  // Bottom row: classes count
                                   Text(
                                     '$_attendedClasses / $_totalClasses Classes Attended',
                                     style: TextStyle(
@@ -457,7 +455,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                       ),
                     ),
 
-                    const SizedBox(height: 28),
+                    // ── Reduced from 28 → 16 to bring info card slightly up ──
+                    const SizedBox(height: 16),
 
                     // ── Info card ──
                     FadeSlideY(
@@ -652,34 +651,30 @@ class _ProfileScreenState extends State<ProfileScreen>
     bool isDark,
   ) {
     return Padding(
-      // Reduced from 20 → 16 so content sits closer to card edges
       padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Icon pinned to top of row when value wraps
+          // Icon pinned to top
           Padding(
             padding: const EdgeInsets.only(top: 1.0),
             child: Icon(icon, color: AppStyles.textGray, size: 20),
           ),
           const SizedBox(width: 12),
-          // Label — fixed width so value always starts at same x position
-          SizedBox(
-            width: 104,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 1.5),
-              child: Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: AppStyles.textGray,
-                  fontWeight: FontWeight.w500,
-                ),
+          // Label — natural width, never wraps
+          Padding(
+            padding: const EdgeInsets.only(top: 1.5),
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppStyles.textGray,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          // Value — expands to fill remaining space, wraps freely
+          const SizedBox(width: 12),
+          // Value — fills remaining space, left-aligned, wraps cleanly
           Expanded(
             child: Text(
               value,
