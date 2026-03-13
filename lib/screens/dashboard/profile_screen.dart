@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:math' as math;
+import '../../services/supabase_service.dart';
 import '../../utils/app_styles.dart';
 import '../../widgets/custom_bottom_nav.dart';
 import '../../widgets/fade_slide_y.dart';
@@ -16,13 +17,18 @@ class _ProfileScreenState extends State<ProfileScreen>
     with TickerProviderStateMixin {
   late AnimationController _borderRotationController;
 
-  static const String _name = 'Rahul Sharma';
-  static const String _rollNumber = '2021CS047';
-  static const String _department = 'CSE — Computer Science';
-  static const String _year = '3rd Year';
-  static const double _attendancePct = 0.78;
-  static const int _attendanceDays = 18;
-  static const int _totalDays = 23;
+  String _name = '';
+  String _rollNumber = '';
+  String _department = '';
+  String _classSection = '';
+  String _year = '';
+  String _initials = '';
+  bool _isLoading = true;
+  double _attendancePct = 0.0;
+  int _attendedClasses = 0;
+  int _totalClasses = 0;
+  bool _faceApproved = false;
+  bool _faceRegistered = false;
 
   @override
   void initState() {
@@ -31,6 +37,110 @@ class _ProfileScreenState extends State<ProfileScreen>
       vsync: this,
       duration: const Duration(seconds: 8),
     )..repeat();
+    _fetchProfile();
+  }
+
+  Future<void> _fetchProfile() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+
+      final results = await Future.wait([
+        supabase
+            .from('students')
+            .select(
+              'roll_number, year, class_id, is_approved, face_registered, classes(name, section, department_id)',
+            )
+            .eq('id', user.id)
+            .maybeSingle(),
+        supabase
+            .from('users')
+            .select('full_name')
+            .eq('id', user.id)
+            .maybeSingle(),
+      ]);
+
+      final studentData = results[0];
+      final userData = results[1];
+
+      if (studentData == null || userData == null) return;
+
+      final fullName = userData['full_name'] as String? ?? '';
+      final rollNumber = studentData['roll_number'] as String? ?? '';
+      final year = studentData['year'] as String? ?? '';
+      final faceRegistered = studentData['face_registered'] as bool? ?? false;
+      final faceApproved = studentData['is_approved'] as bool? ?? false;
+      final classData = studentData['classes'] as Map<String, dynamic>?;
+      final className = classData?['name'] as String? ?? '';
+      final section = classData?['section'] as String? ?? '';
+      final departmentId = classData?['department_id'] as String?;
+
+      String departmentName = '';
+      if (departmentId != null) {
+        final deptData = await supabase
+            .from('departments')
+            .select('name')
+            .eq('id', departmentId)
+            .maybeSingle();
+        departmentName = deptData?['name'] as String? ?? '';
+      }
+
+      final nameParts = fullName.trim().split(' ');
+      final initials = nameParts.length >= 2
+          ? '${nameParts.first[0]}${nameParts.last[0]}'.toUpperCase()
+          : fullName.isNotEmpty
+          ? fullName[0].toUpperCase()
+          : '?';
+
+      final sessionsResp = await supabase
+          .from('attendance_sessions')
+          .select('id')
+          .eq('class_id', studentData['class_id'])
+          .eq('status', 'finalized');
+
+      final sessionIds = (sessionsResp as List)
+          .map((s) => s['id'] as String)
+          .toList();
+
+      int attended = 0;
+      int total = 0;
+
+      if (sessionIds.isNotEmpty) {
+        final attendanceResp = await supabase
+            .from('period_attendance')
+            .select('status')
+            .eq('student_id', user.id)
+            .inFilter('session_id', sessionIds)
+            .inFilter('status', ['present', 'absent']);
+
+        total = (attendanceResp as List).length;
+        attended = attendanceResp.where((r) => r['status'] == 'present').length;
+      }
+
+      final pct = total > 0 ? attended / total : 0.0;
+
+      if (mounted) {
+        setState(() {
+          _name = fullName;
+          _rollNumber = rollNumber;
+          _department = departmentName;
+          _classSection = className.isNotEmpty && section.isNotEmpty
+              ? '$className - $section'
+              : className;
+          _year = year;
+          _initials = initials;
+          _faceRegistered = faceRegistered;
+          _faceApproved = faceApproved;
+          _attendancePct = pct;
+          _attendedClasses = attended;
+          _totalClasses = total;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[PROFILE] Error fetching profile: $e');
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -171,277 +281,363 @@ class _ProfileScreenState extends State<ProfileScreen>
             ),
           ),
         ),
-        body: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24.0,
-              vertical: 16.0,
-            ),
-            children: [
-              FadeSlideY(
-                delay: const Duration(milliseconds: 100),
-                child: Center(
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      AnimatedBuilder(
-                        animation: _borderRotationController,
-                        builder: (context, child) {
-                          return Transform.rotate(
-                            angle:
-                                _borderRotationController.value * 2 * math.pi,
-                            child: Container(
-                              width: 130,
-                              height: 130,
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                gradient: SweepGradient(
-                                  colors: [
-                                    AppStyles.primaryBlue,
-                                    Colors.transparent,
-                                  ],
-                                  stops: [0.0, 0.5],
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                      Container(
-                        width: 120,
-                        height: 120,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: theme.primaryColor.withValues(alpha: 0.12),
-                          border: Border.all(color: cardColor, width: 4),
-                        ),
-                        child: ClipOval(
-                          child: Center(
-                            child: Text(
-                              'RS',
-                              style: TextStyle(
-                                fontSize: 36,
-                                fontWeight: FontWeight.w800,
-                                color: theme.primaryColor,
-                                letterSpacing: -1,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+        body: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : SafeArea(
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24.0,
+                    vertical: 16.0,
                   ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 200),
-                child: Center(
-                  child: Text(
-                    _name,
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: textColor,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 4),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 260),
-                child: Center(
-                  child: Text(
-                    _rollNumber,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: AppStyles.textGray,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              // Attendance percentage badge
-              FadeSlideY(
-                delay: const Duration(milliseconds: 320),
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppStyles.successGreen.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: AppStyles.successGreen.withValues(alpha: 0.3),
-                        width: 1,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.trending_up_rounded,
-                          size: 14,
-                          color: AppStyles.successGreen,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${(_attendancePct * 100).round()}% Attendance — $_attendanceDays / $_totalDays Days',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: AppStyles.successGreen,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 28),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 400),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: cardColor,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      _buildInfoRow(
-                        Icons.person_outline_rounded,
-                        'Student Name',
-                        _name,
-                        textColor,
-                        isDark,
-                      ),
-                      Divider(
-                        height: 1,
-                        color: isDark
-                            ? Colors.grey.shade800
-                            : const Color(0xFFE2E8F0),
-                      ),
-                      _buildInfoRow(
-                        Icons.badge_outlined,
-                        'Roll Number',
-                        _rollNumber,
-                        textColor,
-                        isDark,
-                      ),
-                      Divider(
-                        height: 1,
-                        color: isDark
-                            ? Colors.grey.shade800
-                            : const Color(0xFFE2E8F0),
-                      ),
-                      _buildInfoRow(
-                        Icons.domain_rounded,
-                        'Department',
-                        _department,
-                        textColor,
-                        isDark,
-                      ),
-                      Divider(
-                        height: 1,
-                        color: isDark
-                            ? Colors.grey.shade800
-                            : const Color(0xFFE2E8F0),
-                      ),
-                      _buildInfoRow(
-                        Icons.school_outlined,
-                        'Year',
-                        _year,
-                        textColor,
-                        isDark,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 500),
-                child: Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: AppStyles.successGreen.withValues(
-                      alpha: isDark ? 0.15 : 0.08,
-                    ),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: AppStyles.successGreen.withValues(alpha: 0.25),
-                      width: 1,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: AppStyles.successGreen.withValues(alpha: 0.15),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.face_retouching_natural_rounded,
-                          color: AppStyles.successGreen,
-                          size: 22,
-                        ),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    FadeSlideY(
+                      delay: const Duration(milliseconds: 100),
+                      child: Center(
+                        child: Stack(
+                          alignment: Alignment.center,
                           children: [
-                            const Text(
-                              'Face Registration',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: AppStyles.textGray,
-                              ),
+                            AnimatedBuilder(
+                              animation: _borderRotationController,
+                              builder: (context, child) {
+                                return Transform.rotate(
+                                  angle:
+                                      _borderRotationController.value *
+                                      2 *
+                                      math.pi,
+                                  child: Container(
+                                    width: 130,
+                                    height: 130,
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      gradient: SweepGradient(
+                                        colors: [
+                                          AppStyles.primaryBlue,
+                                          Colors.transparent,
+                                        ],
+                                        stops: [0.0, 0.5],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
                             ),
-                            const SizedBox(height: 3),
-                            const Text(
-                              'Approved — Active',
-                              style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                                color: AppStyles.successGreen,
+                            Container(
+                              width: 120,
+                              height: 120,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: theme.primaryColor.withValues(
+                                  alpha: 0.12,
+                                ),
+                                border: Border.all(color: cardColor, width: 4),
+                              ),
+                              child: ClipOval(
+                                child: Center(
+                                  child: Text(
+                                    _initials,
+                                    style: TextStyle(
+                                      fontSize: 36,
+                                      fontWeight: FontWeight.w800,
+                                      color: theme.primaryColor,
+                                      letterSpacing: -1,
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
                           ],
                         ),
                       ),
-                      Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          color: AppStyles.successGreen.withValues(alpha: 0.15),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.verified_rounded,
-                          color: AppStyles.successGreen,
-                          size: 20,
+                    ),
+                    const SizedBox(height: 16),
+                    FadeSlideY(
+                      delay: const Duration(milliseconds: 200),
+                      child: Center(
+                        child: Text(
+                          _name,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: textColor,
+                          ),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 4),
+                    FadeSlideY(
+                      delay: const Duration(milliseconds: 260),
+                      child: Center(
+                        child: Text(
+                          _rollNumber,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: AppStyles.textGray,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // ── Attendance badge — two-line layout ──
+                    FadeSlideY(
+                      delay: const Duration(milliseconds: 320),
+                      child: Center(
+                        child: Builder(
+                          builder: (context) {
+                            final pct = (_attendancePct * 100).round();
+                            final Color badgeColor = pct >= 90
+                                ? const Color(0xFF6366F1)
+                                : pct >= 75
+                                ? AppStyles.successGreen
+                                : AppStyles.errorRed;
+                            final IconData badgeIcon = pct >= 90
+                                ? Icons.star_rounded
+                                : pct >= 75
+                                ? Icons.trending_up_rounded
+                                : Icons.warning_amber_rounded;
+                            final String statusLabel = pct >= 90
+                                ? 'Excellent'
+                                : pct >= 75
+                                ? 'Good'
+                                : 'Low';
+
+                            return Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: badgeColor.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: badgeColor.withValues(alpha: 0.3),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        badgeIcon,
+                                        size: 15,
+                                        color: badgeColor,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        '$statusLabel — $pct% Attendance',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: badgeColor,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '$_attendedClasses / $_totalClasses Classes Attended',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: badgeColor.withValues(alpha: 0.75),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+
+                    // ── Reduced from 28 → 16 to bring info card slightly up ──
+                    const SizedBox(height: 16),
+
+                    // ── Info card ──
+                    FadeSlideY(
+                      delay: const Duration(milliseconds: 400),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: cardColor,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.05),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          children: [
+                            _buildInfoRow(
+                              Icons.person_outline_rounded,
+                              'Student Name',
+                              _name,
+                              textColor,
+                              isDark,
+                            ),
+                            Divider(
+                              height: 1,
+                              color: isDark
+                                  ? Colors.grey.shade800
+                                  : const Color(0xFFE2E8F0),
+                            ),
+                            _buildInfoRow(
+                              Icons.badge_outlined,
+                              'Roll Number',
+                              _rollNumber,
+                              textColor,
+                              isDark,
+                            ),
+                            Divider(
+                              height: 1,
+                              color: isDark
+                                  ? Colors.grey.shade800
+                                  : const Color(0xFFE2E8F0),
+                            ),
+                            _buildInfoRow(
+                              Icons.domain_rounded,
+                              'Department',
+                              _department,
+                              textColor,
+                              isDark,
+                            ),
+                            Divider(
+                              height: 1,
+                              color: isDark
+                                  ? Colors.grey.shade800
+                                  : const Color(0xFFE2E8F0),
+                            ),
+                            _buildInfoRow(
+                              Icons.class_outlined,
+                              'Class & Section',
+                              _classSection,
+                              textColor,
+                              isDark,
+                            ),
+                            Divider(
+                              height: 1,
+                              color: isDark
+                                  ? Colors.grey.shade800
+                                  : const Color(0xFFE2E8F0),
+                            ),
+                            _buildInfoRow(
+                              Icons.school_outlined,
+                              'Year',
+                              _year,
+                              textColor,
+                              isDark,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+
+                    // ── Face registration card ──
+                    FadeSlideY(
+                      delay: const Duration(milliseconds: 500),
+                      child: Builder(
+                        builder: (context) {
+                          final String faceStatus = !_faceRegistered
+                              ? 'Not Registered'
+                              : !_faceApproved
+                              ? 'Pending Approval'
+                              : 'Approved — Active';
+                          final Color faceColor = !_faceRegistered
+                              ? AppStyles.textGray
+                              : !_faceApproved
+                              ? AppStyles.amberWarning
+                              : AppStyles.successGreen;
+                          final IconData faceIcon = !_faceRegistered
+                              ? Icons.face_outlined
+                              : !_faceApproved
+                              ? Icons.hourglass_top_rounded
+                              : Icons.face_retouching_natural_rounded;
+                          final IconData faceTrailingIcon = !_faceApproved
+                              ? Icons.pending_rounded
+                              : Icons.verified_rounded;
+
+                          return Container(
+                            padding: const EdgeInsets.all(18),
+                            decoration: BoxDecoration(
+                              color: faceColor.withValues(
+                                alpha: isDark ? 0.15 : 0.08,
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: faceColor.withValues(alpha: 0.25),
+                                width: 1,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: faceColor.withValues(alpha: 0.15),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
+                                    faceIcon,
+                                    color: faceColor,
+                                    size: 22,
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Face Registration',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: AppStyles.textGray,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        faceStatus,
+                                        style: TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w700,
+                                          color: faceColor,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: faceColor.withValues(alpha: 0.15),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
+                                    faceTrailingIcon,
+                                    color: faceColor,
+                                    size: 20,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
                 ),
               ),
-              const SizedBox(height: 24),
-            ],
-          ),
-        ),
         bottomNavigationBar: CustomBottomNav(currentIndex: 3, onTap: _onNavTap),
       ),
     );
@@ -455,28 +651,40 @@ class _ProfileScreenState extends State<ProfileScreen>
     bool isDark,
   ) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 14.0),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: AppStyles.textGray, size: 20),
-          const SizedBox(width: 14),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 13,
-              color: AppStyles.textGray,
-              fontWeight: FontWeight.w500,
+          // Icon pinned to top
+          Padding(
+            padding: const EdgeInsets.only(top: 1.0),
+            child: Icon(icon, color: AppStyles.textGray, size: 20),
+          ),
+          const SizedBox(width: 12),
+          // Label — natural width, never wraps
+          Padding(
+            padding: const EdgeInsets.only(top: 1.5),
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppStyles.textGray,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
-          const Spacer(),
-          Flexible(
+          const SizedBox(width: 12),
+          // Value — fills remaining space, left-aligned, wraps cleanly
+          Expanded(
             child: Text(
               value,
               textAlign: TextAlign.right,
+              softWrap: true,
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
                 color: textColor,
+                height: 1.4,
               ),
             ),
           ),

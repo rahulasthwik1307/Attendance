@@ -1,152 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../services/supabase_service.dart';
 import '../../utils/app_styles.dart';
 import '../../widgets/custom_bottom_nav.dart';
 import '../../widgets/fade_slide_y.dart';
 
 import 'dart:math' as math;
-
-const List<Map<String, dynamic>> _subjectAttendance = [
-  {
-    'subject': 'Software Engineering',
-    'code': 'SE',
-    'held': 30,
-    'attended': 18,
-    'faculty': 'Dr. V. Singh',
-  },
-  {
-    'subject': 'DBMS',
-    'code': 'DB',
-    'held': 38,
-    'attended': 26,
-    'faculty': 'Dr. P. Sharma',
-  },
-  {
-    'subject': 'Computer Networks',
-    'code': 'CN',
-    'held': 36,
-    'attended': 30,
-    'faculty': 'Prof. A. Rao',
-  },
-  {
-    'subject': 'Operating Systems',
-    'code': 'OS',
-    'held': 40,
-    'attended': 32,
-    'faculty': 'Prof. S. Mehta',
-  },
-  {
-    'subject': 'Data Structures',
-    'code': 'DS',
-    'held': 42,
-    'attended': 38,
-    'faculty': 'Dr. R. Kumar',
-  },
-];
-
-const List<Map<String, dynamic>> _collegeAttendance = [
-  {
-    'dateLabel': 'Today',
-    'fullDate': 'Oct 24, 2024',
-    'time': '09:05 AM',
-    'status': 'present',
-  },
-  {
-    'dateLabel': 'Yesterday',
-    'fullDate': 'Oct 23, 2024',
-    'time': '09:12 AM',
-    'status': 'present',
-  },
-  {
-    'dateLabel': 'Sat • Oct 22',
-    'fullDate': 'Oct 22, 2024',
-    'time': '—',
-    'status': 'absent',
-  },
-  {
-    'dateLabel': 'Fri • Oct 21',
-    'fullDate': 'Oct 21, 2024',
-    'time': '08:58 AM',
-    'status': 'present',
-  },
-  {
-    'dateLabel': 'Thu • Oct 20',
-    'fullDate': 'Oct 20, 2024',
-    'time': '09:20 AM',
-    'status': 'late',
-  },
-  {
-    'dateLabel': 'Wed • Oct 19',
-    'fullDate': 'Oct 19, 2024',
-    'time': '09:01 AM',
-    'status': 'present',
-  },
-  {
-    'dateLabel': 'Tue • Oct 18',
-    'fullDate': 'Oct 18, 2024',
-    'time': '—',
-    'status': 'absent',
-  },
-];
-
-const List<Map<String, dynamic>> _classAttendance = [
-  {
-    'dateGroup': 'Today • Oct 24, 2024',
-    'subject': 'Data Structures',
-    'period': '1st Period',
-    'time': '09:05 AM',
-    'status': 'present',
-  },
-  {
-    'dateGroup': 'Today • Oct 24, 2024',
-    'subject': 'Operating Systems',
-    'period': '2nd Period',
-    'time': '10:10 AM',
-    'status': 'present',
-  },
-  {
-    'dateGroup': 'Today • Oct 24, 2024',
-    'subject': 'DBMS',
-    'period': '3rd Period',
-    'time': '—',
-    'status': 'absent',
-  },
-  {
-    'dateGroup': 'Yesterday • Oct 23, 2024',
-    'subject': 'Computer Networks',
-    'period': '1st Period',
-    'time': '09:08 AM',
-    'status': 'present',
-  },
-  {
-    'dateGroup': 'Yesterday • Oct 23, 2024',
-    'subject': 'Data Structures',
-    'period': '2nd Period',
-    'time': '10:15 AM',
-    'status': 'present',
-  },
-  {
-    'dateGroup': 'Yesterday • Oct 23, 2024',
-    'subject': 'Software Engineering',
-    'period': '4th Period',
-    'time': '—',
-    'status': 'absent',
-  },
-  {
-    'dateGroup': 'Fri • Oct 21, 2024',
-    'subject': 'Operating Systems',
-    'period': '1st Period',
-    'time': '09:00 AM',
-    'status': 'present',
-  },
-  {
-    'dateGroup': 'Fri • Oct 21, 2024',
-    'subject': 'DBMS',
-    'period': '2nd Period',
-    'time': '10:05 AM',
-    'status': 'present',
-  },
-];
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -158,16 +17,79 @@ class HistoryScreen extends StatefulWidget {
 class _HistoryScreenState extends State<HistoryScreen>
     with TickerProviderStateMixin {
   late TabController _tabController;
+  late AnimationController _headerAnimController;
+  late Animation<double> _headerFadeAnim;
+  late Animation<Offset> _headerSlideAnim;
+
+  // Month/year selection state
+  int _selectedYear = DateTime.now().year;
+  String _selectedMonthAbbr = _monthAbbreviations[DateTime.now().month - 1];
+  bool _pillPressed = false;
+  bool _sheetOpen = false;
+
+  String get _selectedMonthLabel => '$_selectedMonthAbbr $_selectedYear';
+
+  // Dynamic data state
+  String? _studentClassId;
+
+  // College tab
+  List<Map<String, dynamic>> _collegeRecords = [];
+
+  // Classes tab
+  List<Map<String, dynamic>> _classRecords = [];
+
+  // Subjects tab
+  List<Map<String, dynamic>> _subjectRecords = [];
+
+  // Available months per year — derived from real data
+  Map<int, List<String>> _availableMonths = {};
+
+  static const List<String> _monthAbbreviations = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+
+    _headerAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _headerFadeAnim = CurvedAnimation(
+      parent: _headerAnimController,
+      curve: Curves.easeOut,
+    );
+    _headerSlideAnim =
+        Tween<Offset>(begin: const Offset(0, -0.25), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _headerAnimController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
+    // Start header entry animation after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _headerAnimController.forward();
+    });
+    _loadStudentClass();
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _headerAnimController.dispose();
     super.dispose();
   }
 
@@ -178,19 +100,522 @@ class _HistoryScreenState extends State<HistoryScreen>
     if (index == 3) Navigator.of(context).pushReplacementNamed('/profile');
   }
 
+  // ── Data fetching ──────────────────────────────────────────────────────────
+
+  Future<void> _loadStudentClass() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+      final studentData = await supabase
+          .from('students')
+          .select('class_id')
+          .eq('id', user.id)
+          .maybeSingle();
+      if (studentData == null) return;
+      _studentClassId = studentData['class_id'] as String;
+      await _fetchAllData();
+    } catch (e) {
+      debugPrint('[HISTORY] loadStudentClass error: $e');
+    }
+  }
+
+  Future<void> _fetchAllData() async {
+    if (!mounted) return;
+    await Future.wait([
+      _fetchCollegeData(),
+      _fetchClassData(),
+      _fetchSubjectData(),
+    ]);
+    _buildAvailableMonths();
+  }
+
+  Future<void> _fetchCollegeData() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+
+      final records = await supabase
+          .from('college_attendance')
+          .select('id, date, marked_at, status')
+          .eq('student_id', user.id)
+          .order('date', ascending: false)
+          .limit(60);
+
+      final List<Map<String, dynamic>> built = [];
+      for (final r in records) {
+        final dateStr = r['date'] as String;
+        final markedAtStr = r['marked_at'] as String?;
+        String status = r['status'] as String? ?? 'absent';
+
+        String timeDisplay = '\u2014';
+        if (markedAtStr != null) {
+          final markedAt = DateTime.parse(markedAtStr).toLocal();
+          final hour = markedAt.hour;
+          final minute = markedAt.minute.toString().padLeft(2, '0');
+          final period = hour >= 12 ? 'PM' : 'AM';
+          final displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+          timeDisplay = '$displayHour:$minute $period';
+
+          // Derive late: present but marked after 9:15 AM
+          if (status == 'present') {
+            final cutoff = DateTime(
+              markedAt.year,
+              markedAt.month,
+              markedAt.day,
+              9,
+              15,
+            );
+            if (markedAt.isAfter(cutoff)) status = 'late';
+          }
+        }
+
+        // Build dateLabel exactly as hardcoded: Today / Yesterday / Weekday • Mon DD
+        final date = DateTime.parse(dateStr);
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        final yesterday = today.subtract(const Duration(days: 1));
+        final recordDay = DateTime(date.year, date.month, date.day);
+        final weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        final months = [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ];
+
+        String dateLabel;
+        if (recordDay == today) {
+          dateLabel = 'Today';
+        } else if (recordDay == yesterday) {
+          dateLabel = 'Yesterday';
+        } else {
+          final weekday = weekdays[date.weekday - 1];
+          final monthAbbr = months[date.month - 1];
+          dateLabel = '$weekday \u2022 $monthAbbr ${date.day}';
+        }
+
+        built.add({
+          'dateLabel': dateLabel,
+          'fullDate': '${months[date.month - 1]} ${date.day}, ${date.year}',
+          'time': timeDisplay,
+          'status': status,
+          'rawDate': dateStr,
+        });
+      }
+
+      if (mounted) setState(() => _collegeRecords = built);
+    } catch (e) {
+      debugPrint('[HISTORY] fetchCollegeData error: $e');
+    }
+  }
+
+  Future<void> _fetchClassData() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null || _studentClassId == null) return;
+
+      // Fetch finalized sessions with finalized_at for time display
+      final sessions = await supabase
+          .from('attendance_sessions')
+          .select('id, session_date, subject_id, period_id, finalized_at')
+          .eq('class_id', _studentClassId!)
+          .eq('status', 'finalized')
+          .order('finalized_at', ascending: false)
+          .limit(200);
+
+      if ((sessions as List).isEmpty) {
+        if (mounted) setState(() => _classRecords = []);
+        return;
+      }
+
+      final sessionIds = sessions.map((s) => s['id'] as String).toList();
+
+      final attendance = await supabase
+          .from('period_attendance')
+          .select('session_id, status')
+          .eq('student_id', user.id)
+          .inFilter('session_id', sessionIds);
+
+      final Map<String, String> sessionStatusMap = {};
+      for (final a in attendance) {
+        sessionStatusMap[a['session_id'] as String] =
+            a['status'] as String? ?? 'absent';
+      }
+
+      final subjectIds =
+          sessions.map((s) => s['subject_id'] as String).toSet().toList();
+      final periodIds =
+          sessions.map((s) => s['period_id'] as String).toSet().toList();
+
+      final subjectsResp = await supabase
+          .from('subjects')
+          .select('id, name')
+          .inFilter('id', subjectIds);
+      final periodsResp = await supabase
+          .from('periods')
+          .select('id, period_number')
+          .inFilter('id', periodIds);
+
+      final Map<String, String> subjectNames = {
+        for (final s in subjectsResp) s['id'] as String: s['name'] as String,
+      };
+
+      String getOrdinal(int n) {
+        if (n >= 11 && n <= 13) return '${n}th';
+        switch (n % 10) {
+          case 1: return '${n}st';
+          case 2: return '${n}nd';
+          case 3: return '${n}rd';
+          default: return '${n}th';
+        }
+      }
+
+      final Map<String, String> periodLabels = {
+        for (final p in periodsResp)
+          p['id'] as String: '${getOrdinal(p['period_number'] as int)} Period',
+      };
+
+      final months = ['Jan','Feb','Mar','Apr','May','Jun',
+                      'Jul','Aug','Sep','Oct','Nov','Dec'];
+      final weekdays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final yesterday = today.subtract(const Duration(days: 1));
+
+      // Deduplicate: per day, per subject+period combo — keep latest finalized_at
+      // Key = "date__subjectId__periodId"
+      final Map<String, Map<String, dynamic>> latestMap = {};
+
+      for (final s in sessions) {
+        final dateStr = s['session_date'] as String;
+        final subjectId = s['subject_id'] as String;
+        final periodId = s['period_id'] as String;
+        final key = '${dateStr}__${subjectId}__$periodId';
+
+        final existing = latestMap[key];
+        final thisFinalized = s['finalized_at'] as String?;
+
+        if (existing == null) {
+          latestMap[key] = s;
+        } else {
+          // Keep the more recently finalized one
+          final existingFinalized = existing['finalized_at'] as String?;
+          if (thisFinalized != null && existingFinalized != null) {
+            if (thisFinalized.compareTo(existingFinalized) > 0) {
+              latestMap[key] = s;
+            }
+          }
+        }
+      }
+
+      // Build records from deduplicated map
+      final List<Map<String, dynamic>> built = [];
+
+      for (final s in latestMap.values) {
+        final sessionId = s['id'] as String;
+        final dateStr = s['session_date'] as String;
+        final finalizedAtStr = s['finalized_at'] as String?;
+
+        final date = DateTime.parse(dateStr);
+        final recordDay = DateTime(date.year, date.month, date.day);
+        final monthAbbr = months[date.month - 1];
+
+        String dateGroup;
+        if (recordDay == today) {
+          dateGroup = 'Today \u2022 $monthAbbr ${date.day}, ${date.year}';
+        } else if (recordDay == yesterday) {
+          dateGroup = 'Yesterday \u2022 $monthAbbr ${date.day}, ${date.year}';
+        } else {
+          final weekday = weekdays[date.weekday - 1];
+          dateGroup = '$weekday \u2022 $monthAbbr ${date.day}, ${date.year}';
+        }
+
+        // Format finalized_at as time
+        String timeDisplay = '\u2014';
+        if (finalizedAtStr != null) {
+          final dt = DateTime.parse(finalizedAtStr).toLocal();
+          final hour = dt.hour;
+          final minute = dt.minute.toString().padLeft(2, '0');
+          final ampm = hour >= 12 ? 'PM' : 'AM';
+          final displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+          timeDisplay = '$displayHour:$minute $ampm';
+        }
+
+        final status = sessionStatusMap[sessionId] ?? 'absent';
+        final subjectName =
+            subjectNames[s['subject_id'] as String] ?? 'Unknown';
+        final periodLabel =
+            periodLabels[s['period_id'] as String] ?? 'Period';
+
+        built.add({
+          'dateGroup': dateGroup,
+          'subject': subjectName,
+          'period': periodLabel,
+          'time': timeDisplay,
+          'status': status == 'present' ? 'present' : 'absent',
+          'rawDate': dateStr,
+        });
+      }
+
+      // Sort by date descending, then by period label
+      built.sort((a, b) {
+        final dateCompare =
+            (b['rawDate'] as String).compareTo(a['rawDate'] as String);
+        if (dateCompare != 0) return dateCompare;
+        return (a['period'] as String).compareTo(b['period'] as String);
+      });
+
+      if (mounted) setState(() => _classRecords = built);
+    } catch (e) {
+      debugPrint('[HISTORY] fetchClassData error: $e');
+    }
+  }
+
+  Future<void> _fetchSubjectData() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null || _studentClassId == null) return;
+
+      // Step 1: Teacher assignments
+      final assignmentsRaw = await supabase
+          .from('teacher_assignments')
+          .select('subject_id, teacher_id, subjects(id, name, code)')
+          .eq('class_id', _studentClassId!);
+
+      final List<Map<String, dynamic>> assignments = (assignmentsRaw as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      if (assignments.isEmpty) {
+        if (mounted) setState(() => _subjectRecords = []);
+        return;
+      }
+
+      // Step 2: Teacher names — via teachers table joining users
+      // teachers.id = users.id, so we fetch users directly by teacher_id
+      final teacherIds = assignments
+          .map((a) => a['teacher_id'] as String?)
+          .where((id) => id != null)
+          .cast<String>()
+          .toSet()
+          .toList();
+
+      final Map<String, String> teacherNames = {};
+      if (teacherIds.isNotEmpty) {
+        final teachersRaw = await supabase
+            .rpc('get_teacher_names', params: {'teacher_ids': teacherIds});
+
+        for (final t in (teachersRaw as List)) {
+          final id = t['id'] as String?;
+          final name = t['full_name'] as String?;
+          final title = t['title'] as String? ?? 'Mr';
+          if (id != null) teacherNames[id] = '$title. ${name ?? 'Faculty'}';
+        }
+      }
+
+      // Step 3: ALL finalized sessions for this class
+      final sessionsRaw = await supabase
+          .from('attendance_sessions')
+          .select('id, subject_id')
+          .eq('class_id', _studentClassId!)
+          .eq('status', 'finalized');
+
+      final List<Map<String, dynamic>> sessions = (sessionsRaw as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      final sessionIds = sessions.map((s) => s['id'] as String).toList();
+
+      // Step 4: Student's period_attendance — ONLY sessions where student has a record
+      Map<String, String> sessionStatusMap = {};
+      if (sessionIds.isNotEmpty) {
+        final attendanceRaw = await supabase
+            .from('period_attendance')
+            .select('session_id, status')
+            .eq('student_id', user.id)
+            .inFilter('session_id', sessionIds)
+            .inFilter('status', ['present', 'absent']);
+
+        for (final a in (attendanceRaw as List)) {
+          final sid = a['session_id'] as String?;
+          final st = a['status'] as String?;
+          if (sid != null && st != null) sessionStatusMap[sid] = st;
+        }
+      }
+
+      // Step 5: Build subject records
+      // held = sessions where student HAS a period_attendance record (present or absent)
+      // attended = sessions where student was present
+      final List<Map<String, dynamic>> built = [];
+
+      for (final asgn in assignments) {
+        final subjectId = asgn['subject_id'] as String?;
+        final teacherId = asgn['teacher_id'] as String?;
+        final subjectMap = asgn['subjects'];
+
+        final subjectName = subjectMap is Map
+            ? (subjectMap['name'] as String? ?? 'Unknown')
+            : 'Unknown';
+        final facultyName = teacherId != null
+            ? (teacherNames[teacherId] ?? 'Faculty')
+            : 'Faculty';
+
+        // Only sessions for this subject
+        final subjectSessionIds = sessions
+            .where((s) => s['subject_id'] == subjectId)
+            .map((s) => s['id'] as String)
+            .toList();
+
+        // held = only sessions where student has an attendance record
+        final int held = subjectSessionIds
+            .where((sid) => sessionStatusMap.containsKey(sid))
+            .length;
+        final int attended = subjectSessionIds
+            .where((sid) => sessionStatusMap[sid] == 'present')
+            .length;
+
+        built.add({
+          'subject': subjectName,
+          'held': held,
+          'attended': attended,
+          'faculty': facultyName,
+        });
+      }
+
+      if (mounted) setState(() => _subjectRecords = built);
+    } catch (e, st) {
+      debugPrint('[SUBJECT] error: $e\n$st');
+      if (mounted) setState(() => _subjectRecords = []);
+    }
+  }
+
+  void _buildAvailableMonths() {
+    final now = DateTime.now();
+    final monthAbbrs = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+
+    // Collect all dates from college + class records
+    final Set<String> allDates = {};
+    for (final r in _collegeRecords) {
+      allDates.add(r['rawDate'] as String);
+    }
+    for (final r in _classRecords) {
+      allDates.add(r['rawDate'] as String);
+    }
+
+    // Group by year → set of month indices (0-based)
+    final Map<int, Set<int>> yearMonths = {};
+    for (final d in allDates) {
+      final date = DateTime.parse(d);
+      yearMonths.putIfAbsent(date.year, () => {}).add(date.month - 1);
+    }
+
+    // Build available months map — only past/current months
+    final Map<int, List<String>> result = {};
+    for (final year in yearMonths.keys) {
+      final List<String> months = [];
+      for (int m = 0; m < 12; m++) {
+        final isDataPresent = yearMonths[year]?.contains(m) ?? false;
+        final isFuture = DateTime(
+          year,
+          m + 1,
+        ).isAfter(DateTime(now.year, now.month));
+        if (isDataPresent && !isFuture) months.add(monthAbbrs[m]);
+      }
+      if (months.isNotEmpty) result[year] = months;
+    }
+
+    if (mounted) {
+      setState(() {
+        _availableMonths = result;
+        // Auto-select latest available month if current selection is not available
+        if (result.isNotEmpty) {
+          final latestYear = result.keys.reduce((a, b) => a > b ? a : b);
+          final monthsForYear = result[latestYear]!;
+          if (!result.containsKey(_selectedYear) ||
+              !(result[_selectedYear]?.contains(_selectedMonthAbbr) ?? false)) {
+            _selectedYear = latestYear;
+            _selectedMonthAbbr = monthsForYear.last;
+          }
+        }
+      });
+    }
+  }
+
+  // Filter helper for month filtering
+  List<Map<String, dynamic>> _filterByMonth(
+    List<Map<String, dynamic>> records,
+  ) {
+    return records.where((r) {
+      final raw = r['rawDate'] as String?;
+      if (raw == null) return false;
+      final date = DateTime.parse(raw);
+      return date.year == _selectedYear &&
+          _monthAbbreviations[date.month - 1] == _selectedMonthAbbr;
+    }).toList();
+  }
+
+  void _showMonthPicker() {
+    setState(() => _sheetOpen = true);
+    showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      enableDrag: true,
+      builder: (ctx) => _MonthPickerSheet(
+        initialYear: _selectedYear,
+        initialMonth: _selectedMonthAbbr,
+        monthAbbreviations: _monthAbbreviations,
+        selectableMonths: _availableMonths,
+        availableYears: _availableMonths.keys.toList()..sort(),
+      ),
+    ).then((result) {
+      setState(() => _sheetOpen = false);
+      if (result != null) {
+        setState(() {
+          _selectedYear = result['year'] as int;
+          _selectedMonthAbbr = result['month'] as String;
+        });
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final int collegePresentCount = _collegeAttendance
+    final filteredCollege = _filterByMonth(_collegeRecords);
+    final filteredClasses = _filterByMonth(_classRecords);
+
+    final int collegePresentCount = filteredCollege
+        .where((e) => e['status'] == 'present' || e['status'] == 'late')
+        .length;
+    final int collegeTotal = filteredCollege.length;
+    final int classPresentCount = filteredClasses
         .where((e) => e['status'] == 'present')
         .length;
-    final int collegeTotal = _collegeAttendance.length;
-    final int classPresentCount = _classAttendance
-        .where((e) => e['status'] == 'present')
-        .length;
-    final int classTotal = _classAttendance.length;
+    final int classTotal = filteredClasses.length;
 
     return PopScope(
       canPop: false,
@@ -301,61 +726,116 @@ class _HistoryScreenState extends State<HistoryScreen>
           backgroundColor: Colors.transparent,
           elevation: 0,
           automaticallyImplyLeading: false,
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'History',
-                style: TextStyle(
-                  color:
-                      theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 24,
-                ),
+          toolbarHeight: 64,
+          title: FadeTransition(
+            opacity: _headerFadeAnim,
+            child: SlideTransition(
+              position: _headerSlideAnim,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    'History',
+                    style: TextStyle(
+                      color:
+                          theme.textTheme.displayLarge?.color ??
+                          AppStyles.textDark,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 24,
+                    ),
+                  ),
+                  // ── Inline Month Selector ─────────────────────────────
+                  GestureDetector(
+                    onTapDown: (_) => setState(() => _pillPressed = true),
+                    onTapUp: (_) {
+                      setState(() => _pillPressed = false);
+                      _showMonthPicker();
+                    },
+                    onTapCancel: () => setState(() => _pillPressed = false),
+                    child: AnimatedScale(
+                      scale: _pillPressed ? 0.97 : 1.0,
+                      duration: const Duration(milliseconds: 120),
+                      curve: Curves.easeInOut,
+                      child: AnimatedOpacity(
+                        opacity: _pillPressed ? 0.90 : 1.0,
+                        duration: const Duration(milliseconds: 120),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              _selectedMonthLabel,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: isDark
+                                    ? Colors.white.withValues(alpha: 0.72)
+                                    : AppStyles.textDark.withValues(
+                                        alpha: 0.65,
+                                      ),
+                                height: 1.0,
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                            AnimatedRotation(
+                              turns: _sheetOpen ? 0.5 : 0.0,
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeInOut,
+                              child: Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                size: 17,
+                                color: isDark
+                                    ? Colors.white.withValues(alpha: 0.60)
+                                    : AppStyles.textDark.withValues(
+                                        alpha: 0.55,
+                                      ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              Text(
-                'Oct 2024',
-                style: TextStyle(
-                  color: AppStyles.textGray.withValues(alpha: 0.8),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+            ),
           ),
           bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(48),
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.08)
-                    : Colors.black.withValues(alpha: 0.05),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: TabBar(
-                controller: _tabController,
-                indicator: BoxDecoration(
-                  color: theme.primaryColor,
-                  borderRadius: BorderRadius.circular(10),
+            preferredSize: const Size.fromHeight(52),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.08)
+                      : Colors.black.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                indicatorSize: TabBarIndicatorSize.tab,
-                labelColor: Colors.white,
-                unselectedLabelColor: AppStyles.textGray,
-                labelStyle: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13,
+                child: TabBar(
+                  controller: _tabController,
+                  indicator: BoxDecoration(
+                    color: theme.primaryColor,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  labelColor: Colors.white,
+                  unselectedLabelColor: AppStyles.textGray,
+                  labelStyle: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                  unselectedLabelStyle: const TextStyle(
+                    fontWeight: FontWeight.w500,
+                    fontSize: 13,
+                  ),
+                  dividerColor: Colors.transparent,
+                  tabs: const [
+                    Tab(text: 'College'),
+                    Tab(text: 'Classes'),
+                    Tab(text: 'Subjects'),
+                  ],
                 ),
-                unselectedLabelStyle: const TextStyle(
-                  fontWeight: FontWeight.w500,
-                  fontSize: 13,
-                ),
-                dividerColor: Colors.transparent,
-                tabs: const [
-                  Tab(text: 'College'),
-                  Tab(text: 'Classes'),
-                  Tab(text: 'Subjects'),
-                ],
               ),
             ),
           ),
@@ -369,19 +849,19 @@ class _HistoryScreenState extends State<HistoryScreen>
                 theme: theme,
                 presentCount: collegePresentCount,
                 totalCount: collegeTotal,
-                records: _collegeAttendance,
+                records: filteredCollege,
               ),
               _ClassAttendanceTab(
                 isDark: isDark,
                 theme: theme,
                 presentCount: classPresentCount,
                 totalCount: classTotal,
-                records: _classAttendance,
+                records: filteredClasses,
               ),
               _SubjectsTab(
                 isDark: isDark,
                 theme: theme,
-                records: _subjectAttendance,
+                records: _subjectRecords,
               ),
             ],
           ),
@@ -621,17 +1101,35 @@ class _CollegeAttendanceTab extends StatelessWidget {
                     const SizedBox(width: 14),
                     // Event info only — no date repeated
                     Expanded(
-                      child: Text(
-                        status == 'absent'
-                            ? 'Not marked'
-                            : 'Entered at ${record['time']}',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color:
-                              theme.textTheme.displayLarge?.color ??
-                              AppStyles.textDark,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            status == 'absent'
+                                ? 'Not marked'
+                                : status == 'late'
+                                ? 'Late entry'
+                                : 'Entered at',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: AppStyles.textGray,
+                            ),
+                          ),
+                          if (status != 'absent') ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              record['time'] as String,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color:
+                                    theme.textTheme.displayLarge?.color ??
+                                    AppStyles.textDark,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -874,9 +1372,7 @@ class _ClassPeriodRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  status == 'absent'
-                      ? record['period'] as String
-                      : '${record['period']}  •  ${record['time']}',
+                  '${record['period']}  •  ${record['time']}',
                   style: TextStyle(
                     fontSize: 12,
                     color:
@@ -1426,6 +1922,243 @@ class _InfoChip extends StatelessWidget {
           fontWeight: FontWeight.w600,
           color: color,
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Month Picker Bottom Sheet
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MonthPickerSheet extends StatefulWidget {
+  final int initialYear;
+  final String initialMonth;
+  final List<String> monthAbbreviations;
+  final Map<int, List<String>> selectableMonths;
+  final List<int> availableYears;
+
+  const _MonthPickerSheet({
+    required this.initialYear,
+    required this.initialMonth,
+    required this.monthAbbreviations,
+    required this.selectableMonths,
+    required this.availableYears,
+  });
+
+  @override
+  State<_MonthPickerSheet> createState() => _MonthPickerSheetState();
+}
+
+class _MonthPickerSheetState extends State<_MonthPickerSheet>
+    with SingleTickerProviderStateMixin {
+  late int _activeYear;
+  String? _tappedMonth;
+
+  @override
+  void initState() {
+    super.initState();
+    _activeYear = widget.initialYear;
+  }
+
+  bool _isSelectable(String month) {
+    final selectable = widget.selectableMonths[_activeYear] ?? [];
+    return selectable.contains(month);
+  }
+
+  void _selectMonth(String month) async {
+    if (!_isSelectable(month)) return;
+    setState(() => _tappedMonth = month);
+    await Future.delayed(const Duration(milliseconds: 160));
+    if (mounted) {
+      Navigator.of(context).pop({'year': _activeYear, 'month': month});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final bg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+    final handleColor = isDark
+        ? Colors.white.withValues(alpha: 0.18)
+        : Colors.black.withValues(alpha: 0.13);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 20),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.10),
+            blurRadius: 28,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Drag handle ───────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 4),
+            child: Container(
+              width: 38,
+              height: 4,
+              decoration: BoxDecoration(
+                color: handleColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          // ── Title ─────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+            child: Row(
+              children: [
+                Text(
+                  'Select Month',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                    color:
+                        theme.textTheme.displayLarge?.color ??
+                        AppStyles.textDark,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // ── Year pill row ──────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+            child: Row(
+              children: widget.availableYears.map((year) {
+                final isSelected = year == _activeYear;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: GestureDetector(
+                    onTap: () => setState(() => _activeYear = year),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeInOut,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? theme.primaryColor
+                            : (isDark
+                                  ? Colors.white.withValues(alpha: 0.07)
+                                  : Colors.black.withValues(alpha: 0.04)),
+                        borderRadius: BorderRadius.circular(50),
+                        border: Border.all(
+                          color: isSelected
+                              ? theme.primaryColor
+                              : (isDark
+                                    ? Colors.white.withValues(alpha: 0.14)
+                                    : Colors.black.withValues(alpha: 0.10)),
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Text(
+                        '$year',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: isSelected
+                              ? Colors.white
+                              : (isDark
+                                    ? Colors.white.withValues(alpha: 0.65)
+                                    : AppStyles.textGray),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          // ── Month grid ────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+            child: GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 4,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                childAspectRatio: 1.85,
+              ),
+              itemCount: widget.monthAbbreviations.length,
+              itemBuilder: (ctx, i) {
+                final month = widget.monthAbbreviations[i];
+                final selectable = _isSelectable(month);
+                final isCurrentSelected =
+                    month == widget.initialMonth &&
+                    _activeYear == widget.initialYear;
+                final isTapped = _tappedMonth == month;
+
+                return GestureDetector(
+                  onTap: selectable ? () => _selectMonth(month) : null,
+                  child: AnimatedScale(
+                    scale: isTapped ? 0.90 : 1.0,
+                    duration: const Duration(milliseconds: 130),
+                    curve: Curves.easeInOut,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeInOut,
+                      decoration: BoxDecoration(
+                        color: isCurrentSelected && selectable
+                            ? theme.primaryColor
+                            : isTapped
+                            ? theme.primaryColor.withValues(alpha: 0.80)
+                            : selectable
+                            ? (isDark
+                                  ? Colors.white.withValues(alpha: 0.07)
+                                  : Colors.black.withValues(alpha: 0.04))
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isCurrentSelected && selectable
+                              ? theme.primaryColor
+                              : selectable
+                              ? (isDark
+                                    ? Colors.white.withValues(alpha: 0.12)
+                                    : Colors.black.withValues(alpha: 0.09))
+                              : Colors.transparent,
+                          width: 1,
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: Opacity(
+                        opacity: selectable ? 1.0 : 0.30,
+                        child: Text(
+                          month,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight:
+                                (isCurrentSelected && selectable) || isTapped
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            color: (isCurrentSelected && selectable) || isTapped
+                                ? Colors.white
+                                : (isDark
+                                      ? Colors.white.withValues(alpha: 0.85)
+                                      : AppStyles.textDark),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
