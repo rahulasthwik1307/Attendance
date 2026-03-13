@@ -1406,59 +1406,82 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
           .select('class_id')
           .eq('id', user.id)
           .maybeSingle();
-      if (studentData == null) return;
+      if (studentData == null) {
+        if (mounted) setState(() { _scheduleItems = []; _scheduleLoading = false; });
+        return;
+      }
       final classId = studentData['class_id'] as String;
 
-      // Get all teacher assignments for this class
-      final assignments = await supabase
-          .from('teacher_assignments')
-          .select('subject_id, teacher_id, subjects(name), teachers(id)')
-          .eq('class_id', classId);
+      // Get today's day_of_week (Mon=1 ... Sat=6, Sun=null)
+      final jsDay = DateTime.now().weekday; // Mon=1 ... Sun=7
+      if (jsDay == 7) {
+        // Sunday — no classes
+        if (mounted) setState(() { _scheduleItems = []; _scheduleLoading = false; });
+        return;
+      }
+      final todayDow = jsDay; // Mon=1 ... Sat=6
 
-      if ((assignments as List).isEmpty) {
-        if (mounted) {
-          setState(() {
-            _scheduleItems = [];
-            _scheduleLoading = false;
-          });
-        }
+      // Fetch timetable for this class and today's day, ordered by period
+      final timetableRows = await supabase
+          .from('timetables')
+          .select('''
+            subject_id,
+            teacher_id,
+            period_id,
+            subject:subjects ( name ),
+            period:periods ( period_number, start_time, end_time ),
+            teachers ( id, title )
+          ''')
+          .eq('class_id', classId)
+          .eq('day_of_week', todayDow)
+          .order('period_id');
+
+      if ((timetableRows as List).isEmpty) {
+        if (mounted) setState(() { _scheduleItems = []; _scheduleLoading = false; });
         return;
       }
 
-      // Get teacher names
-      final teacherIds = assignments
-          .map((a) => a['teacher_id'] as String)
+      // Fetch teacher full names from users table
+      final teacherIds = timetableRows
+          .map((r) => r['teacher_id'] as String)
           .toSet()
           .toList();
-      final usersResp = await supabase
-          .from('users')
-          .select('id, full_name')
-          .inFilter('id', teacherIds);
-      final Map<String, String> teacherNames = {
-        for (final u in usersResp)
-          u['id'] as String: u['full_name'] as String? ?? 'Faculty',
-      };
+      final Map<String, String> teacherFullNames = {};
+      final Map<String, String> teacherTitles = {};
+      if (teacherIds.isNotEmpty) {
+        final teacherData = await supabase
+            .rpc('get_teacher_names', params: {'teacher_ids': teacherIds});
+        for (final t in (teacherData as List)) {
+          final id = t['id'] as String?;
+          final name = t['full_name'] as String?;
+          final title = t['title'] as String? ?? 'Mr';
+          if (id != null) {
+            teacherFullNames[id] = name ?? '';
+            teacherTitles[id] = title;
+          }
+        }
+      }
 
-      // Get today's sessions for this class
+      // Fetch today's attendance sessions for this class
       final today = DateTime.now().toIso8601String().split('T')[0];
       final todaySessions = await supabase
           .from('attendance_sessions')
-          .select('id, subject_id, status')
+          .select('id, subject_id, period_id, status')
           .eq('class_id', classId)
           .eq('session_date', today);
 
-      // Map subjectId → session status for today
-      final Map<String, String> subjectSessionStatus = {};
-      final Map<String, String> subjectSessionId = {};
+      // Map: "subjectId" → { sessionId, status }
+      final Map<String, Map<String, String>> sessionMap = {};
       for (final s in todaySessions) {
-        subjectSessionStatus[s['subject_id'] as String] = s['status'] as String;
-        subjectSessionId[s['subject_id'] as String] = s['id'] as String;
+        final key = s['subject_id'] as String;
+        sessionMap[key] = {
+          'sessionId': s['id'] as String,
+          'status': s['status'] as String,
+        };
       }
 
-      // Get student's period_attendance for today's sessions
-      final todaySessionIds = todaySessions
-          .map((s) => s['id'] as String)
-          .toList();
+      // Fetch student's period_attendance for today's sessions
+      final todaySessionIds = todaySessions.map((s) => s['id'] as String).toList();
       Map<String, String> studentAttendance = {};
       if (todaySessionIds.isNotEmpty) {
         final pa = await supabase
@@ -1471,43 +1494,53 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
         }
       }
 
-      // Build schedule items
+      // Build schedule items in period order
+      // Sort by period_number ascending
+      final sortedRows = List.from(timetableRows)
+        ..sort((a, b) {
+          final aN = (a['period'] as Map?)?['period_number'] as int? ?? 0;
+          final bN = (b['period'] as Map?)?['period_number'] as int? ?? 0;
+          return aN.compareTo(bN);
+        });
+
       final List<Map<String, dynamic>> items = [];
-      for (final asgn in assignments) {
-        final subjectId = asgn['subject_id'] as String;
-        final teacherId = asgn['teacher_id'] as String;
-        final subjectName =
-            (asgn['subjects'] as Map<String, dynamic>?)?['name'] as String? ??
-            'Unknown';
-        final teacherName = teacherNames[teacherId] ?? 'Faculty';
+      for (final row in sortedRows) {
+        final subjectId = row['subject_id'] as String;
 
-        final sessionStatus = subjectSessionStatus[subjectId];
-        final sessionId = subjectSessionId[subjectId];
-        final studentStatus = sessionId != null
-            ? studentAttendance[sessionId]
-            : null;
+        final teacherId = row['teacher_id'] as String;
+        final subjectName = (row['subject'] as Map?)?['name'] as String? ?? 'Unknown';
+        final periodNumber = (row['period'] as Map?)?['period_number'] as int? ?? 0;
+        final startTime = ((row['period'] as Map?)?['start_time'] as String? ?? '').substring(0, 5);
+        final endTime = ((row['period'] as Map?)?['end_time'] as String? ?? '').substring(0, 5);
+        final title = teacherTitles[teacherId] ?? 'Mr';
+        final fullName = teacherFullNames[teacherId] ?? '';
+        final facultyName = fullName.isNotEmpty ? '$title. $fullName' : title;
 
-        // Determine card status:
-        // 'current' = session is active
-        // 'done' = session finalized AND student present
-        // 'absent' = session finalized AND student absent
-        // 'upcoming' = no session today yet
+        final key = subjectId;
+        final session = sessionMap[key];
+        final sessionStatus = session?['status'];
+        final sessionId = session?['sessionId'];
+        final studentStatus = sessionId != null ? studentAttendance[sessionId] : null;
+
         String cardStatus = 'upcoming';
         if (sessionStatus == 'active') {
           cardStatus = 'current';
-        } else if (sessionStatus == 'finalized' ||
-            sessionStatus == 'reviewing') {
+        } else if (sessionStatus == 'finalized' || sessionStatus == 'reviewing') {
           cardStatus = studentStatus == 'present' ? 'done' : 'absent';
         }
 
         items.add({
           'subject': subjectName,
-          'teacher': teacherName,
+          'teacher': facultyName,
+          'periodNumber': periodNumber,
+          'startTime': startTime,
+          'endTime': endTime,
           'status': cardStatus,
         });
       }
 
-      // Subscribe to realtime updates for today's sessions
+      // Resubscribe realtime channel for this class
+      _scheduleChannel?.unsubscribe();
       _scheduleChannel = supabase
           .channel('schedule_class_$classId')
           .onPostgresChanges(
@@ -1702,35 +1735,40 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                             final bool isDone = status == 'done';
                             final bool isCurrent = status == 'current';
                             final bool isAbsent = status == 'absent';
+                            final int periodNum = item['periodNumber'] as int? ?? 0;
+                            final String startTime = item['startTime'] as String? ?? '';
+                            final String endTime = item['endTime'] as String? ?? '';
                             final theme = widget.theme;
                             final isDark = widget.isDark;
 
                             final Color cardColor = isCurrent
                                 ? theme.primaryColor
                                 : isAbsent
-                                ? AppStyles.errorRed.withValues(
-                                    alpha: isDark ? 0.2 : 0.08,
-                                  )
-                                : (isDark
-                                      ? Colors.white.withValues(alpha: 0.06)
-                                      : AppStyles.backgroundLight);
+                                    ? AppStyles.errorRed.withValues(alpha: isDark ? 0.2 : 0.08)
+                                    : isDone
+                                        ? AppStyles.successGreen.withValues(alpha: isDark ? 0.15 : 0.06)
+                                        : (isDark
+                                            ? Colors.white.withValues(alpha: 0.06)
+                                            : AppStyles.backgroundLight);
 
                             final Color textPrimary = isCurrent
                                 ? Colors.white
                                 : isAbsent
-                                ? AppStyles.errorRed
-                                : (theme.textTheme.displayLarge?.color ??
-                                      AppStyles.textDark);
+                                    ? AppStyles.errorRed
+                                    : isDone
+                                        ? AppStyles.successGreen
+                                        : (theme.textTheme.displayLarge?.color ?? AppStyles.textDark);
 
                             final Color textSecondary = isCurrent
                                 ? Colors.white.withValues(alpha: 0.75)
                                 : isAbsent
-                                ? AppStyles.errorRed.withValues(alpha: 0.8)
-                                : (theme.textTheme.bodyMedium?.color ??
-                                      AppStyles.textGray);
+                                    ? AppStyles.errorRed.withValues(alpha: 0.8)
+                                    : isDone
+                                        ? AppStyles.successGreen.withValues(alpha: 0.8)
+                                        : (theme.textTheme.bodyMedium?.color ?? AppStyles.textGray);
 
                             return Container(
-                              width: 120,
+                              constraints: const BoxConstraints(minWidth: 130),
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
                                 color: cardColor,
@@ -1739,24 +1777,18 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                                     ? null
                                     : Border.all(
                                         color: isAbsent
-                                            ? AppStyles.errorRed.withValues(
-                                                alpha: 0.2,
-                                              )
-                                            : isDark
-                                            ? Colors.white.withValues(
-                                                alpha: 0.08,
-                                              )
-                                            : Colors.black.withValues(
-                                                alpha: 0.07,
-                                              ),
+                                            ? AppStyles.errorRed.withValues(alpha: 0.2)
+                                            : isDone
+                                                ? AppStyles.successGreen.withValues(alpha: 0.2)
+                                                : isDark
+                                                    ? Colors.white.withValues(alpha: 0.08)
+                                                    : Colors.black.withValues(alpha: 0.07),
                                         width: 1,
                                       ),
                                 boxShadow: isCurrent
                                     ? [
                                         BoxShadow(
-                                          color: theme.primaryColor.withValues(
-                                            alpha: 0.3,
-                                          ),
+                                          color: theme.primaryColor.withValues(alpha: 0.3),
                                           blurRadius: 10,
                                           offset: const Offset(0, 3),
                                         ),
@@ -1766,59 +1798,58 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
+                                  // Period number + status icon row
                                   Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                     children: [
-                                      const SizedBox(),
+                                      Text(
+                                        'P$periodNum',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: isCurrent
+                                              ? Colors.white.withValues(alpha: 0.8)
+                                              : textSecondary,
+                                        ),
+                                      ),
                                       if (isDone)
-                                        Icon(
-                                          Icons.check_circle_rounded,
-                                          size: 13,
-                                          color: AppStyles.successGreen
-                                              .withValues(alpha: 0.7),
-                                        )
+                                        Icon(Icons.check_circle_rounded, size: 13,
+                                            color: AppStyles.successGreen.withValues(alpha: 0.9))
                                       else if (isAbsent)
-                                        Icon(
-                                          Icons.cancel_rounded,
-                                          size: 13,
-                                          color: AppStyles.errorRed.withValues(
-                                            alpha: 0.7,
-                                          ),
-                                        )
+                                        Icon(Icons.cancel_rounded, size: 13,
+                                            color: AppStyles.errorRed.withValues(alpha: 0.7))
                                       else if (isCurrent)
                                         Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 5,
-                                            vertical: 2,
-                                          ),
+                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                                           decoration: BoxDecoration(
-                                            color: Colors.white.withValues(
-                                              alpha: 0.2,
-                                            ),
-                                            borderRadius: BorderRadius.circular(
-                                              6,
-                                            ),
+                                            color: Colors.white.withValues(alpha: 0.2),
+                                            borderRadius: BorderRadius.circular(6),
                                           ),
-                                          child: const Text(
-                                            'Now',
-                                            style: TextStyle(
-                                              fontSize: 8,
-                                              fontWeight: FontWeight.w700,
-                                              color: Colors.white,
-                                            ),
-                                          ),
+                                          child: const Text('Now',
+                                              style: TextStyle(fontSize: 8, fontWeight: FontWeight.w700, color: Colors.white)),
                                         ),
                                     ],
                                   ),
-                                  const SizedBox(height: 5),
+                                  const SizedBox(height: 4),
+                                  // Time
+                                  Text(
+                                    '$startTime-$endTime',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w600,
+                                      color: textSecondary,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  // Subject name
                                   Expanded(
                                     child: Text(
                                       item['subject'] as String,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
+                                      maxLines: 3,
                                       style: TextStyle(
-                                        fontSize: 13,
+                                        fontSize: 12,
                                         fontWeight: FontWeight.w700,
                                         color: textPrimary,
                                         height: 1.3,
@@ -1826,12 +1857,13 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                                     ),
                                   ),
                                   const SizedBox(height: 4),
+                                  // Faculty name with title
                                   Text(
                                     item['teacher'] as String,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
-                                      fontSize: 10,
+                                      fontSize: 9,
                                       color: textSecondary,
                                       fontWeight: FontWeight.w500,
                                     ),
