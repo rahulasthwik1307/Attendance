@@ -1391,47 +1391,156 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
   late Animation<double> _expandAnimation;
   late Animation<double> _rotateAnimation;
 
-  static const List<Map<String, dynamic>> _periods = [
-    {
-      'period': '1st',
-      'time': '09:15',
-      'subject': 'Data Structures',
-      'room': 'Room 201',
-      'status': 'done',
-    },
-    {
-      'period': '2nd',
-      'time': '10:10',
-      'subject': 'Operating Systems',
-      'room': 'Room 105',
-      'status': 'done',
-    },
-    {
-      'period': '3rd',
-      'time': '11:10',
-      'subject': 'DBMS',
-      'room': 'Room 301',
-      'status': 'current',
-    },
-    {
-      'period': '4th',
-      'time': '12:00',
-      'subject': 'Computer Networks',
-      'room': 'Room 202',
-      'status': 'upcoming',
-    },
-    {
-      'period': '5th',
-      'time': '01:30',
-      'subject': 'Software Engg',
-      'room': 'Room 104',
-      'status': 'upcoming',
-    },
-  ];
+  List<Map<String, dynamic>> _scheduleItems = [];
+  bool _scheduleLoading = true;
+  RealtimeChannel? _scheduleChannel;
+
+  Future<void> _fetchSchedule() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+
+      // Get student's class_id
+      final studentData = await supabase
+          .from('students')
+          .select('class_id')
+          .eq('id', user.id)
+          .maybeSingle();
+      if (studentData == null) return;
+      final classId = studentData['class_id'] as String;
+
+      // Get all teacher assignments for this class
+      final assignments = await supabase
+          .from('teacher_assignments')
+          .select('subject_id, teacher_id, subjects(name), teachers(id)')
+          .eq('class_id', classId);
+
+      if ((assignments as List).isEmpty) {
+        if (mounted) {
+          setState(() {
+            _scheduleItems = [];
+            _scheduleLoading = false;
+          });
+        }
+        return;
+      }
+
+      // Get teacher names
+      final teacherIds = assignments
+          .map((a) => a['teacher_id'] as String)
+          .toSet()
+          .toList();
+      final usersResp = await supabase
+          .from('users')
+          .select('id, full_name')
+          .inFilter('id', teacherIds);
+      final Map<String, String> teacherNames = {
+        for (final u in usersResp)
+          u['id'] as String: u['full_name'] as String? ?? 'Faculty',
+      };
+
+      // Get today's sessions for this class
+      final today = DateTime.now().toIso8601String().split('T')[0];
+      final todaySessions = await supabase
+          .from('attendance_sessions')
+          .select('id, subject_id, status')
+          .eq('class_id', classId)
+          .eq('session_date', today);
+
+      // Map subjectId → session status for today
+      final Map<String, String> subjectSessionStatus = {};
+      final Map<String, String> subjectSessionId = {};
+      for (final s in todaySessions) {
+        subjectSessionStatus[s['subject_id'] as String] = s['status'] as String;
+        subjectSessionId[s['subject_id'] as String] = s['id'] as String;
+      }
+
+      // Get student's period_attendance for today's sessions
+      final todaySessionIds = todaySessions
+          .map((s) => s['id'] as String)
+          .toList();
+      Map<String, String> studentAttendance = {};
+      if (todaySessionIds.isNotEmpty) {
+        final pa = await supabase
+            .from('period_attendance')
+            .select('session_id, status')
+            .eq('student_id', user.id)
+            .inFilter('session_id', todaySessionIds);
+        for (final a in pa) {
+          studentAttendance[a['session_id'] as String] = a['status'] as String;
+        }
+      }
+
+      // Build schedule items
+      final List<Map<String, dynamic>> items = [];
+      for (final asgn in assignments) {
+        final subjectId = asgn['subject_id'] as String;
+        final teacherId = asgn['teacher_id'] as String;
+        final subjectName =
+            (asgn['subjects'] as Map<String, dynamic>?)?['name'] as String? ??
+            'Unknown';
+        final teacherName = teacherNames[teacherId] ?? 'Faculty';
+
+        final sessionStatus = subjectSessionStatus[subjectId];
+        final sessionId = subjectSessionId[subjectId];
+        final studentStatus = sessionId != null
+            ? studentAttendance[sessionId]
+            : null;
+
+        // Determine card status:
+        // 'current' = session is active
+        // 'done' = session finalized AND student present
+        // 'absent' = session finalized AND student absent
+        // 'upcoming' = no session today yet
+        String cardStatus = 'upcoming';
+        if (sessionStatus == 'active') {
+          cardStatus = 'current';
+        } else if (sessionStatus == 'finalized' ||
+            sessionStatus == 'reviewing') {
+          cardStatus = studentStatus == 'present' ? 'done' : 'absent';
+        }
+
+        items.add({
+          'subject': subjectName,
+          'teacher': teacherName,
+          'status': cardStatus,
+        });
+      }
+
+      // Subscribe to realtime updates for today's sessions
+      _scheduleChannel = supabase
+          .channel('schedule_class_$classId')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'attendance_sessions',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'class_id',
+              value: classId,
+            ),
+            callback: (payload) {
+              if (mounted) _fetchSchedule();
+            },
+          )
+          .subscribe();
+
+      if (mounted) {
+        setState(() {
+          _scheduleItems = items;
+          _scheduleLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[SCHEDULE] error: $e');
+      if (mounted) setState(() => _scheduleLoading = false);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _fetchSchedule();
     _expandController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 350),
@@ -1459,6 +1568,7 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
 
   @override
   void dispose() {
+    _scheduleChannel?.unsubscribe();
     _expandController.dispose();
     super.dispose();
   }
@@ -1517,7 +1627,7 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                       ),
                       Text(
                         widget.isExpanded
-                            ? 'Wednesday • 5 periods'
+                            ? '${_scheduleItems.length} subject${_scheduleItems.length != 1 ? 's' : ''} assigned'
                             : 'Tap to view your classes',
                         style: TextStyle(
                           fontSize: 12,
@@ -1568,144 +1678,169 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                 ),
                 child: SizedBox(
                   height: 118,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    physics: const BouncingScrollPhysics(),
-                    itemCount: _periods.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 10),
-                    itemBuilder: (context, index) {
-                      final period = _periods[index];
-                      final status = period['status'] as String;
-                      final bool isDone = status == 'done';
-                      final bool isCurrent = status == 'current';
-                      final theme = widget.theme;
-                      final isDark = widget.isDark;
+                  child: _scheduleLoading
+                      ? const Center(child: CircularProgressIndicator())
+                      : _scheduleItems.isEmpty
+                      ? Center(
+                          child: Text(
+                            'No subjects assigned',
+                            style: TextStyle(
+                              color:
+                                  widget.theme.textTheme.bodyMedium?.color ??
+                                  AppStyles.textGray,
+                            ),
+                          ),
+                        )
+                      : ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          physics: const BouncingScrollPhysics(),
+                          itemCount: _scheduleItems.length,
+                          separatorBuilder: (_, _) => const SizedBox(width: 10),
+                          itemBuilder: (context, index) {
+                            final item = _scheduleItems[index];
+                            final status = item['status'] as String;
+                            final bool isDone = status == 'done';
+                            final bool isCurrent = status == 'current';
+                            final bool isAbsent = status == 'absent';
+                            final theme = widget.theme;
+                            final isDark = widget.isDark;
 
-                      final Color cardColor = isCurrent
-                          ? theme.primaryColor
-                          : (isDark
-                                ? Colors.white.withValues(alpha: 0.06)
-                                : AppStyles.backgroundLight);
-
-                      final Color textPrimary = isCurrent
-                          ? Colors.white
-                          : (theme.textTheme.displayLarge?.color ??
-                                AppStyles.textDark);
-
-                      final Color textSecondary = isCurrent
-                          ? Colors.white.withValues(alpha: 0.75)
-                          : (theme.textTheme.bodyMedium?.color ??
-                                AppStyles.textGray);
-
-                      return Container(
-                        width: 120,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: cardColor,
-                          borderRadius: BorderRadius.circular(12),
-                          border: isCurrent
-                              ? null
-                              : Border.all(
-                                  color: isDark
-                                      ? Colors.white.withValues(alpha: 0.08)
-                                      : Colors.black.withValues(alpha: 0.07),
-                                  width: 1,
-                                ),
-                          boxShadow: isCurrent
-                              ? [
-                                  BoxShadow(
-                                    color: theme.primaryColor.withValues(
-                                      alpha: 0.3,
-                                    ),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 3),
-                                  ),
-                                ]
-                              : [],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  period['period'] as String,
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                    color: textSecondary,
-                                  ),
-                                ),
-                                if (isDone)
-                                  Icon(
-                                    Icons.check_circle_rounded,
-                                    size: 13,
-                                    color: AppStyles.successGreen.withValues(
-                                      alpha: 0.7,
-                                    ),
+                            final Color cardColor = isCurrent
+                                ? theme.primaryColor
+                                : isAbsent
+                                ? AppStyles.errorRed.withValues(
+                                    alpha: isDark ? 0.2 : 0.08,
                                   )
-                                else if (isCurrent)
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 5,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(
-                                        alpha: 0.2,
+                                : (isDark
+                                      ? Colors.white.withValues(alpha: 0.06)
+                                      : AppStyles.backgroundLight);
+
+                            final Color textPrimary = isCurrent
+                                ? Colors.white
+                                : isAbsent
+                                ? AppStyles.errorRed
+                                : (theme.textTheme.displayLarge?.color ??
+                                      AppStyles.textDark);
+
+                            final Color textSecondary = isCurrent
+                                ? Colors.white.withValues(alpha: 0.75)
+                                : isAbsent
+                                ? AppStyles.errorRed.withValues(alpha: 0.8)
+                                : (theme.textTheme.bodyMedium?.color ??
+                                      AppStyles.textGray);
+
+                            return Container(
+                              width: 120,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: cardColor,
+                                borderRadius: BorderRadius.circular(12),
+                                border: isCurrent
+                                    ? null
+                                    : Border.all(
+                                        color: isAbsent
+                                            ? AppStyles.errorRed.withValues(
+                                                alpha: 0.2,
+                                              )
+                                            : isDark
+                                            ? Colors.white.withValues(
+                                                alpha: 0.08,
+                                              )
+                                            : Colors.black.withValues(
+                                                alpha: 0.07,
+                                              ),
+                                        width: 1,
                                       ),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: const Text(
-                                      'Now',
+                                boxShadow: isCurrent
+                                    ? [
+                                        BoxShadow(
+                                          color: theme.primaryColor.withValues(
+                                            alpha: 0.3,
+                                          ),
+                                          blurRadius: 10,
+                                          offset: const Offset(0, 3),
+                                        ),
+                                      ]
+                                    : [],
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      const SizedBox(),
+                                      if (isDone)
+                                        Icon(
+                                          Icons.check_circle_rounded,
+                                          size: 13,
+                                          color: AppStyles.successGreen
+                                              .withValues(alpha: 0.7),
+                                        )
+                                      else if (isAbsent)
+                                        Icon(
+                                          Icons.cancel_rounded,
+                                          size: 13,
+                                          color: AppStyles.errorRed.withValues(
+                                            alpha: 0.7,
+                                          ),
+                                        )
+                                      else if (isCurrent)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 5,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white.withValues(
+                                              alpha: 0.2,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              6,
+                                            ),
+                                          ),
+                                          child: const Text(
+                                            'Now',
+                                            style: TextStyle(
+                                              fontSize: 8,
+                                              fontWeight: FontWeight.w700,
+                                              color: Colors.white,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 5),
+                                  Expanded(
+                                    child: Text(
+                                      item['subject'] as String,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
-                                        fontSize: 8,
+                                        fontSize: 13,
                                         fontWeight: FontWeight.w700,
-                                        color: Colors.white,
+                                        color: textPrimary,
+                                        height: 1.3,
                                       ),
                                     ),
                                   ),
-                              ],
-                            ),
-                            const SizedBox(height: 5),
-                            Text(
-                              period['time'] as String,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w800,
-                                color: textPrimary,
-                                letterSpacing: -0.3,
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    item['teacher'] as String,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color: textSecondary,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
-                            const SizedBox(height: 4),
-                            Expanded(
-                              child: Text(
-                                period['subject'] as String,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: textPrimary,
-                                  height: 1.3,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              period['room'] as String,
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: textSecondary,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
+                            );
+                          },
                         ),
-                      );
-                    },
-                  ),
                 ),
               ),
             ),
