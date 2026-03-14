@@ -1710,7 +1710,7 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                   ],
                 ),
                 child: SizedBox(
-                  height: 118,
+                  height: 138,
                   child: _scheduleLoading
                       ? const Center(child: CircularProgressIndicator())
                       : _scheduleItems.isEmpty
@@ -1741,135 +1741,17 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                             final theme = widget.theme;
                             final isDark = widget.isDark;
 
-                            final Color cardColor = isCurrent
-                                ? theme.primaryColor
-                                : isAbsent
-                                    ? AppStyles.errorRed.withValues(alpha: isDark ? 0.2 : 0.08)
-                                    : isDone
-                                        ? AppStyles.successGreen.withValues(alpha: isDark ? 0.15 : 0.06)
-                                        : (isDark
-                                            ? Colors.white.withValues(alpha: 0.06)
-                                            : AppStyles.backgroundLight);
-
-                            final Color textPrimary = isCurrent
-                                ? Colors.white
-                                : isAbsent
-                                    ? AppStyles.errorRed
-                                    : isDone
-                                        ? AppStyles.successGreen
-                                        : (theme.textTheme.displayLarge?.color ?? AppStyles.textDark);
-
-                            final Color textSecondary = isCurrent
-                                ? Colors.white.withValues(alpha: 0.75)
-                                : isAbsent
-                                    ? AppStyles.errorRed.withValues(alpha: 0.8)
-                                    : isDone
-                                        ? AppStyles.successGreen.withValues(alpha: 0.8)
-                                        : (theme.textTheme.bodyMedium?.color ?? AppStyles.textGray);
-
-                            return Container(
-                              constraints: const BoxConstraints(minWidth: 130),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: cardColor,
-                                borderRadius: BorderRadius.circular(12),
-                                border: isCurrent
-                                    ? null
-                                    : Border.all(
-                                        color: isAbsent
-                                            ? AppStyles.errorRed.withValues(alpha: 0.2)
-                                            : isDone
-                                                ? AppStyles.successGreen.withValues(alpha: 0.2)
-                                                : isDark
-                                                    ? Colors.white.withValues(alpha: 0.08)
-                                                    : Colors.black.withValues(alpha: 0.07),
-                                        width: 1,
-                                      ),
-                                boxShadow: isCurrent
-                                    ? [
-                                        BoxShadow(
-                                          color: theme.primaryColor.withValues(alpha: 0.3),
-                                          blurRadius: 10,
-                                          offset: const Offset(0, 3),
-                                        ),
-                                      ]
-                                    : [],
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // Period number + status icon row
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text(
-                                        'P$periodNum',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w700,
-                                          color: isCurrent
-                                              ? Colors.white.withValues(alpha: 0.8)
-                                              : textSecondary,
-                                        ),
-                                      ),
-                                      if (isDone)
-                                        Icon(Icons.check_circle_rounded, size: 13,
-                                            color: AppStyles.successGreen.withValues(alpha: 0.9))
-                                      else if (isAbsent)
-                                        Icon(Icons.cancel_rounded, size: 13,
-                                            color: AppStyles.errorRed.withValues(alpha: 0.7))
-                                      else if (isCurrent)
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withValues(alpha: 0.2),
-                                            borderRadius: BorderRadius.circular(6),
-                                          ),
-                                          child: const Text('Now',
-                                              style: TextStyle(fontSize: 8, fontWeight: FontWeight.w700, color: Colors.white)),
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                  // Time
-                                  Text(
-                                    '$startTime-$endTime',
-                                    style: TextStyle(
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w600,
-                                      color: textSecondary,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  // Subject name
-                                  Expanded(
-                                    child: Text(
-                                      item['subject'] as String,
-                                      maxLines: 3,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                        color: textPrimary,
-                                        height: 1.3,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  // Faculty name with title
-                                  Text(
-                                    item['teacher'] as String,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 9,
-                                      color: textSecondary,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                            return _ScheduleCard(
+                              item: item,
+                              isCurrent: isCurrent,
+                              isDone: isDone,
+                              isAbsent: isAbsent,
+                              periodNum: periodNum,
+                              startTime: startTime,
+                              endTime: endTime,
+                              theme: theme,
+                              isDark: isDark,
+                              index: index,
                             );
                           },
                         ),
@@ -2870,5 +2752,317 @@ class _PulsingDotState extends State<_PulsingDot>
         decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle),
       ),
     );
+  }
+}
+
+class _ScheduleCard extends StatefulWidget {
+  final Map<String, dynamic> item;
+  final bool isCurrent;
+  final bool isDone;
+  final bool isAbsent;
+  final int periodNum;
+  final String startTime;
+  final String endTime;
+  final ThemeData theme;
+  final bool isDark;
+
+  final int index;
+
+  const _ScheduleCard({
+    required this.item,
+    required this.isCurrent,
+    required this.isDone,
+    required this.isAbsent,
+    required this.periodNum,
+    required this.startTime,
+    required this.endTime,
+    required this.theme,
+    required this.isDark,
+    required this.index,
+  });
+
+  @override
+  State<_ScheduleCard> createState() => _ScheduleCardState();
+}
+
+class _ScheduleCardState extends State<_ScheduleCard>
+    with SingleTickerProviderStateMixin {
+  bool _pressed = false;
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    _pulseAnim = Tween<double>(begin: 1.0, end: 1.04).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+    if (widget.isCurrent) {
+      _pulseController.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _ScheduleCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isCurrent && !_pulseController.isAnimating) {
+      _pulseController.repeat(reverse: true);
+    } else if (!widget.isCurrent && _pulseController.isAnimating) {
+      _pulseController.stop();
+      _pulseController.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = widget.theme;
+    final isDark = widget.isDark;
+    final isCurrent = widget.isCurrent;
+    final isDone = widget.isDone;
+    final isAbsent = widget.isAbsent;
+
+    // ── Colors ──────────────────────────────────────────
+    final Color accentColor = isCurrent
+        ? theme.primaryColor
+        : isDone
+            ? AppStyles.successGreen
+            : isAbsent
+                ? AppStyles.errorRed
+                : theme.primaryColor;
+
+    final Color cardBg = isCurrent
+        ? theme.primaryColor.withValues(alpha: isDark ? 0.28 : 0.09)
+        : isDone
+            ? AppStyles.successGreen.withValues(alpha: isDark ? 0.18 : 0.07)
+            : isAbsent
+                ? AppStyles.errorRed.withValues(alpha: isDark ? 0.18 : 0.07)
+                : theme.primaryColor.withValues(alpha: isDark ? 0.10 : 0.05);
+
+    // Subject name color
+    final Color textPrimary = isCurrent
+        ? theme.primaryColor
+        : isDone
+            ? AppStyles.successGreen
+            : isAbsent
+                ? AppStyles.errorRed
+                : theme.primaryColor;
+
+    // Period info + teacher name color
+    final Color textSecondary = isCurrent
+        ? theme.primaryColor.withValues(alpha: 0.75)
+        : isDone
+            ? AppStyles.successGreen.withValues(alpha: 0.75)
+            : isAbsent
+                ? AppStyles.errorRed.withValues(alpha: 0.75)
+                : AppStyles.textGray;
+
+    // ── Strip config ─────────────────────────────────────
+    final Color stripBg = isCurrent
+        ? theme.primaryColor
+        : isDone
+            ? AppStyles.successGreen
+            : isAbsent
+                ? AppStyles.errorRed
+                : theme.primaryColor.withValues(alpha: isDark ? 0.18 : 0.10);
+
+    final Color stripText = isCurrent || isDone || isAbsent
+        ? Colors.white
+        : theme.primaryColor;
+
+    final String stripLabel = isCurrent
+        ? '● Live Now'
+        : isDone
+            ? '✓  Attended'
+            : isAbsent
+                ? '✗  Absent'
+                : 'Upcoming';
+
+    // ── Watermark icon for done/absent ───────────────────
+    final IconData? watermarkIcon = isDone
+        ? Icons.check_circle_outline_rounded
+        : isAbsent
+            ? Icons.cancel_outlined
+            : isCurrent
+                ? Icons.radio_button_checked_rounded
+                : null;
+
+    Widget card = GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedScale(
+        scale: _pressed ? 0.95 : 1.0,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeInOut,
+        child: Container(
+          width: 150,
+          height: 110,
+          decoration: BoxDecoration(
+            color: cardBg,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: accentColor.withValues(alpha: 0.35),
+              width: 1,
+            ),
+            boxShadow: isCurrent
+                ? [
+                    BoxShadow(
+                      color: theme.primaryColor.withValues(alpha: 0.18),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ]
+                : isDone
+                    ? [
+                        BoxShadow(
+                          color: AppStyles.successGreen.withValues(alpha: 0.10),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
+                      ]
+                    : isAbsent
+                        ? [
+                            BoxShadow(
+                              color: AppStyles.errorRed.withValues(alpha: 0.10),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ]
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withValues(
+                                alpha: isDark ? 0.18 : 0.06,
+                              ),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(13),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // ── Left accent bar ──────────────────────
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: Container(width: 4, color: accentColor),
+                ),
+                // ── Watermark icon ───────────────────────
+                if (watermarkIcon != null)
+                  Positioned(
+                    right: -8,
+                    top: 6,
+                    child: Icon(
+                      watermarkIcon,
+                      size: 52,
+                      color: accentColor.withValues(alpha: 0.07),
+                    ),
+                  ),
+
+                // ── Main content ─────────────────────────
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.max,
+                  children: [
+                    // Content area
+                    Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Period + time on one line
+                          Text(
+                            'Period ${widget.periodNum}  ·  ${widget.startTime}-${widget.endTime}',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              color: textSecondary,
+                              letterSpacing: 0.1,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 6),
+                          // Subject name — natural height, no Expanded
+                          Text(
+                            widget.item['subject'] as String,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: textPrimary,
+                              height: 1.25,
+                            ),
+                          ),
+                          const SizedBox(height: 5),
+                          // Faculty name — always directly below subject
+                          Text(
+                            widget.item['teacher'] as String,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: textSecondary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    ), // closes Expanded
+                    // ── Bottom status strip ──────────────
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      color: stripBg,
+                      child: Text(
+                        stripLabel,
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                          color: stripText,
+                          letterSpacing: 0.3,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (isCurrent) {
+      return AnimatedBuilder(
+        animation: _pulseAnim,
+        builder: (context, child) =>
+            Transform.scale(scale: _pulseAnim.value, child: child),
+        child: card,
+      );
+    }
+
+    return card;
   }
 }

@@ -41,6 +41,10 @@ class _HistoryScreenState extends State<HistoryScreen>
   // Subjects tab
   List<Map<String, dynamic>> _subjectRecords = [];
 
+  // Timetable tab
+  List<Map<String, dynamic>> _timetableSlots = [];
+  bool _timetableLoading = true;
+
   // Available months per year — derived from real data
   Map<int, List<String>> _availableMonths = {};
 
@@ -62,7 +66,7 @@ class _HistoryScreenState extends State<HistoryScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
 
     _headerAnimController = AnimationController(
       vsync: this,
@@ -125,6 +129,7 @@ class _HistoryScreenState extends State<HistoryScreen>
       _fetchCollegeData(),
       _fetchClassData(),
       _fetchSubjectData(),
+      _fetchTimetableData(),
     ]);
     _buildAvailableMonths();
   }
@@ -497,6 +502,87 @@ class _HistoryScreenState extends State<HistoryScreen>
     }
   }
 
+  Future<void> _fetchTimetableData() async {
+    try {
+      if (_studentClassId == null) return;
+
+      final rows = await supabase
+          .from('timetables')
+          .select('''
+            day_of_week,
+            subject_id,
+            teacher_id,
+            period_id,
+            subject:subjects ( name ),
+            period:periods ( period_number, start_time, end_time ),
+            teachers ( id, title )
+          ''')
+          .eq('class_id', _studentClassId!)
+          .order('day_of_week')
+          .order('period_id');
+
+      if ((rows as List).isEmpty) {
+        if (mounted) setState(() { _timetableSlots = []; _timetableLoading = false; });
+        return;
+      }
+
+      // Fetch teacher names
+      final teacherIds = rows
+          .map((r) => r['teacher_id'] as String)
+          .toSet()
+          .toList();
+      final teacherNamesResp = await supabase
+          .rpc('get_teacher_names', params: {'teacher_ids': teacherIds});
+      final Map<String, String> teacherFullNames = {};
+      final Map<String, String> teacherTitleMap = {};
+      for (final t in (teacherNamesResp as List)) {
+        final id = t['id'] as String?;
+        final name = (t['full_name'] as String?)?.trim() ?? '';
+        final title = (t['title'] as String?)?.trim() ?? 'Mr';
+        if (id != null && name.isNotEmpty) {
+          teacherFullNames[id] = name;
+          teacherTitleMap[id] = title;
+        }
+      }
+
+      final List<Map<String, dynamic>> slots = rows.map<Map<String, dynamic>>((r) {
+        final teacherId = r['teacher_id'] as String;
+        final title = teacherTitleMap[teacherId] ?? 'Mr';
+        final fullName = teacherFullNames[teacherId] ?? '';
+        final facultyName = fullName.trim().isNotEmpty ? '$title. $fullName' : 'Faculty';
+
+        final periodNum = (r['period'] as Map?)?['period_number'] as int? ?? 0;
+        final startTime = ((r['period'] as Map?)?['start_time'] as String? ?? '').isNotEmpty
+            ? ((r['period'] as Map?)?['start_time'] as String).substring(0, 5)
+            : '';
+        final endTime = ((r['period'] as Map?)?['end_time'] as String? ?? '').isNotEmpty
+            ? ((r['period'] as Map?)?['end_time'] as String).substring(0, 5)
+            : '';
+
+        return {
+          'dayOfWeek': r['day_of_week'] as int,
+          'periodNumber': periodNum,
+          'startTime': startTime,
+          'endTime': endTime,
+          'subject': (r['subject'] as Map?)?['name'] as String? ?? 'Unknown',
+          'faculty': facultyName,
+        };
+      }).toList();
+
+      // Sort by day then period
+      slots.sort((a, b) {
+        final dayComp = (a['dayOfWeek'] as int).compareTo(b['dayOfWeek'] as int);
+        if (dayComp != 0) return dayComp;
+        return (a['periodNumber'] as int).compareTo(b['periodNumber'] as int);
+      });
+
+      if (mounted) setState(() { _timetableSlots = slots; _timetableLoading = false; });
+    } catch (e) {
+      debugPrint('[TIMETABLE] error: $e');
+      if (mounted) setState(() { _timetableLoading = false; });
+    }
+  }
+
   void _buildAvailableMonths() {
     final now = DateTime.now();
     final monthAbbrs = [
@@ -813,6 +899,8 @@ class _HistoryScreenState extends State<HistoryScreen>
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: TabBar(
+                  isScrollable: true,
+                  tabAlignment: TabAlignment.start,
                   controller: _tabController,
                   indicator: BoxDecoration(
                     color: theme.primaryColor,
@@ -834,6 +922,7 @@ class _HistoryScreenState extends State<HistoryScreen>
                     Tab(text: 'College'),
                     Tab(text: 'Classes'),
                     Tab(text: 'Subjects'),
+                    Tab(text: 'Timetable'),
                   ],
                 ),
               ),
@@ -862,6 +951,12 @@ class _HistoryScreenState extends State<HistoryScreen>
                 isDark: isDark,
                 theme: theme,
                 records: _subjectRecords,
+              ),
+              _TimetableTab(
+                isDark: isDark,
+                theme: theme,
+                slots: _timetableSlots,
+                isLoading: _timetableLoading,
               ),
             ],
           ),
@@ -2159,6 +2254,375 @@ class _MonthPickerSheetState extends State<_MonthPickerSheet>
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _TimetableTab extends StatefulWidget {
+  final bool isDark;
+  final ThemeData theme;
+  final List<Map<String, dynamic>> slots;
+  final bool isLoading;
+
+  const _TimetableTab({
+    required this.isDark,
+    required this.theme,
+    required this.slots,
+    required this.isLoading,
+  });
+
+  @override
+  State<_TimetableTab> createState() => _TimetableTabState();
+}
+
+class _TimetableTabState extends State<_TimetableTab> {
+  static const _dayShort = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+  late int _selectedDay;
+  late int _previousDay;
+  bool _goingForward = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final today = DateTime.now().weekday;
+    _selectedDay = today == 7 ? 1 : today;
+    _previousDay = _selectedDay;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (widget.slots.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.calendar_month_outlined,
+                size: 48, color: AppStyles.textGray.withValues(alpha: 0.4)),
+            const SizedBox(height: 12),
+            Text('No timetable assigned yet',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: AppStyles.textGray.withValues(alpha: 0.7),
+                  fontWeight: FontWeight.w500,
+                )),
+          ],
+        ),
+      );
+    }
+
+    final Map<int, List<Map<String, dynamic>>> byDay = {};
+    for (final slot in widget.slots) {
+      final d = slot['dayOfWeek'] as int;
+      byDay.putIfAbsent(d, () => []).add(slot);
+    }
+
+    final activeDays = [1, 2, 3, 4, 5, 6].where((d) => byDay.containsKey(d)).toList();
+
+    return Column(
+      children: [
+        // Day selector strip
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: activeDays.map((day) {
+                final isSelected = day == _selectedDay;
+                final isToday = day == DateTime.now().weekday;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: GestureDetector(
+                    onTap: () {
+                      if (_selectedDay != day) {
+                        setState(() {
+                          _previousDay = _selectedDay;
+                          _selectedDay = day;
+                          _goingForward = day > _previousDay;
+                        });
+                      }
+                    },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeInOut,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                      decoration: BoxDecoration(
+                        color: isSelected 
+                            ? widget.theme.primaryColor 
+                            : (widget.isDark 
+                                ? Colors.white.withValues(alpha: 0.07) 
+                                : Colors.black.withValues(alpha: 0.05)),
+                        borderRadius: BorderRadius.circular(50),
+                        border: isSelected 
+                            ? null 
+                            : Border.all(
+                                color: widget.isDark 
+                                    ? Colors.white.withValues(alpha: 0.12) 
+                                    : Colors.black.withValues(alpha: 0.09),
+                                width: 1,
+                              ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _dayShort[day - 1],
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                              letterSpacing: isSelected ? 0.6 : 0,
+                              color: isSelected 
+                                  ? Colors.white 
+                                  : (widget.isDark 
+                                      ? Colors.white.withValues(alpha: 0.55) 
+                                      : AppStyles.textGray),
+                            ),
+                          ),
+                          if (isSelected && isToday) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.25),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'TODAY',
+                                style: TextStyle(
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+        
+        // Period cards section
+        Expanded(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 320),
+            transitionBuilder: (child, animation) {
+              return FadeTransition(
+                opacity: animation,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: _goingForward ? const Offset(0.18, 0) : const Offset(-0.18, 0),
+                    end: Offset.zero,
+                  ).animate(CurvedAnimation(
+                    parent: animation, 
+                    curve: Curves.easeOutCubic,
+                  )),
+                  child: child,
+                ),
+              );
+            },
+            child: SingleChildScrollView(
+              key: ValueKey(_selectedDay),
+              padding: const EdgeInsets.only(left: 20, right: 20, top: 4, bottom: 20),
+              child: Column(
+                children: (byDay[_selectedDay] ?? []).asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final slot = entry.value;
+                  return FadeSlideY(
+                    delay: Duration(milliseconds: 40 + (index * 50)),
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _TimetablePeriodRow(
+                        slot: slot,
+                        isToday: _selectedDay == DateTime.now().weekday,
+                        isDark: widget.isDark,
+                        theme: widget.theme,
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TimetablePeriodRow extends StatefulWidget {
+  final Map<String, dynamic> slot;
+  final bool isToday;
+  final bool isDark;
+  final ThemeData theme;
+
+  const _TimetablePeriodRow({
+    required this.slot,
+    required this.isToday,
+    required this.isDark,
+    required this.theme,
+  });
+
+  @override
+  State<_TimetablePeriodRow> createState() => _TimetablePeriodRowState();
+}
+
+class _TimetablePeriodRowState extends State<_TimetablePeriodRow> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final int periodNum = widget.slot['periodNumber'] as int;
+    final String start = widget.slot['startTime'] as String;
+    final String end = widget.slot['endTime'] as String;
+    final String subject = widget.slot['subject'] as String;
+    final String faculty = widget.slot['faculty'] as String;
+
+    Color accentColor;
+    switch (periodNum) {
+      case 1: accentColor = widget.theme.primaryColor; break;
+      case 2: accentColor = AppStyles.successGreen; break;
+      case 3: accentColor = const Color(0xFFF39C12); break;
+      case 4: accentColor = const Color(0xFF9B59B6); break;
+      case 5: accentColor = AppStyles.errorRed; break;
+      default: accentColor = widget.theme.primaryColor; break;
+    }
+
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedScale(
+        scale: _pressed ? 0.96 : 1.0,
+        duration: const Duration(milliseconds: 130),
+        curve: Curves.easeInOut,
+        child: Container(
+          margin: EdgeInsets.zero,
+          decoration: BoxDecoration(
+            color: widget.theme.cardTheme.color ?? Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: widget.isDark ? 0.18 : 0.06),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  width: 4,
+                  decoration: BoxDecoration(
+                    color: accentColor,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      bottomLeft: Radius.circular(16),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: accentColor.withValues(alpha: 0.12),
+                            border: Border.all(
+                              color: accentColor.withValues(alpha: 0.35),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Center(
+                            child: Text(
+                              '$periodNum',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                color: accentColor,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                subject,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: widget.theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                faculty,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                  color: widget.theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              start,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                                color: accentColor,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Container(width: 24, height: 1, color: accentColor.withValues(alpha: 0.4)),
+                            const SizedBox(height: 3),
+                            Text(
+                              end,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: widget.theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
