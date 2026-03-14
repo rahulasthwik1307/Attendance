@@ -2810,18 +2810,18 @@ class _WeekGridView extends StatelessWidget {
                           height: 64,
                           decoration: BoxDecoration(
                             color: day == today
-                                ? theme.primaryColor.withValues(alpha: isDark ? 0.08 : 0.04)
+                                ? theme.primaryColor.withValues(alpha: isDark ? 0.14 : 0.08)
                                 : (isDark
                                     ? Colors.white.withValues(alpha: 0.03)
                                     : Colors.black.withValues(alpha: 0.02)),
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
                               color: day == today
-                                  ? theme.primaryColor.withValues(alpha: 0.25)
+                                  ? theme.primaryColor.withValues(alpha: 0.45)
                                   : (isDark
                                       ? Colors.white.withValues(alpha: 0.06)
                                       : Colors.black.withValues(alpha: 0.05)),
-                              width: day == today ? 1.5 : 1,
+                              width: day == today ? 2.0 : 1,
                             ),
                           ),
                           child: Center(
@@ -2860,16 +2860,16 @@ class _WeekGridView extends StatelessWidget {
                         height: 64,
                         decoration: BoxDecoration(
                           color: day == today
-                              ? theme.primaryColor.withValues(alpha: isDark ? 0.12 : 0.06)
+                              ? theme.primaryColor.withValues(alpha: isDark ? 0.22 : 0.11)
                               : (isDark
                                   ? (theme.cardTheme.color ?? const Color(0xFF1E1E1E))
                                   : Colors.white),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
                             color: day == today
-                                ? color.withValues(alpha: 0.75)
+                                ? color.withValues(alpha: 0.90)
                                 : color.withValues(alpha: 0.55),
-                            width: day == today ? 2.0 : 1.5,
+                            width: day == today ? 2.5 : 1.5,
                           ),
                           boxShadow: [
                             BoxShadow(
@@ -2911,8 +2911,8 @@ class _WeekGridView extends StatelessWidget {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w600,
+                                  fontSize: 6,
+                                  fontWeight: FontWeight.w700,
                                   color: isDark
                                       ? Colors.white.withValues(alpha: 0.55)
                                       : AppStyles.textGray,

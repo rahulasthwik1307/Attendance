@@ -343,6 +343,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                 ),
               ),
+              const SizedBox(height: 10),
               FadeSlideY(
                 delay: const Duration(milliseconds: 580),
                 child: _ExpandableScheduleSection(
