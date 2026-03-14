@@ -71,7 +71,7 @@ class _SignInScreenState extends State<SignInScreen> {
 
         final data = await Supabase.instance.client
             .from('students')
-            .select('embedding_a, is_approved')
+            .select('embedding_a, is_approved, is_rejected, face_registered')
             .eq('id', currentUser.id)
             .maybeSingle();
 
@@ -80,31 +80,56 @@ class _SignInScreenState extends State<SignInScreen> {
 
         if (!mounted) return;
 
-        // Not a student record — go to register
+        // Not a student record at all
         if (data == null) {
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Student record not found. Contact your teacher.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          await Supabase.instance.client.auth.signOut();
+          return;
+        }
+
+        final bool isApproved = data['is_approved'] == true;
+        final bool isRejected = data['is_rejected'] == true;
+        final bool hasFace = data['embedding_a'] != null;
+
+        // Never activated — embedding is null, not rejected.
+        // Student must use Activate Account first, not Sign In.
+        if (!hasFace && !isRejected) {
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Account not activated yet. Please use Activate Account first.',
+              ),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 4),
+            ),
+          );
+          await Supabase.instance.client.auth.signOut();
+          return;
+        }
+
+        // Rejected — face was wiped. Allow sign in and send to face registration.
+        if (isRejected) {
           AuthFlowState.instance.passwordSet = true;
           AuthFlowState.instance.faceRegistered = false;
-          AuthFlowState.instance.isFirstTimeUser = true;
+          AuthFlowState.instance.isFirstTimeUser = false;
           Navigator.pushReplacementNamed(context, '/register');
           return;
         }
 
-        // No embedding yet — not registered
-        if (data['embedding_a'] == null) {
-          AuthFlowState.instance.passwordSet = true;
-          AuthFlowState.instance.faceRegistered = false;
-          AuthFlowState.instance.isFirstTimeUser = true;
-          Navigator.pushReplacementNamed(context, '/register');
-          return;
-        }
-
-        // Has embedding but teacher not approved yet
-        if (data['is_approved'] != true) {
+        // Has face but not approved yet — waiting for teacher
+        if (hasFace && !isApproved) {
           Navigator.pushReplacementNamed(context, '/registration_success');
           return;
         }
 
-        // Approved — go to dashboard
+        // Fully approved — go to dashboard
         AuthFlowState.instance.passwordSet = true;
         AuthFlowState.instance.faceRegistered = true;
         Navigator.pushReplacementNamed(context, '/dashboard');

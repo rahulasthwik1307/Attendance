@@ -2847,12 +2847,12 @@ class _WeekGridView extends StatelessWidget {
                         ? words.map((w) => w.isNotEmpty ? w[0].toUpperCase() : '').join()
                         : subject.length > 4 ? subject.substring(0, 4) : subject;
 
-                    // Title + last name (e.g. "Mr. Devi" from "Mr. Devi Lastname")
+                    // Last name only for grid cell (e.g. "Devi" from "Mr. Devi")
                     final parts = faculty.trim().split(' ');
-                    // parts[0] = title ("Mr."), parts[1] = first name or last name
                     final teacherShort = parts.length >= 2
-                        ? '${parts[0]} ${parts[1]}'
-                        : faculty;
+                        ? parts[1]
+                        : (parts.isNotEmpty ? parts[0] : faculty);
+
 
                     return Expanded(
                       child: Container(
@@ -2911,10 +2911,10 @@ class _WeekGridView extends StatelessWidget {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 8,
+                                  fontSize: 9,
                                   fontWeight: FontWeight.w600,
                                   color: isDark
-                                      ? Colors.white.withValues(alpha: 0.45)
+                                      ? Colors.white.withValues(alpha: 0.55)
                                       : AppStyles.textGray,
                                 ),
                               ),

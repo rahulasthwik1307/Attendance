@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../services/auth_service.dart';
+import '../../services/supabase_service.dart';
 import '../../utils/app_styles.dart';
 import '../../utils/auth_flow_state.dart';
 import '../../widgets/animated_button.dart';
@@ -37,28 +40,146 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
 
     bool rollValid = _rollController.text.trim().isNotEmpty;
     bool passValid = _passwordController.text.length >= 4;
-
     if (!rollValid) _rollFieldKey.currentState?.shake();
     if (!passValid) _passwordFieldKey.currentState?.shake();
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (!rollValid || !passValid) return;
 
-    if (_formKey.currentState?.validate() ?? false) {
-      if (!rollValid || !passValid) return; // double check
+    setState(() => _isLoading = true);
 
-      setState(() => _isLoading = true);
-      await Future.delayed(const Duration(milliseconds: 800));
+    try {
+      // Step 1: Sign out any existing session so a different student
+      // can activate on the same device cleanly
+      await AuthService().signOut();
+
+      // Step 2: Try to sign in with roll number + default password
+      final user = await AuthService().signInWithRollNumber(
+        _rollController.text.trim(),
+        _passwordController.text.trim(),
+      );
+
       if (!mounted) return;
 
+      if (user == null) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Account not found. Please check your roll number.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      // Step 3: Check student record
+      final data = await supabase
+          .from('students')
+          .select('embedding_a, is_approved, is_rejected, face_registered')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      if (!mounted) return;
+
+      if (data == null) {
+        // No student record — not a valid student account
+        await AuthService().signOut();
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Student record not found. Contact your teacher.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      final bool isApproved = data['is_approved'] == true;
+      final bool isRejected = data['is_rejected'] == true;
+      final bool hasFace = data['embedding_a'] != null;
+
+      // Rejected — embeddings are wiped but is_rejected=true. Must use Sign In.
+      if (isRejected) {
+        await AuthService().signOut();
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Your registration was rejected. Please use Sign In to re-register your face.',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      // Already approved — account fully active
+      if (isApproved) {
+        await AuthService().signOut();
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Account already activated. Please use Sign In.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      // Face registered and pending approval — still waiting for teacher
+      if (hasFace && !isApproved && !isRejected) {
+        await AuthService().signOut();
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Your account is pending approval. Please wait for your teacher.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      // Fresh account — embedding_a is null, not rejected, not approved.
+      // This is the only valid path to set new password.
       setState(() {
         _isLoading = false;
         _isSuccess = true;
       });
+
       await Future.delayed(const Duration(milliseconds: 600));
       if (!mounted) return;
 
       AuthFlowState.instance.isFirstTimeUser = true;
       AuthFlowState.instance.faceRegistered = false;
       AuthFlowState.instance.passwordSet = false;
+
       Navigator.pushReplacementNamed(context, '/set_new_password');
+
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      String message = e.message;
+      if (message.contains('Invalid login credentials')) {
+        message = 'Incorrect default password. Contact your teacher if you have not received it.';
+      } else if (message.contains('Email not confirmed')) {
+        message = 'Account not confirmed. Contact your teacher.';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: Colors.red),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Something went wrong. Please try again.'), backgroundColor: Colors.red),
+      );
     }
   }
 

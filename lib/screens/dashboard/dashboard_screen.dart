@@ -2906,7 +2906,7 @@ class _ScheduleCardState extends State<_ScheduleCard>
         curve: Curves.easeInOut,
         child: Container(
           width: 150,
-          height: 110,
+          height: 120,
           decoration: BoxDecoration(
             color: cardBg,
             borderRadius: BorderRadius.circular(14),
