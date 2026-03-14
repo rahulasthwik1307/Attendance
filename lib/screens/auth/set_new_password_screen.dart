@@ -151,6 +151,9 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
     if (mounted) {
       if (AuthFlowState.instance.isFirstTimeUser) {
         AuthFlowState.instance.isFirstTimeUser = false;
+        // Brief pause so user sees the success checkmark before face registration
+        await Future.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
         Navigator.of(context).pushReplacementNamed('/register');
       } else if (AuthFlowState.instance.faceRegistered &&
           !AuthFlowState.instance.isFaceReset) {

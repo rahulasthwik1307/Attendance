@@ -149,7 +149,7 @@ class _LocationErrorScreenState extends State<LocationErrorScreen>
                 child: AnimatedButton(
                   onPressed: () => Navigator.of(
                     context,
-                  ).pushReplacementNamed('/face_verification'),
+                  ).pushReplacementNamed('/dashboard'),
                   child: const Text('Try Again'),
                 ),
               ),

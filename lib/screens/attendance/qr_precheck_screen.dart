@@ -328,7 +328,7 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
                   child: SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: () => Navigator.of(context).pop(),
+                      onPressed: () => Navigator.of(context).pushReplacementNamed('/dashboard'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppStyles.errorRed,
                         foregroundColor: Colors.white,

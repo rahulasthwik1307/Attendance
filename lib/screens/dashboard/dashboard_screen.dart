@@ -35,6 +35,12 @@ class _DashboardScreenState extends State<DashboardScreen>
   void initState() {
     super.initState();
     _fetchProfile();
+    // Clear any lingering snackbars from previous screens
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+      }
+    });
     // Refresh when returning to dashboard
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() {});
@@ -335,36 +341,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                       ),
                     ),
                   ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 400),
-                child: _ActionTile(
-                  label: 'Scan QR — Class Attendance',
-                  subtitle: 'Scan QR code to mark period attendance',
-                  icon: Icons.qr_code_scanner_rounded,
-                  isDestructive: false,
-                ),
-              ),
-              const SizedBox(height: 10),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 460),
-                child: _ActionTile(
-                  label: 'Set Location',
-                  subtitle: 'Update your attendance location',
-                  icon: Icons.my_location_rounded,
-                  isDestructive: false,
-                ),
-              ),
-              const SizedBox(height: 10),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 520),
-                child: _ActionTile(
-                  label: 'Reset Face Data',
-                  subtitle: 'Re-register your face securely',
-                  icon: Icons.lock_reset_rounded,
-                  isDestructive: false,
                 ),
               ),
               FadeSlideY(
@@ -1150,222 +1126,6 @@ class _HeroAttendanceCardState extends State<_HeroAttendanceCard> {
   }
 }
 
-class _ActionTile extends StatelessWidget {
-  final String label;
-  final String subtitle;
-  final IconData icon;
-  final bool isDestructive;
-
-  const _ActionTile({
-    required this.label,
-    required this.subtitle,
-    required this.icon,
-    required this.isDestructive,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final color = isDestructive ? AppStyles.errorRed : theme.primaryColor;
-
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        onTap: () {
-          if (label == 'Scan QR — Class Attendance') {
-            Navigator.of(context).pushNamed('/qr-precheck');
-            return;
-          }
-          if (label == 'Reset Face Data') {
-            showGeneralDialog(
-              context: context,
-              barrierDismissible: true,
-              barrierLabel: 'Dismiss',
-              transitionDuration: const Duration(milliseconds: 250),
-              pageBuilder: (ctx, animation, secondaryAnimation) {
-                return Dialog(
-                  backgroundColor: Colors.white,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: AppStyles.errorRed.withValues(alpha: 0.09),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.face_retouching_off_rounded,
-                            color: AppStyles.errorRed,
-                            size: 32,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'Reset Face Data?',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF1A202C),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        const Text(
-                          'This will permanently delete your registered face. You will need to re-register before using face attendance again.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF4A5568),
-                            height: 1.6,
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton(
-                                onPressed: () => Navigator.of(ctx).pop(),
-                                style: OutlinedButton.styleFrom(
-                                  side: BorderSide(
-                                    color: AppStyles.textGray.withValues(
-                                      alpha: 0.3,
-                                    ),
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 13,
-                                  ),
-                                ),
-                                child: const Text(
-                                  'Cancel',
-                                  style: TextStyle(
-                                    color: AppStyles.textGray,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: () {
-                                  Navigator.of(ctx).pop();
-                                  Navigator.of(
-                                    context,
-                                  ).pushNamed('/reset_face_verify');
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppStyles.errorRed,
-                                  foregroundColor: Colors.white,
-                                  elevation: 0,
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 13,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                                child: const Text(
-                                  'Continue',
-                                  style: TextStyle(fontWeight: FontWeight.w700),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-              transitionBuilder: (ctx, animation, secondaryAnimation, child) {
-                return FadeTransition(
-                  opacity: animation,
-                  child: ScaleTransition(
-                    scale: Tween<double>(begin: 0.85, end: 1.0).animate(
-                      CurvedAnimation(
-                        parent: animation,
-                        curve: Curves.easeOutBack,
-                      ),
-                    ),
-                    child: child,
-                  ),
-                );
-              },
-            );
-          }
-        },
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-          decoration: BoxDecoration(
-            color: theme.cardTheme.color ?? Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: isDestructive
-                  ? AppStyles.errorRed.withValues(alpha: 0.2)
-                  : color.withValues(alpha: 0.1),
-              width: 1,
-            ),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(9),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(icon, color: color, size: 20),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      label,
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color:
-                            theme.textTheme.displayLarge?.color ??
-                            AppStyles.textDark,
-                      ),
-                    ),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color:
-                            theme.textTheme.bodyMedium?.color ??
-                            AppStyles.textGray,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Icon(
-                Icons.chevron_right_rounded,
-                color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
-                size: 20,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class _ExpandableScheduleSection extends StatefulWidget {
   final bool isDark;
@@ -1407,7 +1167,12 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
           .eq('id', user.id)
           .maybeSingle();
       if (studentData == null) {
-        if (mounted) setState(() { _scheduleItems = []; _scheduleLoading = false; });
+        if (mounted) {
+          setState(() {
+            _scheduleItems = [];
+            _scheduleLoading = false;
+          });
+        }
         return;
       }
       final classId = studentData['class_id'] as String;
@@ -1416,7 +1181,12 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
       final jsDay = DateTime.now().weekday; // Mon=1 ... Sun=7
       if (jsDay == 7) {
         // Sunday — no classes
-        if (mounted) setState(() { _scheduleItems = []; _scheduleLoading = false; });
+        if (mounted) {
+          setState(() {
+            _scheduleItems = [];
+            _scheduleLoading = false;
+          });
+        }
         return;
       }
       final todayDow = jsDay; // Mon=1 ... Sat=6
@@ -1437,7 +1207,12 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
           .order('period_id');
 
       if ((timetableRows as List).isEmpty) {
-        if (mounted) setState(() { _scheduleItems = []; _scheduleLoading = false; });
+        if (mounted) {
+          setState(() {
+            _scheduleItems = [];
+            _scheduleLoading = false;
+          });
+        }
         return;
       }
 
@@ -1449,8 +1224,10 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
       final Map<String, String> teacherFullNames = {};
       final Map<String, String> teacherTitles = {};
       if (teacherIds.isNotEmpty) {
-        final teacherData = await supabase
-            .rpc('get_teacher_names', params: {'teacher_ids': teacherIds});
+        final teacherData = await supabase.rpc(
+          'get_teacher_names',
+          params: {'teacher_ids': teacherIds},
+        );
         for (final t in (teacherData as List)) {
           final id = t['id'] as String?;
           final name = t['full_name'] as String?;
@@ -1481,7 +1258,9 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
       }
 
       // Fetch student's period_attendance for today's sessions
-      final todaySessionIds = todaySessions.map((s) => s['id'] as String).toList();
+      final todaySessionIds = todaySessions
+          .map((s) => s['id'] as String)
+          .toList();
       Map<String, String> studentAttendance = {};
       if (todaySessionIds.isNotEmpty) {
         final pa = await supabase
@@ -1508,10 +1287,17 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
         final subjectId = row['subject_id'] as String;
 
         final teacherId = row['teacher_id'] as String;
-        final subjectName = (row['subject'] as Map?)?['name'] as String? ?? 'Unknown';
-        final periodNumber = (row['period'] as Map?)?['period_number'] as int? ?? 0;
-        final startTime = ((row['period'] as Map?)?['start_time'] as String? ?? '').substring(0, 5);
-        final endTime = ((row['period'] as Map?)?['end_time'] as String? ?? '').substring(0, 5);
+        final subjectName =
+            (row['subject'] as Map?)?['name'] as String? ?? 'Unknown';
+        final periodNumber =
+            (row['period'] as Map?)?['period_number'] as int? ?? 0;
+        final startTime =
+            ((row['period'] as Map?)?['start_time'] as String? ?? '').substring(
+              0,
+              5,
+            );
+        final endTime = ((row['period'] as Map?)?['end_time'] as String? ?? '')
+            .substring(0, 5);
         final title = teacherTitles[teacherId] ?? 'Mr';
         final fullName = teacherFullNames[teacherId] ?? '';
         final facultyName = fullName.isNotEmpty ? '$title. $fullName' : title;
@@ -1520,12 +1306,15 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
         final session = sessionMap[key];
         final sessionStatus = session?['status'];
         final sessionId = session?['sessionId'];
-        final studentStatus = sessionId != null ? studentAttendance[sessionId] : null;
+        final studentStatus = sessionId != null
+            ? studentAttendance[sessionId]
+            : null;
 
         String cardStatus = 'upcoming';
         if (sessionStatus == 'active') {
           cardStatus = 'current';
-        } else if (sessionStatus == 'finalized' || sessionStatus == 'reviewing') {
+        } else if (sessionStatus == 'finalized' ||
+            sessionStatus == 'reviewing') {
           cardStatus = studentStatus == 'present' ? 'done' : 'absent';
         }
 
@@ -1735,9 +1524,12 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                             final bool isDone = status == 'done';
                             final bool isCurrent = status == 'current';
                             final bool isAbsent = status == 'absent';
-                            final int periodNum = item['periodNumber'] as int? ?? 0;
-                            final String startTime = item['startTime'] as String? ?? '';
-                            final String endTime = item['endTime'] as String? ?? '';
+                            final int periodNum =
+                                item['periodNumber'] as int? ?? 0;
+                            final String startTime =
+                                item['startTime'] as String? ?? '';
+                            final String endTime =
+                                item['endTime'] as String? ?? '';
                             final theme = widget.theme;
                             final isDark = widget.isDark;
 
@@ -2835,45 +2627,45 @@ class _ScheduleCardState extends State<_ScheduleCard>
     final Color accentColor = isCurrent
         ? theme.primaryColor
         : isDone
-            ? AppStyles.successGreen
-            : isAbsent
-                ? AppStyles.errorRed
-                : theme.primaryColor;
+        ? AppStyles.successGreen
+        : isAbsent
+        ? AppStyles.errorRed
+        : theme.primaryColor;
 
     final Color cardBg = isCurrent
         ? theme.primaryColor.withValues(alpha: isDark ? 0.28 : 0.09)
         : isDone
-            ? AppStyles.successGreen.withValues(alpha: isDark ? 0.18 : 0.07)
-            : isAbsent
-                ? AppStyles.errorRed.withValues(alpha: isDark ? 0.18 : 0.07)
-                : theme.primaryColor.withValues(alpha: isDark ? 0.10 : 0.05);
+        ? AppStyles.successGreen.withValues(alpha: isDark ? 0.18 : 0.07)
+        : isAbsent
+        ? AppStyles.errorRed.withValues(alpha: isDark ? 0.18 : 0.07)
+        : theme.primaryColor.withValues(alpha: isDark ? 0.10 : 0.05);
 
     // Subject name color
     final Color textPrimary = isCurrent
         ? theme.primaryColor
         : isDone
-            ? AppStyles.successGreen
-            : isAbsent
-                ? AppStyles.errorRed
-                : theme.primaryColor;
+        ? AppStyles.successGreen
+        : isAbsent
+        ? AppStyles.errorRed
+        : theme.primaryColor;
 
     // Period info + teacher name color
     final Color textSecondary = isCurrent
         ? theme.primaryColor.withValues(alpha: 0.75)
         : isDone
-            ? AppStyles.successGreen.withValues(alpha: 0.75)
-            : isAbsent
-                ? AppStyles.errorRed.withValues(alpha: 0.75)
-                : AppStyles.textGray;
+        ? AppStyles.successGreen.withValues(alpha: 0.75)
+        : isAbsent
+        ? AppStyles.errorRed.withValues(alpha: 0.75)
+        : AppStyles.textGray;
 
     // ── Strip config ─────────────────────────────────────
     final Color stripBg = isCurrent
         ? theme.primaryColor
         : isDone
-            ? AppStyles.successGreen
-            : isAbsent
-                ? AppStyles.errorRed
-                : theme.primaryColor.withValues(alpha: isDark ? 0.18 : 0.10);
+        ? AppStyles.successGreen
+        : isAbsent
+        ? AppStyles.errorRed
+        : theme.primaryColor.withValues(alpha: isDark ? 0.18 : 0.10);
 
     final Color stripText = isCurrent || isDone || isAbsent
         ? Colors.white
@@ -2882,19 +2674,19 @@ class _ScheduleCardState extends State<_ScheduleCard>
     final String stripLabel = isCurrent
         ? '● Live Now'
         : isDone
-            ? '✓  Attended'
-            : isAbsent
-                ? '✗  Absent'
-                : 'Upcoming';
+        ? '✓  Attended'
+        : isAbsent
+        ? '✗  Absent'
+        : 'Upcoming';
 
     // ── Watermark icon for done/absent ───────────────────
     final IconData? watermarkIcon = isDone
         ? Icons.check_circle_outline_rounded
         : isAbsent
-            ? Icons.cancel_outlined
-            : isCurrent
-                ? Icons.radio_button_checked_rounded
-                : null;
+        ? Icons.cancel_outlined
+        : isCurrent
+        ? Icons.radio_button_checked_rounded
+        : null;
 
     Widget card = GestureDetector(
       onTapDown: (_) => setState(() => _pressed = true),
@@ -2923,30 +2715,30 @@ class _ScheduleCardState extends State<_ScheduleCard>
                     ),
                   ]
                 : isDone
-                    ? [
-                        BoxShadow(
-                          color: AppStyles.successGreen.withValues(alpha: 0.10),
-                          blurRadius: 6,
-                          offset: const Offset(0, 2),
-                        ),
-                      ]
-                    : isAbsent
-                        ? [
-                            BoxShadow(
-                              color: AppStyles.errorRed.withValues(alpha: 0.10),
-                              blurRadius: 6,
-                              offset: const Offset(0, 2),
-                            ),
-                          ]
-                        : [
-                            BoxShadow(
-                              color: Colors.black.withValues(
-                                alpha: isDark ? 0.18 : 0.06,
-                              ),
-                              blurRadius: 6,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
+                ? [
+                    BoxShadow(
+                      color: AppStyles.successGreen.withValues(alpha: 0.10),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : isAbsent
+                ? [
+                    BoxShadow(
+                      color: AppStyles.errorRed.withValues(alpha: 0.10),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(
+                        alpha: isDark ? 0.18 : 0.06,
+                      ),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(13),
@@ -2979,52 +2771,52 @@ class _ScheduleCardState extends State<_ScheduleCard>
                   children: [
                     // Content area
                     Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Period + time on one line
-                          Text(
-                            'Period ${widget.periodNum}  ·  ${widget.startTime}-${widget.endTime}',
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
-                              color: textSecondary,
-                              letterSpacing: 0.1,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Period + time on one line
+                            Text(
+                              'Period ${widget.periodNum}  ·  ${widget.startTime}-${widget.endTime}',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: textSecondary,
+                                letterSpacing: 0.1,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 6),
-                          // Subject name — natural height, no Expanded
-                          Text(
-                            widget.item['subject'] as String,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                              color: textPrimary,
-                              height: 1.25,
+                            const SizedBox(height: 6),
+                            // Subject name — natural height, no Expanded
+                            Text(
+                              widget.item['subject'] as String,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                color: textPrimary,
+                                height: 1.25,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 5),
-                          // Faculty name — always directly below subject
-                          Text(
-                            widget.item['teacher'] as String,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: textSecondary,
-                              fontWeight: FontWeight.w600,
+                            const SizedBox(height: 5),
+                            // Faculty name — always directly below subject
+                            Text(
+                              widget.item['teacher'] as String,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: textSecondary,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
                     ), // closes Expanded
                     // ── Bottom status strip ──────────────
                     Container(
