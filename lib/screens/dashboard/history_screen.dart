@@ -2282,6 +2282,7 @@ class _TimetableTabState extends State<_TimetableTab> {
   late int _selectedDay;
   late int _previousDay;
   bool _goingForward = true;
+  bool _isWeekView = false;
 
   @override
   void initState() {
@@ -2324,11 +2325,23 @@ class _TimetableTabState extends State<_TimetableTab> {
 
     final activeDays = [1, 2, 3, 4, 5, 6].where((d) => byDay.containsKey(d)).toList();
 
+    // ── Period accent colors (same as day view) ──────────
+    Color periodColor(int periodNum, ThemeData theme) {
+      switch (periodNum) {
+        case 1: return theme.primaryColor;
+        case 2: return AppStyles.successGreen;
+        case 3: return const Color(0xFFF39C12);
+        case 4: return const Color(0xFF9B59B6);
+        case 5: return AppStyles.errorRed;
+        default: return theme.primaryColor;
+      }
+    }
+
     return Column(
       children: [
-        // Day selector strip
+        // ── Day selector strip ──────────────────────────
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
@@ -2344,25 +2357,27 @@ class _TimetableTabState extends State<_TimetableTab> {
                           _previousDay = _selectedDay;
                           _selectedDay = day;
                           _goingForward = day > _previousDay;
+                          _isWeekView = false;
                         });
                       }
                     },
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
                       curve: Curves.easeInOut,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 9),
                       decoration: BoxDecoration(
-                        color: isSelected 
-                            ? widget.theme.primaryColor 
-                            : (widget.isDark 
-                                ? Colors.white.withValues(alpha: 0.07) 
+                        color: isSelected
+                            ? widget.theme.primaryColor
+                            : (widget.isDark
+                                ? Colors.white.withValues(alpha: 0.07)
                                 : Colors.black.withValues(alpha: 0.05)),
                         borderRadius: BorderRadius.circular(50),
-                        border: isSelected 
-                            ? null 
+                        border: isSelected
+                            ? null
                             : Border.all(
-                                color: widget.isDark 
-                                    ? Colors.white.withValues(alpha: 0.12) 
+                                color: widget.isDark
+                                    ? Colors.white.withValues(alpha: 0.12)
                                     : Colors.black.withValues(alpha: 0.09),
                                 width: 1,
                               ),
@@ -2374,19 +2389,22 @@ class _TimetableTabState extends State<_TimetableTab> {
                             _dayShort[day - 1],
                             style: TextStyle(
                               fontSize: 12,
-                              fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                              fontWeight: isSelected
+                                  ? FontWeight.w800
+                                  : FontWeight.w600,
                               letterSpacing: isSelected ? 0.6 : 0,
-                              color: isSelected 
-                                  ? Colors.white 
-                                  : (widget.isDark 
-                                      ? Colors.white.withValues(alpha: 0.55) 
+                              color: isSelected
+                                  ? Colors.white
+                                  : (widget.isDark
+                                      ? Colors.white.withValues(alpha: 0.55)
                                       : AppStyles.textGray),
                             ),
                           ),
                           if (isSelected && isToday) ...[
                             const SizedBox(width: 6),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 5, vertical: 2),
                               decoration: BoxDecoration(
                                 color: Colors.white.withValues(alpha: 0.25),
                                 borderRadius: BorderRadius.circular(4),
@@ -2410,51 +2428,508 @@ class _TimetableTabState extends State<_TimetableTab> {
             ),
           ),
         ),
-        
-        // Period cards section
-        Expanded(
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 320),
-            transitionBuilder: (child, animation) {
-              return FadeTransition(
-                opacity: animation,
-                child: SlideTransition(
-                  position: Tween<Offset>(
-                    begin: _goingForward ? const Offset(0.18, 0) : const Offset(-0.18, 0),
-                    end: Offset.zero,
-                  ).animate(CurvedAnimation(
-                    parent: animation, 
-                    curve: Curves.easeOutCubic,
-                  )),
-                  child: child,
-                ),
-              );
-            },
-            child: SingleChildScrollView(
-              key: ValueKey(_selectedDay),
-              padding: const EdgeInsets.only(left: 20, right: 20, top: 4, bottom: 20),
-              child: Column(
-                children: (byDay[_selectedDay] ?? []).asMap().entries.map((entry) {
-                  final index = entry.key;
-                  final slot = entry.value;
-                  return FadeSlideY(
-                    delay: Duration(milliseconds: 40 + (index * 50)),
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _TimetablePeriodRow(
-                        slot: slot,
-                        isToday: _selectedDay == DateTime.now().weekday,
-                        isDark: widget.isDark,
-                        theme: widget.theme,
+
+        // ── View toggle pill ────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 6),
+          child: Container(
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: widget.isDark
+                  ? Colors.white.withValues(alpha: 0.07)
+                  : Colors.black.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                // Day view pill
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _isWeekView = false),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeInOut,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: !_isWeekView
+                            ? widget.theme.primaryColor
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        boxShadow: !_isWeekView
+                            ? [
+                                BoxShadow(
+                                  color: widget.theme.primaryColor
+                                      .withValues(alpha: 0.25),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                )
+                              ]
+                            : [],
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.view_day_rounded,
+                            size: 14,
+                            color: !_isWeekView
+                                ? Colors.white
+                                : (widget.isDark
+                                    ? Colors.white.withValues(alpha: 0.45)
+                                    : AppStyles.textGray),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Day View',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: !_isWeekView
+                                  ? Colors.white
+                                  : (widget.isDark
+                                      ? Colors.white.withValues(alpha: 0.45)
+                                      : AppStyles.textGray),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  );
-                }).toList(),
-              ),
+                  ),
+                ),
+                // Week grid pill
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _isWeekView = true),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeInOut,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: _isWeekView
+                            ? widget.theme.primaryColor
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        boxShadow: _isWeekView
+                            ? [
+                                BoxShadow(
+                                  color: widget.theme.primaryColor
+                                      .withValues(alpha: 0.25),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                )
+                              ]
+                            : [],
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.grid_view_rounded,
+                            size: 14,
+                            color: _isWeekView
+                                ? Colors.white
+                                : (widget.isDark
+                                    ? Colors.white.withValues(alpha: 0.45)
+                                    : AppStyles.textGray),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Week Grid',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: _isWeekView
+                                  ? Colors.white
+                                  : (widget.isDark
+                                      ? Colors.white.withValues(alpha: 0.45)
+                                      : AppStyles.textGray),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
+
+        // ── Content area ────────────────────────────────
+        Expanded(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.04),
+                  end: Offset.zero,
+                ).animate(CurvedAnimation(
+                    parent: animation, curve: Curves.easeOutCubic)),
+                child: child,
+              ),
+            ),
+            child: _isWeekView
+                ? _WeekGridView(
+                    key: const ValueKey('week'),
+                    byDay: byDay,
+                    activeDays: activeDays,
+                    isDark: widget.isDark,
+                    theme: widget.theme,
+                    periodColor: periodColor,
+                  )
+                : AnimatedSwitcher(
+                    key: const ValueKey('day'),
+                    duration: const Duration(milliseconds: 320),
+                    transitionBuilder: (child, animation) => FadeTransition(
+                      opacity: animation,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: _goingForward
+                              ? const Offset(0.18, 0)
+                              : const Offset(-0.18, 0),
+                          end: Offset.zero,
+                        ).animate(CurvedAnimation(
+                            parent: animation,
+                            curve: Curves.easeOutCubic)),
+                        child: child,
+                      ),
+                    ),
+                    child: SingleChildScrollView(
+                      key: ValueKey(_selectedDay),
+                      padding: const EdgeInsets.only(
+                          left: 20, right: 20, top: 4, bottom: 20),
+                      child: Column(
+                        children:
+                            (byDay[_selectedDay] ?? []).asMap().entries.map(
+                          (entry) {
+                            final index = entry.key;
+                            final slot = entry.value;
+                            return FadeSlideY(
+                              delay: Duration(
+                                  milliseconds: 40 + (index * 50)),
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.only(bottom: 8),
+                                child: _TimetablePeriodRow(
+                                  slot: slot,
+                                  isToday: _selectedDay ==
+                                      DateTime.now().weekday,
+                                  isDark: widget.isDark,
+                                  theme: widget.theme,
+                                ),
+                              ),
+                            );
+                          },
+                        ).toList(),
+                      ),
+                    ),
+                  ),
+          ),
+        ),
       ],
+    );
+  }
+}
+
+class _WeekGridView extends StatelessWidget {
+  final Map<int, List<Map<String, dynamic>>> byDay;
+  final List<int> activeDays;
+  final bool isDark;
+  final ThemeData theme;
+  final Color Function(int, ThemeData) periodColor;
+
+  static const _dayShort = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+  const _WeekGridView({
+    super.key,
+    required this.byDay,
+    required this.activeDays,
+    required this.isDark,
+    required this.theme,
+    required this.periodColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Collect all unique period numbers across all days
+    final Set<int> allPeriods = {};
+    for (final slots in byDay.values) {
+      for (final s in slots) {
+        allPeriods.add(s['periodNumber'] as int);
+      }
+    }
+    final sortedPeriods = allPeriods.toList()..sort();
+
+    final today = DateTime.now().weekday;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+      child: Column(
+        children: [
+          // ── Header row: empty + day columns ──────────
+          Row(
+            children: [
+              // Time label column header
+              SizedBox(
+                width: 48,
+                child: Text(
+                  'Period',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: AppStyles.textGray,
+                    letterSpacing: 0.3,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              ...activeDays.map((day) {
+                final isToday = day == today;
+                return Expanded(
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    decoration: BoxDecoration(
+                      color: isToday
+                          ? theme.primaryColor
+                          : (isDark
+                              ? Colors.white.withValues(alpha: 0.06)
+                              : Colors.black.withValues(alpha: 0.04)),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      _dayShort[day - 1],
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5,
+                        color: isToday
+                            ? Colors.white
+                            : (isDark
+                                ? Colors.white.withValues(alpha: 0.6)
+                                : AppStyles.textGray),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // ── Period rows ───────────────────────────────
+          ...sortedPeriods.map((pNum) {
+            final color = periodColor(pNum, theme);
+
+            // Find start/end time from any day that has this period
+            String startTime = '';
+            String endTime = '';
+            for (final slots in byDay.values) {
+              for (final s in slots) {
+                if (s['periodNumber'] == pNum) {
+                  startTime = s['startTime'] as String? ?? '';
+                  endTime = s['endTime'] as String? ?? '';
+                  break;
+                }
+              }
+              if (startTime.isNotEmpty) break;
+            }
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Period number + time column
+                  SizedBox(
+                    width: 48,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 22,
+                          height: 22,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: color.withValues(alpha: 0.15),
+                            border: Border.all(
+                              color: color.withValues(alpha: 0.5),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Center(
+                            child: Text(
+                              '$pNum',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: color,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          startTime,
+                          style: TextStyle(
+                            fontSize: 8,
+                            fontWeight: FontWeight.w700,
+                            color: color,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        Text(
+                          endTime,
+                          style: TextStyle(
+                            fontSize: 8,
+                            fontWeight: FontWeight.w500,
+                            color: AppStyles.textGray,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Day cells for this period
+                  ...activeDays.map((day) {
+                    final slots = byDay[day] ?? [];
+                    final slot = slots.cast<Map<String, dynamic>?>()
+                        .firstWhere(
+                          (s) => s?['periodNumber'] == pNum,
+                          orElse: () => null,
+                        );
+
+                    if (slot == null) {
+                      return Expanded(
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                          height: 64,
+                          decoration: BoxDecoration(
+                            color: day == today
+                                ? theme.primaryColor.withValues(alpha: isDark ? 0.08 : 0.04)
+                                : (isDark
+                                    ? Colors.white.withValues(alpha: 0.03)
+                                    : Colors.black.withValues(alpha: 0.02)),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: day == today
+                                  ? theme.primaryColor.withValues(alpha: 0.25)
+                                  : (isDark
+                                      ? Colors.white.withValues(alpha: 0.06)
+                                      : Colors.black.withValues(alpha: 0.05)),
+                              width: day == today ? 1.5 : 1,
+                            ),
+                          ),
+                          child: Center(
+                            child: Text(
+                              '—',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppStyles.textGray
+                                    .withValues(alpha: 0.3),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+
+                    final subject = slot['subject'] as String? ?? '';
+                    final faculty = slot['faculty'] as String? ?? '';
+
+                    // Auto abbreviation: initials for multi-word, first 4 chars for single-word
+                    final words = subject.trim().split(RegExp(r'\s+'));
+                    final abbr = words.length > 1
+                        ? words.map((w) => w.isNotEmpty ? w[0].toUpperCase() : '').join()
+                        : subject.length > 4 ? subject.substring(0, 4) : subject;
+
+                    // Title + last name (e.g. "Mr. Devi" from "Mr. Devi Lastname")
+                    final parts = faculty.trim().split(' ');
+                    // parts[0] = title ("Mr."), parts[1] = first name or last name
+                    final teacherShort = parts.length >= 2
+                        ? '${parts[0]} ${parts[1]}'
+                        : faculty;
+
+                    return Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: day == today
+                              ? theme.primaryColor.withValues(alpha: isDark ? 0.12 : 0.06)
+                              : (isDark
+                                  ? (theme.cardTheme.color ?? const Color(0xFF1E1E1E))
+                                  : Colors.white),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: day == today
+                                ? color.withValues(alpha: 0.75)
+                                : color.withValues(alpha: 0.55),
+                            width: day == today ? 2.0 : 1.5,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: color.withValues(alpha: day == today ? 0.12 : 0.08),
+                              blurRadius: 4,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 3, vertical: 6),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                abbr,
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                  color: color,
+                                  height: 1.1,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Container(
+                                width: 20,
+                                height: 1,
+                                color: color.withValues(alpha: 0.3),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                teacherShort,
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w600,
+                                  color: isDark
+                                      ? Colors.white.withValues(alpha: 0.45)
+                                      : AppStyles.textGray,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
     );
   }
 }
@@ -2502,124 +2977,157 @@ class _TimetablePeriodRowState extends State<_TimetablePeriodRow> {
       onTapUp: (_) => setState(() => _pressed = false),
       onTapCancel: () => setState(() => _pressed = false),
       child: AnimatedScale(
-        scale: _pressed ? 0.96 : 1.0,
+        scale: _pressed ? 0.97 : 1.0,
         duration: const Duration(milliseconds: 130),
         curve: Curves.easeInOut,
-        child: Container(
-          margin: EdgeInsets.zero,
-          decoration: BoxDecoration(
-            color: widget.theme.cardTheme.color ?? Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: widget.isDark ? 0.18 : 0.06),
-                blurRadius: 10,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  width: 4,
-                  decoration: BoxDecoration(
-                    color: accentColor,
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(16),
-                      bottomLeft: Radius.circular(16),
-                    ),
-                  ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            decoration: BoxDecoration(
+              color: widget.theme.cardTheme.color ?? Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(
+                      alpha: widget.isDark ? 0.15 : 0.05),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
                 ),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: accentColor.withValues(alpha: 0.12),
-                            border: Border.all(
-                              color: accentColor.withValues(alpha: 0.35),
-                              width: 1.5,
+              ],
+            ),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // ── Left accent bar — rounded with card ──
+                  Container(
+                    width: 5,
+                    color: accentColor,
+                  ),
+                  // ── Accent tint background ──
+                  Expanded(
+                    child: Container(
+                      color: accentColor.withValues(
+                          alpha: widget.isDark ? 0.06 : 0.03),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          // Period circle
+                          Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: accentColor.withValues(alpha: 0.12),
+                              border: Border.all(
+                                color: accentColor.withValues(alpha: 0.5),
+                                width: 2,
+                              ),
                             ),
-                          ),
-                          child: Center(
-                            child: Text(
-                              '$periodNum',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w800,
-                                color: accentColor,
+                            child: Center(
+                              child: Text(
+                                '$periodNum',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                  color: accentColor,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          const SizedBox(width: 10),
+                          // Subject + teacher
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  subject,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: widget.theme.textTheme
+                                            .displayLarge?.color ??
+                                        AppStyles.textDark,
+                                    height: 1.2,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 3),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.person_outline_rounded,
+                                      size: 11,
+                                      color: widget.theme.textTheme
+                                              .bodyMedium?.color ??
+                                          AppStyles.textGray,
+                                    ),
+                                    const SizedBox(width: 3),
+                                    Expanded(
+                                      child: Text(
+                                        faculty,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w500,
+                                          color: widget.theme.textTheme
+                                                  .bodyMedium?.color ??
+                                              AppStyles.textGray,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // Time block
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Text(
-                                subject,
+                                start,
                                 style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                  color: widget.theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: accentColor,
+                                  height: 1.1,
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
                               ),
-                              const SizedBox(height: 4),
+                              Container(
+                                margin: const EdgeInsets.symmetric(
+                                    vertical: 2),
+                                width: 20,
+                                height: 1,
+                                color: accentColor.withValues(alpha: 0.35),
+                              ),
                               Text(
-                                faculty,
+                                end,
                                 style: TextStyle(
-                                  fontSize: 11,
+                                  fontSize: 10,
                                   fontWeight: FontWeight.w500,
-                                  color: widget.theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                                  color: widget.theme.textTheme
+                                          .bodyMedium?.color ??
+                                      AppStyles.textGray,
+                                  height: 1.1,
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
                               ),
                             ],
                           ),
-                        ),
-                        const SizedBox(width: 10),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              start,
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                                color: accentColor,
-                              ),
-                            ),
-                            const SizedBox(height: 3),
-                            Container(width: 24, height: 1, color: accentColor.withValues(alpha: 0.4)),
-                            const SizedBox(height: 3),
-                            Text(
-                              end,
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                color: widget.theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
