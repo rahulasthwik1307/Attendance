@@ -410,19 +410,27 @@ class _DetailRow extends StatelessWidget {
             child: Icon(icon, color: iconColor, size: 18),
           ),
           const SizedBox(width: 14),
-          Text(
-            label,
-            style: const TextStyle(fontSize: 14, color: AppStyles.textGray),
+          Flexible(
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 14, color: AppStyles.textGray),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
+          const SizedBox(width: 8),
           const Spacer(),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              color:
-                  valueColor ??
-                  (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
+          Flexible(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: valueColor ??
+                    (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
+              ),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+              textAlign: TextAlign.end,
             ),
           ),
         ],

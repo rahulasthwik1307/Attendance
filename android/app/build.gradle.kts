@@ -25,10 +25,6 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-
-        ndk {
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
-        }
     }
 
     buildTypes {
@@ -43,7 +39,7 @@ flutter {
 }
 
 dependencies {
-    // LiteRT is the rebranded TensorFlow Lite — do NOT include both
+    // LiteRT (TensorFlow Lite new name)
     implementation("com.google.ai.edge.litert:litert:1.4.1")
     implementation("com.google.ai.edge.litert:litert-api:1.4.1")
     implementation("com.google.ai.edge.litert:litert-gpu:1.4.1")

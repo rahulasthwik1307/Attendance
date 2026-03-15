@@ -353,35 +353,45 @@ class _DetailRow extends StatelessWidget {
             child: Icon(icon, color: iconColor, size: 18),
           ),
           const SizedBox(width: 14),
-          Text(
-            label,
-            style: const TextStyle(fontSize: 14, color: AppStyles.textGray),
+          Flexible(
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 14, color: AppStyles.textGray),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
+          const SizedBox(width: 8),
           const Spacer(),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color:
-                      valueColor ??
-                      (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
-                ),
-              ),
-              if (valueSubtitle != null) ...[
-                const SizedBox(height: 2),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
                 Text(
-                  valueSubtitle!,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppStyles.textGray,
+                  value,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: valueColor ??
+                        (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
                   ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
+                  textAlign: TextAlign.end,
                 ),
+                if (valueSubtitle != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    valueSubtitle!,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppStyles.textGray,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ],
       ),

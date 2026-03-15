@@ -23,6 +23,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   bool _scheduleExpanded = false;
 
   String _studentName = 'Student';
+  String _upcomingPeriodText = '';
 
   bool _teacherFinalized = false;
   String _finalizedSubject = '';
@@ -35,6 +36,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   void initState() {
     super.initState();
     _fetchProfile();
+    _fetchUpcomingPeriod();
     // Clear any lingering snackbars from previous screens
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -85,6 +87,58 @@ class _DashboardScreenState extends State<DashboardScreen>
     } catch (e, stack) {
       debugPrint('[DASHBOARD] error: $e');
       debugPrint('[DASHBOARD] stack: $stack');
+    }
+  }
+
+  String _getFormattedDate() {
+    final now = DateTime.now();
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final dayName = days[now.weekday - 1];
+    final monthName = months[now.month - 1];
+    return '$dayName, $monthName ${now.day}';
+  }
+
+  Future<void> _fetchUpcomingPeriod() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+      final studentData = await supabase
+          .from('students').select('class_id').eq('id', user.id).maybeSingle();
+      if (studentData == null) return;
+      final classId = studentData['class_id'] as String;
+      final jsDay = DateTime.now().weekday;
+      if (jsDay == 7) { if (mounted) setState(() => _upcomingPeriodText = 'No classes today — rest up! 😴'); return; }
+      final now = TimeOfDay.now();
+      final nowMinutes = now.hour * 60 + now.minute;
+      final rows = await supabase
+          .from('timetables')
+          .select('subject:subjects(name), period:periods(period_number, start_time, end_time)')
+          .eq('class_id', classId)
+          .eq('day_of_week', jsDay);
+      if ((rows as List).isEmpty) { if (mounted) setState(() => _upcomingPeriodText = 'No more classes today'); return; }
+      rows.sort((a, b) {
+        final aStart = ((a['period'] as Map?)?['start_time'] as String? ?? '00:00').replaceAll(':', '');
+        final bStart = ((b['period'] as Map?)?['start_time'] as String? ?? '00:00').replaceAll(':', '');
+        return aStart.compareTo(bStart);
+      });
+      Map<String, dynamic>? upcoming;
+      for (final row in rows) {
+        final startStr = (row['period'] as Map?)?['start_time'] as String? ?? '00:00';
+        final parts = startStr.split(':');
+        final startMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+        if (startMinutes > nowMinutes) { upcoming = row; break; }
+      }
+      if (upcoming == null) {
+        if (mounted) setState(() => _upcomingPeriodText = 'No more classes today 🎉');
+        return;
+      }
+      final subjectName = (upcoming['subject'] as Map?)?['name'] as String? ?? 'Class';
+      final periodNum = (upcoming['period'] as Map?)?['period_number'] as int? ?? 1;
+      final startTime = ((upcoming['period'] as Map?)?['start_time'] as String? ?? '').substring(0, 5);
+      if (mounted) setState(() => _upcomingPeriodText = 'Next: Period $periodNum · $subjectName · $startTime');
+    } catch (e) {
+      debugPrint('[UPCOMING] $e');
     }
   }
 
@@ -209,19 +263,48 @@ class _DashboardScreenState extends State<DashboardScreen>
           backgroundColor: Colors.transparent,
           elevation: 0,
           automaticallyImplyLeading: false,
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Hello, ${_studentName.split(' ').first} 👋',
-                style: TextStyle(
-                  color:
-                      theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 24,
+          toolbarHeight: 72,
+          titleSpacing: 0,
+          title: Padding(
+            padding: const EdgeInsets.only(top: 12, left: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'Hello, ${_studentName.split(' ').first}',
+                      style: TextStyle(
+                        color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 26,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    AnimatedBuilder(
+                      animation: _pulseAnimation,
+                      builder: (context, child) => Transform.rotate(
+                        angle: (_pulseAnimation.value - 1.0) * 0.3,
+                        child: child,
+                      ),
+                      child: const Text('👋', style: TextStyle(fontSize: 24)),
+                    ),
+                  ],
                 ),
-              ),
-            ],
+                const SizedBox(height: 4),
+                Text(
+                  _getFormattedDate(),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.6)
+                        ?? AppStyles.textGray,
+                    letterSpacing: 0.1,
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
             IconButton(
@@ -239,6 +322,42 @@ class _DashboardScreenState extends State<DashboardScreen>
               vertical: 16.0,
             ),
             children: [
+              if (_upcomingPeriodText.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: FadeSlideY(
+                    delay: const Duration(milliseconds: 30),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).primaryColor.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Theme.of(context).primaryColor.withValues(alpha: 0.15),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.schedule_rounded,
+                              size: 15,
+                              color: Theme.of(context).primaryColor.withValues(alpha: 0.7)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _upcomingPeriodText,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Theme.of(context).primaryColor.withValues(alpha: 0.8),
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               FadeSlideY(
                 delay: const Duration(milliseconds: 50),
                 child: _AttendanceBanner(
@@ -297,6 +416,11 @@ class _DashboardScreenState extends State<DashboardScreen>
               FadeSlideY(
                 delay: const Duration(milliseconds: 180),
                 child: _AttendancePercentageCard(theme: theme, isDark: isDark),
+              ),
+              const SizedBox(height: 8),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 220),
+                child: const _MotivationalMessage(),
               ),
               const SizedBox(height: 10),
               FadeSlideY(
@@ -513,6 +637,17 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
         decoration: BoxDecoration(
           color: color.withValues(alpha: widget.isDark ? 0.15 : 0.07),
           borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: color.withValues(alpha: 0.3),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: widget.isDark ? 0.15 : 0.08),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Row(
           children: [
@@ -524,8 +659,15 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.25),
+                  color: Colors.white.withValues(alpha: widget.isDark ? 0.15 : 0.9),
                   shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.2),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
                 child: Icon(iconData, color: color, size: 24),
               ),
@@ -538,10 +680,10 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
                   Text(
                     message,
                     style: TextStyle(
-                      fontSize: 15,
+                      fontSize: 16,
                       fontWeight: FontWeight.w800,
-                      letterSpacing: -0.2,
-                      color: color,
+                      letterSpacing: -0.3,
+                      color: widget.isDark ? Colors.white : AppStyles.textDark,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -550,7 +692,9 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
-                      color: color.withValues(alpha: 0.8),
+                      color: widget.isDark
+                          ? Colors.white.withValues(alpha: 0.7)
+                          : AppStyles.textDark.withValues(alpha: 0.6),
                     ),
                   ),
                   if (faceVerifiedLine.isNotEmpty) ...[
@@ -559,7 +703,7 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
                       faceVerifiedLine,
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
                         color: color,
                       ),
                     ),
@@ -716,22 +860,32 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
   Widget build(BuildContext context) {
     final theme = widget.theme;
     final isDark = widget.isDark;
-    final Color pctColor = AppStyles.successGreen;
+    final Color pctColor = _pct >= 0.75
+        ? AppStyles.successGreen
+        : _pct >= 0.60
+        ? AppStyles.amberWarning
+        : AppStyles.errorRed;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 20, 26, 20),
       decoration: BoxDecoration(
         color: (theme.cardTheme.color ?? Colors.white).withValues(alpha: 0.96),
         border: Border.all(
-          color: pctColor.withValues(alpha: isDark ? 0.08 : 0.04),
-          width: 1,
+          color: pctColor.withValues(alpha: isDark ? 0.15 : 0.1),
+          width: 2,
         ),
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: pctColor.withValues(alpha: isDark ? 0.08 : 0.05),
+            color: pctColor.withValues(alpha: isDark ? 0.15 : 0.08),
             blurRadius: 16,
-            offset: const Offset(0, 4),
+            offset: const Offset(0, 8),
+          ),
+          BoxShadow(
+            color: pctColor.withValues(alpha: isDark ? 0.05 : 0.03),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+            spreadRadius: 1,
           ),
         ],
       ),
@@ -873,19 +1027,21 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
                             ),
                             const SizedBox(width: 4),
                             Flexible(
-                              child: Text(
-                                _pct >= 0.75
-                                    ? 'Good Standing — Above 75% Requirement'
-                                    : 'Warning — Below 75% Requirement',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: pctColor,
+                                  child: Text(
+                                    _pct >= 0.75
+                                        ? 'Good Standing — Above 75%'
+                                        : _pct >= 0.60
+                                        ? 'Condonation Risk — 60–74%'
+                                        : 'Detained Risk — Below 60%',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: pctColor,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
                           ],
                         ),
                       ),
@@ -1180,17 +1336,7 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
 
       // Get today's day_of_week (Mon=1 ... Sat=6, Sun=null)
       final jsDay = DateTime.now().weekday; // Mon=1 ... Sun=7
-      if (jsDay == 7) {
-        // Sunday — no classes
-        if (mounted) {
-          setState(() {
-            _scheduleItems = [];
-            _scheduleLoading = false;
-          });
-        }
-        return;
-      }
-      final todayDow = jsDay; // Mon=1 ... Sat=6
+      int todayDow = jsDay == 7 ? 1 : jsDay; // Sunday → show Monday
 
       // Fetch timetable for this class and today's day, ordered by period
       final timetableRows = await supabase
@@ -1450,8 +1596,8 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                       ),
                       Text(
                         widget.isExpanded
-                            ? '${_scheduleItems.length} subject${_scheduleItems.length != 1 ? 's' : ''} assigned'
-                            : 'Tap to view your classes',
+                            ? '${_scheduleItems.length} subject${_scheduleItems.length != 1 ? 's' : ''} — ${DateTime.now().weekday == 7 ? 'Tomorrow (Mon)' : 'Today'}'
+                            : DateTime.now().weekday == 7 ? 'Showing tomorrow\'s schedule' : 'Tap to view your classes',
                         style: TextStyle(
                           fontSize: 12,
                           color:
@@ -2073,32 +2219,53 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     // Teacher finalized — green confirmed card (persists until next session)
     if (widget.teacherFinalized) {
       return Padding(
-        padding: const EdgeInsets.only(bottom: 10.0),
+        padding: const EdgeInsets.only(bottom: 12.0, top: 4),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
           decoration: BoxDecoration(
-            color: AppStyles.successGreen.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(18),
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: AppStyles.successGreen.withValues(alpha: 0.25),
+              color: AppStyles.successGreen.withValues(alpha: 0.15),
               width: 1.5,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: AppStyles.successGreen.withValues(alpha: 0.08),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
+              ),
+            ],
           ),
           child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(10),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: AppStyles.successGreen.withValues(alpha: 0.15),
+                  gradient: LinearGradient(
+                    colors: [
+                      AppStyles.successGreen,
+                      AppStyles.successGreen.withValues(alpha: 0.8),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
                   shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppStyles.successGreen.withValues(alpha: 0.3),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
                 ),
                 child: const Icon(
-                  Icons.check_circle_rounded,
-                  color: AppStyles.successGreen,
-                  size: 22,
+                  Icons.check_rounded,
+                  color: Colors.white,
+                  size: 24,
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2107,27 +2274,27 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                       'Attendance Confirmed',
                       style: TextStyle(
                         fontWeight: FontWeight.w800,
-                        fontSize: 15,
-                        color: AppStyles.successGreen,
-                        letterSpacing: -0.2,
+                        fontSize: 16,
+                        color: AppStyles.textDark,
+                        letterSpacing: -0.3,
                       ),
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 4),
                     Text(
                       '${widget.finalizedPeriod} — ${widget.finalizedSubject}',
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: AppStyles.successGreen.withValues(alpha: 0.8),
+                        fontWeight: FontWeight.w600,
+                        color: AppStyles.textGray,
                       ),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Teacher has marked you present ✓',
+                      'Marked present by teacher',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
-                        color: AppStyles.successGreen.withValues(alpha: 0.7),
+                        color: AppStyles.successGreen.withValues(alpha: 0.9),
                       ),
                     ),
                   ],
@@ -2211,32 +2378,42 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     // Attendance already marked — amber pending card
     if (_hasMarkedAttendance) {
       return Padding(
-        padding: const EdgeInsets.only(bottom: 10.0),
+        padding: const EdgeInsets.only(bottom: 12.0, top: 4),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
           decoration: BoxDecoration(
-            color: AppStyles.amberWarning.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(18),
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: AppStyles.amberWarning.withValues(alpha: 0.25),
+              color: Colors.orange.shade300.withValues(alpha: 0.3),
               width: 1.5,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.orange.shade100.withValues(alpha: 0.5),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
+              ),
+            ],
           ),
           child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(10),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: AppStyles.amberWarning.withValues(alpha: 0.15),
+                  color: Colors.orange.shade50,
                   shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.orange.shade200.withValues(alpha: 0.5),
+                  ),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.hourglass_top_rounded,
-                  color: AppStyles.amberWarning,
-                  size: 22,
+                  color: Colors.orange.shade700,
+                  size: 24,
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2245,18 +2422,18 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                       'Attendance Submitted',
                       style: TextStyle(
                         fontWeight: FontWeight.w800,
-                        fontSize: 15,
-                        color: AppStyles.amberWarning,
-                        letterSpacing: -0.2,
+                        fontSize: 16,
+                        color: AppStyles.textDark,
+                        letterSpacing: -0.3,
                       ),
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 4),
                     Text(
                       '$_periodInfo — $_subjectName',
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: AppStyles.amberWarning.withValues(alpha: 0.8),
+                        fontWeight: FontWeight.w600,
+                        color: AppStyles.textGray,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -2265,7 +2442,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
-                        color: AppStyles.amberWarning.withValues(alpha: 0.7),
+                        color: Colors.orange.shade800,
                       ),
                     ),
                   ],
@@ -2857,5 +3034,113 @@ class _ScheduleCardState extends State<_ScheduleCard>
     }
 
     return card;
+  }
+}
+
+class _MotivationalMessage extends StatefulWidget {
+  const _MotivationalMessage();
+  @override
+  State<_MotivationalMessage> createState() => _MotivationalMessageState();
+}
+
+class _MotivationalMessageState extends State<_MotivationalMessage> {
+  double _pct = -1;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+      final studentData = await supabase
+          .from('students')
+          .select('class_id')
+          .eq('id', user.id)
+          .maybeSingle();
+      if (studentData == null) { if (mounted) setState(() => _loading = false); return; }
+      final classId = studentData['class_id'] as String;
+      final sessions = await supabase
+          .from('attendance_sessions')
+          .select('id')
+          .eq('status', 'finalized')
+          .eq('class_id', classId);
+      final ids = (sessions as List).map((s) => s['id'] as String).toList();
+      if (ids.isEmpty) { if (mounted) setState(() { _pct = 0; _loading = false; }); return; }
+      final records = await supabase
+          .from('period_attendance')
+          .select('status')
+          .eq('student_id', user.id)
+          .inFilter('session_id', ids)
+          .inFilter('status', ['present', 'absent']);
+      final total = records.length;
+      final present = records.where((r) => r['status'] == 'present').length;
+      if (mounted) setState(() { _pct = total > 0 ? present / total : 0; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading || _pct < 0) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    IconData icon;
+    String message;
+    Color color;
+
+    if (_pct >= 0.90) {
+      icon = Icons.emoji_events_rounded; message = 'Outstanding! You\'re a top performer.'; color = AppStyles.successGreen;
+    } else if (_pct >= 0.75) {
+      icon = Icons.check_circle_rounded; message = 'Good standing! Keep attending regularly.'; color = AppStyles.successGreen;
+    } else if (_pct >= 0.60) {
+      icon = Icons.warning_rounded; message = 'Condonation risk. Attend more classes to be safe.'; color = AppStyles.amberWarning;
+    } else if (_pct == 0 && _pct.isNaN == false) {
+      icon = Icons.menu_book_rounded; message = 'No sessions yet. You\'re all caught up!'; color = AppStyles.successGreen;
+    } else {
+      icon = Icons.gpp_maybe_rounded; message = 'Detention risk! Contact your advisor immediately.'; color = AppStyles.errorRed;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isDark ? 0.12 : 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              color: color,
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
