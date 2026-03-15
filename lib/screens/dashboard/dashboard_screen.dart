@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:geolocator/geolocator.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import '../../utils/app_styles.dart';
@@ -32,11 +33,30 @@ class _DashboardScreenState extends State<DashboardScreen>
   String _absentSubject = '';
   String _absentPeriod = '';
 
+  String _geofenceStatus = 'checking';
+  String _liveTime = '';
+  Timer? _clockTimer;
+  int _attendanceStreak = -1;
+  List<bool?> _weekDayAttendance = []; // Mon=0 ... Sat=5, null=future/weekend
+
+  // ── Static cache — survives tab switches ──────────────────
+  static bool? _cachedIsPresent;
+  static String _cachedMarkedTime = '';
+  static bool _cachedIsPastCutoff = false;
+  static double _cachedPct = -1;
+  static int _cachedPresent = 0;
+  static int _cachedTotal = 0;
+  static String _cachedTimeDisplay = '--:-- --';
+  static String _cachedDateDisplay = 'No attendance yet';
+  static double _cachedMotivationalPct = -1.0;
+  // ─────────────────────────────────────────────────────────
+
   @override
   void initState() {
     super.initState();
     _fetchProfile();
     _fetchUpcomingPeriod();
+    _fetchAttendanceStreak();
     // Clear any lingering snackbars from previous screens
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -46,6 +66,11 @@ class _DashboardScreenState extends State<DashboardScreen>
     // Refresh when returning to dashboard
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() {});
+    });
+    _checkGeofenceStatus();
+    _liveTime = _getAnimatedTime();
+    _clockTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() => _liveTime = _getAnimatedTime());
     });
     _pulseController = AnimationController(
       vsync: this,
@@ -57,13 +82,8 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    setState(() {});
-  }
-
-  @override
   void dispose() {
+    _clockTimer?.cancel();
     _pulseController.dispose();
     super.dispose();
   }
@@ -92,11 +112,99 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   String _getFormattedDate() {
     final now = DateTime.now();
-    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const days = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     final dayName = days[now.weekday - 1];
     final monthName = months[now.month - 1];
     return '$dayName, $monthName ${now.day}';
+  }
+
+  String _getAnimatedTime() {
+    final now = DateTime.now();
+    final hour = now.hour > 12
+        ? now.hour - 12
+        : (now.hour == 0 ? 12 : now.hour);
+    final minute = now.minute.toString().padLeft(2, '0');
+    final period = now.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:$minute $period';
+  }
+
+  Future<void> _checkGeofenceStatus() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) setState(() => _geofenceStatus = 'off');
+        return;
+      }
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (mounted) setState(() => _geofenceStatus = 'off');
+        return;
+      }
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+
+      double centerLat = 17.409904;
+      double centerLng = 78.590623;
+      double radiusMeters = 200.0;
+
+      try {
+        final settings = await supabase
+            .from('geofence_settings')
+            .select('latitude, longitude, radius_meters')
+            .limit(1)
+            .maybeSingle();
+        if (settings != null) {
+          centerLat = (settings['latitude'] as num).toDouble();
+          centerLng = (settings['longitude'] as num).toDouble();
+          radiusMeters = (settings['radius_meters'] as num).toDouble();
+        }
+      } catch (_) {}
+
+      final distance = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        centerLat,
+        centerLng,
+      );
+
+      if (mounted) {
+        setState(() {
+          _geofenceStatus = distance <= radiusMeters ? 'oncampus' : 'offcampus';
+        });
+      }
+    } catch (e) {
+      debugPrint('[GEO] $e');
+      if (mounted) setState(() => _geofenceStatus = 'off');
+    }
   }
 
   Future<void> _fetchUpcomingPeriod() async {
@@ -104,41 +212,177 @@ class _DashboardScreenState extends State<DashboardScreen>
       final user = supabase.auth.currentUser;
       if (user == null) return;
       final studentData = await supabase
-          .from('students').select('class_id').eq('id', user.id).maybeSingle();
+          .from('students')
+          .select('class_id')
+          .eq('id', user.id)
+          .maybeSingle();
       if (studentData == null) return;
       final classId = studentData['class_id'] as String;
       final jsDay = DateTime.now().weekday;
-      if (jsDay == 7) { if (mounted)      setState(() => _upcomingPeriodText = 'no_classes_today'); return; }
+      if (jsDay == 7) {
+        if (mounted) setState(() => _upcomingPeriodText = 'no_classes_today');
+        return;
+      }
       final now = TimeOfDay.now();
-      final nowMinutes = now.hour * 60 + now.minute;
+      // If it's before 7 AM, treat as start of day so morning periods show correctly
+      final nowMinutes = (now.hour < 7) ? 0 : (now.hour * 60 + now.minute);
       final rows = await supabase
           .from('timetables')
-          .select('subject:subjects(name), period:periods(period_number, start_time, end_time)')
+          .select(
+            'subject:subjects(name), period:periods(period_number, start_time, end_time)',
+          )
           .eq('class_id', classId)
           .eq('day_of_week', jsDay);
-      if ((rows as List).isEmpty) { if (mounted) setState(() => _upcomingPeriodText = 'No more classes today'); return; }
+      if ((rows as List).isEmpty) {
+        if (mounted) {
+          setState(() => _upcomingPeriodText = 'No more classes today');
+        }
+        return;
+      }
       rows.sort((a, b) {
-        final aStart = ((a['period'] as Map?)?['start_time'] as String? ?? '00:00').replaceAll(':', '');
-        final bStart = ((b['period'] as Map?)?['start_time'] as String? ?? '00:00').replaceAll(':', '');
+        final aStart =
+            ((a['period'] as Map?)?['start_time'] as String? ?? '00:00')
+                .replaceAll(':', '');
+        final bStart =
+            ((b['period'] as Map?)?['start_time'] as String? ?? '00:00')
+                .replaceAll(':', '');
         return aStart.compareTo(bStart);
       });
       Map<String, dynamic>? upcoming;
       for (final row in rows) {
-        final startStr = (row['period'] as Map?)?['start_time'] as String? ?? '00:00';
+        final startStr =
+            (row['period'] as Map?)?['start_time'] as String? ?? '00:00';
         final parts = startStr.split(':');
         final startMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
-        if (startMinutes > nowMinutes) { upcoming = row; break; }
+        if (startMinutes > nowMinutes) {
+          upcoming = row;
+          break;
+        }
       }
       if (upcoming == null) {
-        if (mounted) setState(() => _upcomingPeriodText = 'No more classes today 🎉');
+        if (mounted) {
+          setState(() => _upcomingPeriodText = 'No more classes today 🎉');
+        }
         return;
       }
-      final subjectName = (upcoming['subject'] as Map?)?['name'] as String? ?? 'Class';
-      final periodNum = (upcoming['period'] as Map?)?['period_number'] as int? ?? 1;
-      final startTime = ((upcoming['period'] as Map?)?['start_time'] as String? ?? '').substring(0, 5);
-      if (mounted) setState(() => _upcomingPeriodText = 'Next: Period $periodNum · $subjectName · $startTime');
+      final subjectName =
+          (upcoming['subject'] as Map?)?['name'] as String? ?? 'Class';
+      final periodNum =
+          (upcoming['period'] as Map?)?['period_number'] as int? ?? 1;
+      final startTime =
+          ((upcoming['period'] as Map?)?['start_time'] as String? ?? '')
+              .substring(0, 5);
+      int remaining = 0;
+      for (final row in rows) {
+        final startStr = (row['period'] as Map?)?['start_time'] as String? ?? '00:00';
+        final parts = startStr.split(':');
+        final startMin = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+        if (startMin > nowMinutes) remaining++;
+      }
+      final remainingLabel = remaining > 1 ? ' · $remaining left' : '';
+      if (mounted) {
+        setState(
+          () => _upcomingPeriodText =
+              'Period $periodNum · $subjectName · $startTime$remainingLabel',
+        );
+      }
     } catch (e) {
       debugPrint('[UPCOMING] $e');
+    }
+  }
+
+  Future<void> _fetchAttendanceStreak() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+
+      // Get student registration date (created_at from users table)
+      final userData = await supabase
+          .from('users')
+          .select('created_at')
+          .eq('id', user.id)
+          .maybeSingle();
+      
+      final registrationDate = userData != null
+          ? DateTime.parse(userData['created_at'] as String)
+          : DateTime.now().subtract(const Duration(days: 365));
+
+      // Fetch all attendance records from registration date
+      final records = await supabase
+          .from('college_attendance')
+          .select('date, status')
+          .eq('student_id', user.id)
+          .gte('date', registrationDate.toIso8601String().split('T')[0])
+          .order('date', ascending: false);
+
+      // Build a map of date → status
+      final Map<String, String> attendanceMap = {};
+      for (final r in records) {
+        attendanceMap[r['date'] as String] = r['status'] as String;
+      }
+
+      // Calculate streak — walk backwards from today, skip weekends
+      int streak = 0;
+      final today = DateTime.now();
+      
+      for (int i = 0; i < 365; i++) {
+        final checkDay = today.subtract(Duration(days: i));
+        final dayOfWeek = checkDay.weekday; // Mon=1 ... Sun=7
+        
+        // Skip Sunday (7)
+        if (dayOfWeek == 7) continue;
+        
+        // Don't count today if it's in the future or attendance not yet taken
+        final dateStr = checkDay.toIso8601String().split('T')[0];
+        final status = attendanceMap[dateStr];
+        
+        if (status == 'present') {
+          streak++;
+        } else if (status == 'absent') {
+          break; // Streak broken
+        } else {
+          // No record yet — if it's today and before 4PM, don't break streak
+          final now = DateTime.now();
+          final cutoff = DateTime(now.year, now.month, now.day, 16, 0);
+          if (i == 0 && now.isBefore(cutoff)) {
+            continue; // Today not yet marked, don't break
+          } else if (i == 0) {
+            break; // Today past cutoff and not marked = absent
+          } else {
+            break; // Past day with no record = absent
+          }
+        }
+      }
+
+      // Build current week day attendance (Mon=0 ... Sat=5)
+      // Find Monday of current week
+      final monday = today.subtract(Duration(days: today.weekday - 1));
+      final List<bool?> weekDays = [];
+      
+      for (int d = 0; d < 6; d++) { // Mon to Sat
+        final day = monday.add(Duration(days: d));
+        final dayStr = day.toIso8601String().split('T')[0];
+        final todayStr = today.toIso8601String().split('T')[0];
+        
+        if (day.isAfter(today)) {
+          weekDays.add(null); // Future day
+        } else if (dayStr == todayStr) {
+          final status = attendanceMap[dayStr];
+          weekDays.add(status == 'present' ? true : null); // Today — only mark if present
+        } else {
+          final status = attendanceMap[dayStr];
+          weekDays.add(status == 'present' ? true : false);
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _attendanceStreak = streak;
+          _weekDayAttendance = weekDays;
+        });
+      }
+    } catch (e) {
+      debugPrint('[STREAK] $e');
     }
   }
 
@@ -263,7 +507,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           backgroundColor: Colors.transparent,
           elevation: 0,
           automaticallyImplyLeading: false,
-          toolbarHeight: 72,
+          toolbarHeight: 88,
           titleSpacing: 0,
           title: Padding(
             padding: const EdgeInsets.only(top: 12, left: 16),
@@ -271,14 +515,21 @@ class _DashboardScreenState extends State<DashboardScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      'Hello, ${_studentName.split(' ').first}',
-                      style: TextStyle(
-                        color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 26,
-                        letterSpacing: -0.5,
+                    Flexible(
+                      child: Text(
+                        'Hello, ${_studentName.split(' ').first}',
+                        style: TextStyle(
+                          color:
+                              theme.textTheme.displayLarge?.color ??
+                              AppStyles.textDark,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 26,
+                          letterSpacing: -0.5,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -293,15 +544,91 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ],
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  _getFormattedDate(),
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.6)
-                        ?? AppStyles.textGray,
-                    letterSpacing: 0.1,
-                  ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.blueGrey.shade50.withValues(alpha: 0.9),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: Colors.blueGrey.shade200.withValues(
+                              alpha: 0.5,
+                            ),
+                            width: 1,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.calendar_today_rounded,
+                              size: 11,
+                              color: Colors.blueGrey.shade400,
+                            ),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                _getFormattedDate(),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.blueGrey.shade700,
+                                  letterSpacing: 0.1,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
+                              ),
+                            ),
+                            Container(
+                              margin: const EdgeInsets.symmetric(horizontal: 5),
+                              width: 3,
+                              height: 3,
+                              decoration: BoxDecoration(
+                                color: Colors.blueGrey.shade300,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 400),
+                              transitionBuilder: (child, anim) => SlideTransition(
+                                position: Tween<Offset>(
+                                  begin: const Offset(0, 0.5),
+                                  end: Offset.zero,
+                                ).animate(anim),
+                                child: FadeTransition(
+                                  opacity: anim,
+                                  child: child,
+                                ),
+                              ),
+                              child: Text(
+                                _liveTime,
+                                key: ValueKey(_liveTime),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.blueGrey.shade800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    GestureDetector(
+                      onTap: () {
+                        if (mounted) setState(() => _geofenceStatus = 'checking');
+                        _checkGeofenceStatus();
+                      },
+                      child: _CompactGeofenceBadge(status: _geofenceStatus),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -312,7 +639,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               onPressed: () =>
                   Navigator.of(context).pushReplacementNamed('/home'),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 4),
           ],
         ),
         body: SafeArea(
@@ -327,7 +654,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   delay: const Duration(milliseconds: 200),
                   child: Container(
                     width: double.infinity,
-                    margin: const EdgeInsets.only(bottom: 24),
+                    margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
                       vertical: 12,
@@ -346,30 +673,49 @@ class _DashboardScreenState extends State<DashboardScreen>
                         if (_upcomingPeriodText == 'no_classes_today')
                           const _SleepingZAnimation()
                         else
-                           const Icon(
-                             Icons.schedule_rounded,
-                             size: 18,
-                             color: AppStyles.primaryBlue,
-                           ),
+                          const Icon(
+                            Icons.schedule_rounded,
+                            size: 18,
+                            color: AppStyles.primaryBlue,
+                          ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: Text(
-                            _upcomingPeriodText == 'no_classes_today'
-                                ? 'No classes today — rest up!'
-                                : 'Upcoming: $_upcomingPeriodText',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: isDark
-                                  ? Colors.white
-                                  : AppStyles.primaryBlue,
-                            ),
-                          ),
+                          child: _upcomingPeriodText == 'no_classes_today'
+                              ? Text(
+                                  'No classes today — rest up!',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: isDark ? Colors.white : AppStyles.primaryBlue,
+                                  ),
+                                )
+                              : RichText(
+                                  text: TextSpan(
+                                    children: [
+                                      const TextSpan(
+                                        text: '🔔 ',
+                                        style: TextStyle(fontSize: 13),
+                                      ),
+                                      TextSpan(
+                                        text: _upcomingPeriodText,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: isDark ? Colors.white : AppStyles.primaryBlue,
+                                          height: 1.3,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                         ),
                       ],
                     ),
                   ),
                 ),
+
               FadeSlideY(
                 delay: const Duration(milliseconds: 50),
                 child: _AttendanceBanner(
@@ -434,6 +780,15 @@ class _DashboardScreenState extends State<DashboardScreen>
                 delay: const Duration(milliseconds: 220),
                 child: const _MotivationalMessage(),
               ),
+              const SizedBox(height: 8),
+              if (_attendanceStreak >= 0)
+                FadeSlideY(
+                  delay: const Duration(milliseconds: 240),
+                  child: _AttendanceStreakCard(
+                    streak: _attendanceStreak,
+                    weekDays: _weekDayAttendance,
+                  ),
+                ),
               const SizedBox(height: 10),
               FadeSlideY(
                 delay: const Duration(milliseconds: 260),
@@ -518,6 +873,7 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
   bool _isLoading = true;
   String _markedAtTime = '';
   bool _isPastCutoff = false;
+  bool _usedCache = false;
 
   @override
   void initState() {
@@ -539,6 +895,16 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
       ),
     );
 
+    // Restore from cache immediately — no loading flash
+    if (_DashboardScreenState._cachedIsPresent != null) {
+      _isPresentToday = _DashboardScreenState._cachedIsPresent!;
+      _markedAtTime = _DashboardScreenState._cachedMarkedTime;
+      _isPastCutoff = _DashboardScreenState._cachedIsPastCutoff;
+      _isLoading = false;
+      _usedCache = true;
+      _cardController.forward();
+    }
+
     _checkTodayAttendance();
   }
 
@@ -550,7 +916,8 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
   }
 
   Future<void> _checkTodayAttendance() async {
-    if (mounted) setState(() => _isLoading = true);
+    // Only show loading spinner on very first load (no cache)
+    if (mounted && !_usedCache) setState(() => _isLoading = true);
     try {
       final user = supabase.auth.currentUser;
       if (user != null) {
@@ -585,6 +952,12 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
             _isPastCutoff = now.isAfter(cutoff);
             _isLoading = false;
           });
+
+          // Update cache
+          _DashboardScreenState._cachedIsPresent = _isPresentToday;
+          _DashboardScreenState._cachedMarkedTime = _markedAtTime;
+          _DashboardScreenState._cachedIsPastCutoff = _isPastCutoff;
+          _usedCache = false;
           _cardController.forward();
         }
       }
@@ -648,10 +1021,7 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
         decoration: BoxDecoration(
           color: color.withValues(alpha: widget.isDark ? 0.15 : 0.07),
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: color.withValues(alpha: 0.3),
-            width: 1.5,
-          ),
+          border: Border.all(color: color.withValues(alpha: 0.3), width: 1.5),
           boxShadow: [
             BoxShadow(
               color: color.withValues(alpha: widget.isDark ? 0.15 : 0.08),
@@ -670,7 +1040,9 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: widget.isDark ? 0.15 : 0.9),
+                  color: Colors.white.withValues(
+                    alpha: widget.isDark ? 0.15 : 0.9,
+                  ),
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
@@ -742,6 +1114,7 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
   int _present = 0;
   int _total = 0;
   bool _isLoading = true;
+  bool _usedCache = false;
 
   @override
   void initState() {
@@ -750,6 +1123,21 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
       vsync: this,
       duration: const Duration(milliseconds: 1600),
     );
+    if (_DashboardScreenState._cachedPct >= 0) {
+      _pct = _DashboardScreenState._cachedPct;
+      _present = _DashboardScreenState._cachedPresent;
+      _total = _DashboardScreenState._cachedTotal;
+      _isLoading = false;
+      _usedCache = true;
+      _progressAnim = Tween<double>(
+        begin: _pct,
+        end: _pct,
+      ).animate(_controller);
+      _counterAnim = IntTween(
+        begin: (_pct * 100).round(),
+        end: (_pct * 100).round(),
+      ).animate(_controller);
+    }
     _fetchAttendanceStats();
   }
 
@@ -757,7 +1145,8 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
   void didUpdateWidget(covariant _AttendancePercentageCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     debugPrint('[DASH_PCT] didUpdateWidget called — re-fetching stats');
-    _controller.reset();
+    // Only reset animation if data actually changed
+    if (!_usedCache) _controller.reset();
     _fetchAttendanceStats();
   }
 
@@ -810,6 +1199,12 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
               end: 0,
             ).animate(_controller);
             _counterAnim = IntTween(begin: 0, end: 0).animate(_controller);
+
+            _DashboardScreenState._cachedPct = _pct;
+            _DashboardScreenState._cachedPresent = _present;
+            _DashboardScreenState._cachedTotal = _total;
+            _usedCache = false;
+
             _controller.forward();
           }
           return;
@@ -843,6 +1238,11 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
             CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
           );
 
+          _DashboardScreenState._cachedPct = _pct;
+          _DashboardScreenState._cachedPresent = _present;
+          _DashboardScreenState._cachedTotal = _total;
+          _usedCache = false;
+
           _controller.forward();
         }
       }
@@ -875,18 +1275,30 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
       decoration: BoxDecoration(
         color: (theme.cardTheme.color ?? Colors.white).withValues(alpha: 0.96),
         border: Border.all(
-          color: pctColor.withValues(alpha: isDark ? 0.15 : 0.1),
-          width: 2,
+          color: (_pct >= 0.75
+              ? Colors.indigo.shade400
+              : _pct >= 0.60
+              ? AppStyles.amberWarning
+              : AppStyles.errorRed).withValues(alpha: isDark ? 0.55 : 0.45),
+          width: 2.5,
         ),
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: pctColor.withValues(alpha: isDark ? 0.15 : 0.08),
+            color: (_pct >= 0.75
+                ? Colors.indigo.shade400
+                : _pct >= 0.60
+                ? AppStyles.amberWarning
+                : AppStyles.errorRed).withValues(alpha: isDark ? 0.15 : 0.10),
             blurRadius: 16,
             offset: const Offset(0, 8),
           ),
           BoxShadow(
-            color: pctColor.withValues(alpha: isDark ? 0.05 : 0.03),
+            color: (_pct >= 0.75
+                ? Colors.indigo.shade400
+                : _pct >= 0.60
+                ? AppStyles.amberWarning
+                : AppStyles.errorRed).withValues(alpha: isDark ? 0.05 : 0.03),
             blurRadius: 4,
             offset: const Offset(0, 2),
             spreadRadius: 1,
@@ -1031,21 +1443,21 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
                             ),
                             const SizedBox(width: 4),
                             Flexible(
-                                  child: Text(
-                                    _pct >= 0.75
-                                        ? 'Good Standing — Above 75%'
-                                        : _pct >= 0.60
-                                        ? 'Condonation Risk — 60–74%'
-                                        : 'Detained Risk — Below 60%',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                      color: pctColor,
-                                    ),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
+                              child: Text(
+                                _pct >= 0.75
+                                    ? 'Good Standing — Above 75%'
+                                    : _pct >= 0.60
+                                    ? 'Condonation Risk — 60–74%'
+                                    : 'Detained Risk — Below 60%',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: pctColor,
                                 ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -1123,21 +1535,29 @@ class _HeroAttendanceCardState extends State<_HeroAttendanceCard> {
   String _timeDisplay = '--:-- --';
   String _dateDisplay = 'No attendance yet';
   bool _isLoading = true;
+  bool _usedCache = false;
 
   @override
   void initState() {
     super.initState();
+    if (_DashboardScreenState._cachedTimeDisplay != '--:-- --') {
+      _timeDisplay = _DashboardScreenState._cachedTimeDisplay;
+      _dateDisplay = _DashboardScreenState._cachedDateDisplay;
+      _isLoading = false;
+      _usedCache = true;
+    }
     _fetchLastAttendance();
   }
 
   @override
   void didUpdateWidget(covariant _HeroAttendanceCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _fetchLastAttendance();
+    // Only re-fetch if data has never loaded, not on every rebuild
+    if (_isLoading) _fetchLastAttendance();
   }
 
   Future<void> _fetchLastAttendance() async {
-    if (mounted) setState(() => _isLoading = true);
+    if (mounted && !_usedCache) setState(() => _isLoading = true);
     try {
       final user = supabase.auth.currentUser;
       if (user == null) return;
@@ -1184,6 +1604,9 @@ class _HeroAttendanceCardState extends State<_HeroAttendanceCard> {
             _dateDisplay = dateStr;
             _isLoading = false;
           });
+          _DashboardScreenState._cachedTimeDisplay = _timeDisplay;
+          _DashboardScreenState._cachedDateDisplay = _dateDisplay;
+          _usedCache = false;
         }
       } else {
         if (mounted) setState(() => _isLoading = false);
@@ -1286,7 +1709,6 @@ class _HeroAttendanceCardState extends State<_HeroAttendanceCard> {
     );
   }
 }
-
 
 class _ExpandableScheduleSection extends StatefulWidget {
   final bool isDark;
@@ -1601,7 +2023,9 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                       Text(
                         widget.isExpanded
                             ? '${_scheduleItems.length} subject${_scheduleItems.length != 1 ? 's' : ''} — ${DateTime.now().weekday == 7 ? 'Tomorrow (Mon)' : 'Today'}'
-                            : DateTime.now().weekday == 7 ? 'Showing tomorrow\'s schedule' : 'Tap to view your classes',
+                            : DateTime.now().weekday == 7
+                            ? 'Showing tomorrow\'s schedule'
+                            : 'Tap to view your classes',
                         style: TextStyle(
                           fontSize: 12,
                           color:
@@ -3051,6 +3475,10 @@ class _MotivationalMessageState extends State<_MotivationalMessage> {
   @override
   void initState() {
     super.initState();
+    if (_DashboardScreenState._cachedMotivationalPct >= 0) {
+      _pct = _DashboardScreenState._cachedMotivationalPct;
+      _loading = false;
+    }
     _fetch();
   }
 
@@ -3063,7 +3491,10 @@ class _MotivationalMessageState extends State<_MotivationalMessage> {
           .select('class_id')
           .eq('id', user.id)
           .maybeSingle();
-      if (studentData == null) { if (mounted) setState(() => _loading = false); return; }
+      if (studentData == null) {
+        if (mounted) setState(() => _loading = false);
+        return;
+      }
       final classId = studentData['class_id'] as String;
       final sessions = await supabase
           .from('attendance_sessions')
@@ -3071,7 +3502,16 @@ class _MotivationalMessageState extends State<_MotivationalMessage> {
           .eq('status', 'finalized')
           .eq('class_id', classId);
       final ids = (sessions as List).map((s) => s['id'] as String).toList();
-      if (ids.isEmpty) { if (mounted) setState(() { _pct = 0; _loading = false; }); return; }
+      if (ids.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _pct = 0;
+            _loading = false;
+          });
+          _DashboardScreenState._cachedMotivationalPct = _pct;
+        }
+        return;
+      }
       final records = await supabase
           .from('period_attendance')
           .select('status')
@@ -3080,7 +3520,13 @@ class _MotivationalMessageState extends State<_MotivationalMessage> {
           .inFilter('status', ['present', 'absent']);
       final total = records.length;
       final present = records.where((r) => r['status'] == 'present').length;
-      if (mounted) setState(() { _pct = total > 0 ? present / total : 0; _loading = false; });
+      if (mounted) {
+        setState(() {
+          _pct = total > 0 ? present / total : 0;
+          _loading = false;
+        });
+        _DashboardScreenState._cachedMotivationalPct = _pct;
+      }
     } catch (e) {
       if (mounted) setState(() => _loading = false);
     }
@@ -3097,15 +3543,25 @@ class _MotivationalMessageState extends State<_MotivationalMessage> {
     Color color;
 
     if (_pct >= 0.90) {
-      icon = Icons.emoji_events_rounded; message = 'Outstanding! You\'re a top performer.'; color = AppStyles.successGreen;
+      icon = Icons.emoji_events_rounded;
+      message = 'Outstanding! You\'re a top performer.';
+      color = AppStyles.successGreen;
     } else if (_pct >= 0.75) {
-      icon = Icons.check_circle_rounded; message = 'Good standing! Keep attending regularly.'; color = AppStyles.successGreen;
+      icon = Icons.check_circle_rounded;
+      message = 'Good standing! Keep attending regularly.';
+      color = AppStyles.successGreen;
     } else if (_pct >= 0.60) {
-      icon = Icons.warning_rounded; message = 'Condonation risk. Attend more classes to be safe.'; color = AppStyles.amberWarning;
+      icon = Icons.warning_rounded;
+      message = 'Condonation risk. Attend more classes to be safe.';
+      color = AppStyles.amberWarning;
     } else if (_pct == 0 && _pct.isNaN == false) {
-      icon = Icons.menu_book_rounded; message = 'No sessions yet. You\'re all caught up!'; color = AppStyles.successGreen;
+      icon = Icons.menu_book_rounded;
+      message = 'No sessions yet. You\'re all caught up!';
+      color = AppStyles.successGreen;
     } else {
-      icon = Icons.gpp_maybe_rounded; message = 'Detention risk! Contact your advisor immediately.'; color = AppStyles.errorRed;
+      icon = Icons.gpp_maybe_rounded;
+      message = 'Detention risk! Contact your advisor immediately.';
+      color = AppStyles.errorRed;
     }
 
     return Container(
@@ -3123,11 +3579,7 @@ class _MotivationalMessageState extends State<_MotivationalMessage> {
               color: Colors.white,
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              icon,
-              color: color,
-              size: 24,
-            ),
+            child: Icon(icon, color: color, size: 24),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -3163,11 +3615,13 @@ class _SleepingZAnimationState extends State<_SleepingZAnimation>
   void initState() {
     super.initState();
     _controller = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1500))
-      ..repeat();
-    _slideAnim = Tween<double>(begin: 0, end: -10).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
-    );
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
+    _slideAnim = Tween<double>(
+      begin: 0,
+      end: -10,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
     _fadeAnim = TweenSequence([
       TweenSequenceItem(tween: Tween<double>(begin: 0, end: 1), weight: 30),
       TweenSequenceItem(tween: Tween<double>(begin: 1, end: 1), weight: 40),
@@ -3190,11 +3644,14 @@ class _SleepingZAnimationState extends State<_SleepingZAnimation>
           offset: Offset(0, _slideAnim.value),
           child: Opacity(
             opacity: _fadeAnim.value,
-            child: const Text('Z',
-                style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: AppStyles.primaryBlue)),
+            child: const Text(
+              'Z',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: AppStyles.primaryBlue,
+              ),
+            ),
           ),
         );
       },
@@ -3225,13 +3682,17 @@ class _AnimatedFaceVerifiedBadgeState extends State<_AnimatedFaceVerifiedBadge>
     );
     _scaleAnimation = TweenSequence([
       TweenSequenceItem(
-        tween: Tween<double>(begin: 0.8, end: 1.1)
-            .chain(CurveTween(curve: Curves.easeOutBack)),
+        tween: Tween<double>(
+          begin: 0.8,
+          end: 1.1,
+        ).chain(CurveTween(curve: Curves.easeOutBack)),
         weight: 60,
       ),
       TweenSequenceItem(
-        tween: Tween<double>(begin: 1.1, end: 1.0)
-            .chain(CurveTween(curve: Curves.easeInOut)),
+        tween: Tween<double>(
+          begin: 1.1,
+          end: 1.0,
+        ).chain(CurveTween(curve: Curves.easeInOut)),
         weight: 40,
       ),
     ]).animate(_controller);
@@ -3266,8 +3727,11 @@ class _AnimatedFaceVerifiedBadgeState extends State<_AnimatedFaceVerifiedBadge>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.face_retouching_natural_rounded,
-                      size: 14, color: widget.color),
+                  Icon(
+                    Icons.face_retouching_natural_rounded,
+                    size: 14,
+                    color: widget.color,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     'Face Verified',
@@ -3337,6 +3801,452 @@ class _AnimatedHourglassState extends State<_AnimatedHourglass>
           ),
         );
       },
+    );
+  }
+}
+
+class _CompactGeofenceBadge extends StatefulWidget {
+  final String status;
+  const _CompactGeofenceBadge({required this.status});
+  @override
+  State<_CompactGeofenceBadge> createState() => _CompactGeofenceBadgeState();
+}
+
+class _CompactGeofenceBadgeState extends State<_CompactGeofenceBadge>
+    with TickerProviderStateMixin {
+  late AnimationController _spinController;
+  late AnimationController _pulseController;
+  late Animation<double> _pulseScaleAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _spinController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+    _pulseScaleAnim = Tween<double>(begin: 0.85, end: 1.15).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+    _updateAnimations();
+  }
+
+  void _updateAnimations() {
+    if (widget.status == 'checking') {
+      _spinController.repeat();
+      _pulseController.stop();
+    } else if (widget.status == 'oncampus') {
+      _spinController.stop();
+      _pulseController.repeat(reverse: true);
+    } else {
+      _spinController.stop();
+      _pulseController.stop();
+      _pulseController.reset();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _CompactGeofenceBadge oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.status != oldWidget.status) _updateAnimations();
+  }
+
+  @override
+  void dispose() {
+    _spinController.dispose();
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Color color;
+    Widget inner;
+
+    switch (widget.status) {
+      case 'oncampus':
+        color = AppStyles.successGreen;
+        inner = ScaleTransition(
+          scale: _pulseScaleAnim,
+          child: Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: color.withValues(alpha: 0.5),
+                  blurRadius: 5,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+          ),
+        );
+        break;
+      case 'offcampus':
+        color = AppStyles.errorRed;
+        inner = Icon(Icons.location_off_rounded, size: 13, color: color);
+        break;
+      case 'off':
+        color = AppStyles.textGray;
+        inner = Icon(Icons.location_disabled_rounded, size: 13, color: color);
+        break;
+      default:
+        color = AppStyles.textGray;
+        inner = RotationTransition(
+          turns: _spinController,
+          child: Icon(Icons.sync_rounded, size: 13, color: color),
+        );
+    }
+
+    return Tooltip(
+      message: widget.status == 'oncampus'
+          ? 'On Campus'
+          : widget.status == 'offcampus'
+          ? 'Off Campus'
+          : widget.status == 'off'
+          ? 'Location Off'
+          : 'Checking location...',
+      child: Container(
+        width: 26,
+        height: 26,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.1),
+          shape: BoxShape.circle,
+          border: Border.all(color: color.withValues(alpha: 0.35), width: 1.5),
+        ),
+        child: Center(child: inner),
+      ),
+    );
+  }
+}
+
+class _AttendanceStreakCard extends StatefulWidget {
+  final int streak;
+  final List<bool?> weekDays; // Mon–Sat: true=present, false=absent, null=future
+  const _AttendanceStreakCard({required this.streak, required this.weekDays});
+  @override
+  State<_AttendanceStreakCard> createState() => _AttendanceStreakCardState();
+}
+
+class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
+    with TickerProviderStateMixin {
+  late AnimationController _glowController;
+  late Animation<double> _glowAnim;
+  late AnimationController _fireScaleController;
+  late Animation<double> _fireScaleAnim;
+  late List<AnimationController> _circleControllers;
+
+  static const List<String> _dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  // Color based on streak length
+  Color get streakColor {
+    if (widget.streak >= 15) return Colors.amber.shade700;
+    if (widget.streak >= 10) return Colors.deepOrange.shade600;
+    if (widget.streak >= 5) return Colors.deepOrange;
+    return Colors.orange.shade600;
+  }
+
+  String get streakEmoji {
+    if (widget.streak >= 15) return '🏆';
+    if (widget.streak >= 10) return '🔥';
+    if (widget.streak >= 5) return '🔥';
+    if (widget.streak > 0) return '⚡';
+    return '💤';
+  }
+
+  String get streakBadgeText {
+    if (widget.streak >= 15) return 'Legend! 🏆';
+    if (widget.streak >= 10) return 'On Fire! 🔥';
+    if (widget.streak >= 5) return 'Blazing! 🔥';
+    if (widget.streak > 0) return 'Keep going!';
+    return 'Start now!';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _glowController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
+    _glowAnim = Tween<double>(begin: 0.2, end: 1.0).animate(
+      CurvedAnimation(parent: _glowController, curve: Curves.easeInOut),
+    );
+
+    _fireScaleController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    )..repeat(reverse: true);
+    _fireScaleAnim = Tween<double>(begin: 0.88, end: 1.12).animate(
+      CurvedAnimation(parent: _fireScaleController, curve: Curves.easeInOut),
+    );
+
+    _circleControllers = List.generate(6, (i) {
+      final ctrl = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 400),
+      );
+      Future.delayed(Duration(milliseconds: 80 * i), () {
+        if (mounted) ctrl.forward();
+      });
+      return ctrl;
+    });
+  }
+
+  @override
+  void dispose() {
+    _glowController.dispose();
+    _fireScaleController.dispose();
+    for (final c in _circleControllers) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bool hasStreak = widget.streak > 0;
+    final Color color = streakColor;
+    final Color cardBg = color.withValues(alpha: isDark ? 0.10 : 0.06);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: color.withValues(alpha: 0.30),
+          width: 1.5,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Top row: number + fire + label + badge ──
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                '${widget.streak}',
+                style: TextStyle(
+                  fontSize: 38,
+                  fontWeight: FontWeight.w900,
+                  color: hasStreak ? color : AppStyles.textGray,
+                  letterSpacing: -1,
+                  height: 1,
+                ),
+              ),
+              const SizedBox(width: 10),
+              // Fire with combined glow + scale animation
+              AnimatedBuilder(
+                animation: Listenable.merge([_glowAnim, _fireScaleAnim]),
+                builder: (context, child) {
+                  return Transform.scale(
+                    scale: hasStreak ? _fireScaleAnim.value : 1.0,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        boxShadow: hasStreak
+                            ? [
+                                BoxShadow(
+                                  color: color.withValues(alpha: _glowAnim.value * 0.8),
+                                  blurRadius: 14 + (_glowAnim.value * 14),
+                                  spreadRadius: 2 + (_glowAnim.value * 3),
+                                ),
+                                BoxShadow(
+                                  color: Colors.orange.withValues(alpha: _glowAnim.value * 0.4),
+                                  blurRadius: 6,
+                                  spreadRadius: 0,
+                                ),
+                              ]
+                            : [],
+                      ),
+                      child: Text(
+                        streakEmoji,
+                        style: const TextStyle(fontSize: 30),
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Current',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: AppStyles.textGray,
+                    ),
+                  ),
+                  Text(
+                    'streak',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: AppStyles.textGray,
+                    ),
+                  ),
+                ],
+              ),
+              const Spacer(),
+              AnimatedBuilder(
+                animation: _glowAnim,
+                builder: (context, child) {
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.12 + (_glowAnim.value * 0.08)),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: color.withValues(alpha: 0.3),
+                        width: 1,
+                      ),
+                    ),
+                    child: Text(
+                      streakBadgeText,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: color,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            hasStreak
+                ? widget.streak >= 10
+                    ? 'Incredible! You\'re unstoppable 🏆'
+                    : widget.streak >= 5
+                    ? 'Amazing consistency! Don\'t break it now.'
+                    : 'Great start! Attend tomorrow to grow it.'
+                : 'Start attending to build your streak!',
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppStyles.textGray,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Divider(height: 1, thickness: 1, color: color.withValues(alpha: 0.15)),
+          const SizedBox(height: 12),
+          // ── Day circles Mon–Sat ───────────────────
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: List.generate(6, (i) {
+              final bool? dayStatus = i < widget.weekDays.length
+                  ? widget.weekDays[i]
+                  : null;
+              final bool isPresent = dayStatus == true;
+              final bool isAbsent = dayStatus == false;
+
+              return ScaleTransition(
+                scale: CurvedAnimation(
+                  parent: _circleControllers[i],
+                  curve: Curves.easeOutBack,
+                ),
+                child: Column(
+                  children: [
+                    isPresent
+                        ? AnimatedBuilder(
+                            animation: Listenable.merge([_glowAnim, _fireScaleAnim]),
+                            builder: (context, child) {
+                              return Container(
+                                width: 38,
+                                height: 38,
+                                decoration: BoxDecoration(
+                                  color: color.withValues(alpha: 0.15),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: color.withValues(alpha: 0.6),
+                                    width: 2.5,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: color.withValues(alpha: _glowAnim.value * 0.5),
+                                      blurRadius: 8 + (_glowAnim.value * 6),
+                                      spreadRadius: 1,
+                                    ),
+                                  ],
+                                ),
+                                child: Center(
+                                  child: Transform.scale(
+                                    scale: _fireScaleAnim.value,
+                                    child: const Text('🔥', style: TextStyle(fontSize: 16)),
+                                  ),
+                                ),
+                              );
+                            },
+                          )
+                        : isAbsent
+                        ? Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: Colors.red.shade50,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.red.shade400,
+                                width: 2.5,
+                              ),
+                            ),
+                            child: Center(
+                              child: Icon(
+                                Icons.close_rounded,
+                                size: 18,
+                                color: Colors.red.shade500,
+                              ),
+                            ),
+                          )
+                        : Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: Colors.transparent,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: isDark
+                                    ? Colors.white.withValues(alpha: 0.2)
+                                    : Colors.grey.shade400,
+                                width: 2,
+                                strokeAlign: BorderSide.strokeAlignCenter,
+                              ),
+                            ),
+                          ),
+                    const SizedBox(height: 5),
+                    Text(
+                      _dayLabels[i],
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: isPresent
+                            ? color
+                            : isAbsent
+                            ? Colors.red.shade500
+                            : AppStyles.textGray,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ),
+        ],
+      ),
     );
   }
 }
