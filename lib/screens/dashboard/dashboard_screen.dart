@@ -108,7 +108,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       if (studentData == null) return;
       final classId = studentData['class_id'] as String;
       final jsDay = DateTime.now().weekday;
-      if (jsDay == 7) { if (mounted) setState(() => _upcomingPeriodText = 'No classes today — rest up! 😴'); return; }
+      if (jsDay == 7) { if (mounted)      setState(() => _upcomingPeriodText = 'no_classes_today'); return; }
       final now = TimeOfDay.now();
       final nowMinutes = now.hour * 60 + now.minute;
       final rows = await supabase
@@ -323,38 +323,50 @@ class _DashboardScreenState extends State<DashboardScreen>
             ),
             children: [
               if (_upcomingPeriodText.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: FadeSlideY(
-                    delay: const Duration(milliseconds: 30),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).primaryColor.withValues(alpha: 0.06),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Theme.of(context).primaryColor.withValues(alpha: 0.15),
-                        ),
+                FadeSlideY(
+                  delay: const Duration(milliseconds: 200),
+                  child: Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 24),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? AppStyles.primaryBlue.withValues(alpha: 0.1)
+                          : AppStyles.primaryBlue.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: AppStyles.primaryBlue.withValues(alpha: 0.2),
                       ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.schedule_rounded,
-                              size: 15,
-                              color: Theme.of(context).primaryColor.withValues(alpha: 0.7)),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _upcomingPeriodText,
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Theme.of(context).primaryColor.withValues(alpha: 0.8),
-                              ),
-                              overflow: TextOverflow.ellipsis,
+                    ),
+                    child: Row(
+                      children: [
+                        if (_upcomingPeriodText == 'no_classes_today')
+                          const _SleepingZAnimation()
+                        else
+                           const Icon(
+                             Icons.schedule_rounded,
+                             size: 18,
+                             color: AppStyles.primaryBlue,
+                           ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _upcomingPeriodText == 'no_classes_today'
+                                ? 'No classes today — rest up!'
+                                : 'Upcoming: $_upcomingPeriodText',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: isDark
+                                  ? Colors.white
+                                  : AppStyles.primaryBlue,
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -610,7 +622,7 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
         ? 'Absent Today'
         : 'Not Yet Marked';
     final iconData = _isPresentToday
-        ? Icons.check_rounded
+        ? Icons.verified_user_rounded
         : (!_isPresentToday && _isPastCutoff)
         ? Icons.cancel_rounded
         : Icons.pending_actions_rounded;
@@ -619,7 +631,6 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
         : (!_isPresentToday && _isPastCutoff)
         ? 'Attendance window has closed'
         : 'College hours end at 4:00 PM';
-    final faceVerifiedLine = _isPresentToday ? 'Face Verified ✔' : '';
 
     return AnimatedBuilder(
       animation: _cardController,
@@ -697,16 +708,9 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
                           : AppStyles.textDark.withValues(alpha: 0.6),
                     ),
                   ),
-                  if (faceVerifiedLine.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      faceVerifiedLine,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: color,
-                      ),
-                    ),
+                  if (_isPresentToday) ...[
+                    const SizedBox(height: 8),
+                    _AnimatedFaceVerifiedBadge(color: color),
                   ],
                 ],
               ),
@@ -2226,14 +2230,15 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             color: Colors.white,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: AppStyles.successGreen.withValues(alpha: 0.15),
+              color: AppStyles.successGreen.withValues(alpha: 0.4),
               width: 1.5,
             ),
             boxShadow: [
               BoxShadow(
-                color: AppStyles.successGreen.withValues(alpha: 0.08),
+                color: AppStyles.successGreen.withValues(alpha: 0.2),
                 blurRadius: 16,
-                offset: const Offset(0, 6),
+                spreadRadius: 2,
+                offset: const Offset(0, 4),
               ),
             ],
           ),
@@ -2275,7 +2280,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                       style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 16,
-                        color: AppStyles.textDark,
+                        color: AppStyles.successGreen,
                         letterSpacing: -0.3,
                       ),
                     ),
@@ -2407,11 +2412,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                     color: Colors.orange.shade200.withValues(alpha: 0.5),
                   ),
                 ),
-                child: Icon(
-                  Icons.hourglass_top_rounded,
-                  color: Colors.orange.shade700,
-                  size: 24,
-                ),
+                child: const _AnimatedHourglass(),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -3118,8 +3119,8 @@ class _MotivationalMessageState extends State<_MotivationalMessage> {
         children: [
           Container(
             padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.15),
+            decoration: const BoxDecoration(
+              color: Colors.white,
               shape: BoxShape.circle,
             ),
             child: Icon(
@@ -3132,15 +3133,210 @@ class _MotivationalMessageState extends State<_MotivationalMessage> {
           Expanded(
             child: Text(
               message,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: color,
+                color: AppStyles.textDark,
               ),
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _SleepingZAnimation extends StatefulWidget {
+  const _SleepingZAnimation();
+
+  @override
+  State<_SleepingZAnimation> createState() => _SleepingZAnimationState();
+}
+
+class _SleepingZAnimationState extends State<_SleepingZAnimation>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _slideAnim;
+  late Animation<double> _fadeAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1500))
+      ..repeat();
+    _slideAnim = Tween<double>(begin: 0, end: -10).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+    );
+    _fadeAnim = TweenSequence([
+      TweenSequenceItem(tween: Tween<double>(begin: 0, end: 1), weight: 30),
+      TweenSequenceItem(tween: Tween<double>(begin: 1, end: 1), weight: 40),
+      TweenSequenceItem(tween: Tween<double>(begin: 1, end: 0), weight: 30),
+    ]).animate(_controller);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Transform.translate(
+          offset: Offset(0, _slideAnim.value),
+          child: Opacity(
+            opacity: _fadeAnim.value,
+            child: const Text('Z',
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: AppStyles.primaryBlue)),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AnimatedFaceVerifiedBadge extends StatefulWidget {
+  final Color color;
+  const _AnimatedFaceVerifiedBadge({required this.color});
+
+  @override
+  State<_AnimatedFaceVerifiedBadge> createState() =>
+      _AnimatedFaceVerifiedBadgeState();
+}
+
+class _AnimatedFaceVerifiedBadgeState extends State<_AnimatedFaceVerifiedBadge>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _scaleAnimation = TweenSequence([
+      TweenSequenceItem(
+        tween: Tween<double>(begin: 0.8, end: 1.1)
+            .chain(CurveTween(curve: Curves.easeOutBack)),
+        weight: 60,
+      ),
+      TweenSequenceItem(
+        tween: Tween<double>(begin: 1.1, end: 1.0)
+            .chain(CurveTween(curve: Curves.easeInOut)),
+        weight: 40,
+      ),
+    ]).animate(_controller);
+
+    Future.delayed(const Duration(milliseconds: 400), () {
+      if (mounted) _controller.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Transform.scale(
+          scale: _scaleAnimation.value,
+          child: Opacity(
+            opacity: _controller.value.clamp(0.0, 1.0),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: widget.color.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: widget.color.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.face_retouching_natural_rounded,
+                      size: 14, color: widget.color),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Face Verified',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: widget.color,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AnimatedHourglass extends StatefulWidget {
+  const _AnimatedHourglass();
+
+  @override
+  State<_AnimatedHourglass> createState() => _AnimatedHourglassState();
+}
+
+class _AnimatedHourglassState extends State<_AnimatedHourglass>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        // Pauses at 0, flips fast, pauses at pi, flips fast
+        double angle = 0;
+        final t = _controller.value;
+        if (t > 0.4 && t < 0.6) {
+          final curve = Curves.easeInOut.transform((t - 0.4) * 5);
+          angle = 3.14159 * curve;
+        } else if (t >= 0.6) {
+          angle = 3.14159;
+        }
+
+        return Transform.rotate(
+          angle: angle,
+          child: Icon(
+            Icons.hourglass_top_rounded,
+            color: Colors.orange.shade700,
+            size: 24,
+          ),
+        );
+      },
     );
   }
 }

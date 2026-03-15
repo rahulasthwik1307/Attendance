@@ -287,8 +287,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   // ── CHANGE THESE COORDINATES BEFORE EXECUTION ──
   // Currently set to test location — replace with college coordinates tomorrow
-  static const double _campusLat = 17.471970;
-  static const double _campusLng = 78.539695;
+  static const double _campusLat = 17.409904;
+  static const double _campusLng = 78.590623;
   static const double _campusRadiusMeters = 200.0;
 
   Future<bool> _checkGeofence() async {

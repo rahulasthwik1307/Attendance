@@ -398,9 +398,11 @@ class _DetailRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          // Icon
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
@@ -409,28 +411,37 @@ class _DetailRow extends StatelessWidget {
             ),
             child: Icon(icon, color: iconColor, size: 18),
           ),
-          const SizedBox(width: 14),
-          Flexible(
+          const SizedBox(width: 12),
+          // Label — fixed width, left aligned, never truncates
+          SizedBox(
+            width: 90,
             child: Text(
               label,
-              style: const TextStyle(fontSize: 14, color: AppStyles.textGray),
-              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppStyles.textGray,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
-          const SizedBox(width: 8),
-          const Spacer(),
-          Flexible(
-            child: Text(
-              value,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: valueColor ??
-                    (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
-              ),
-              overflow: TextOverflow.ellipsis,
-              maxLines: 2,
-              textAlign: TextAlign.end,
+          // Value — takes remaining space, right aligned
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: valueColor ??
+                        (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
+                  ),
+                  textAlign: TextAlign.end,
+                  softWrap: true,
+                ),
+              ],
             ),
           ),
         ],

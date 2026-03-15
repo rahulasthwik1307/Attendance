@@ -67,22 +67,28 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
 
     // ── Check 2: Geofence from Supabase ─────────────────────────
     try {
-      // Fetch admin geofence settings
-      final geoData = await Supabase.instance.client
-          .from('geofence_settings')
-          .select('latitude, longitude, radius_meters')
-          .limit(1)
-          .maybeSingle();
+      double campusLat = 17.409904;
+      double campusLng = 78.590623;
+      double campusRadius = 200.0;
 
-      if (geoData == null) {
-        setState(() => _locationState = _CheckState.error);
-        _handleFailure();
-        return;
+      try {
+        final geoData = await Supabase.instance.client
+            .from('geofence_settings')
+            .select('latitude, longitude, radius_meters')
+            .limit(1)
+            .maybeSingle();
+
+        if (geoData != null &&
+            geoData['latitude'] != null &&
+            geoData['longitude'] != null &&
+            geoData['radius_meters'] != null) {
+          campusLat = (geoData['latitude'] as num).toDouble();
+          campusLng = (geoData['longitude'] as num).toDouble();
+          campusRadius = (geoData['radius_meters'] as num).toDouble();
+        }
+      } catch (e) {
+        debugPrint('[PRECHECK] Geofence fetch failed, using fallback: $e');
       }
-
-      final double campusLat = (geoData['latitude'] as num).toDouble();
-      final double campusLng = (geoData['longitude'] as num).toDouble();
-      final double campusRadius = (geoData['radius_meters'] as num).toDouble();
 
       // Check device location permission
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
