@@ -628,8 +628,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                     const SizedBox(width: 6),
                     GestureDetector(
                       onTap: () {
-                        if (mounted)
+                        if (mounted) {
                           setState(() => _geofenceStatus = 'checking');
+                        }
                         _checkGeofenceStatus();
                       },
                       child: _CompactGeofenceBadge(status: _geofenceStatus),
