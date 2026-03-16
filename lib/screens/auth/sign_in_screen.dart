@@ -5,6 +5,7 @@ import '../../utils/auth_flow_state.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
 import '../../services/auth_service.dart';
+import '../../services/notification_service.dart';
 
 class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key});
@@ -132,6 +133,9 @@ class _SignInScreenState extends State<SignInScreen> {
         // Fully approved — go to dashboard
         AuthFlowState.instance.passwordSet = true;
         AuthFlowState.instance.faceRegistered = true;
+        // Save FCM token so student receives push notifications
+        await NotificationService.initAndSaveToken();
+        if (!mounted) return;
         Navigator.pushReplacementNamed(context, '/dashboard');
       }
     } on AuthException catch (error) {

@@ -41,6 +41,9 @@ dependencies:
   facial_liveness_verification: ^2.1.0
   image_picker: ^1.2.1
   face_detection_tflite: ^5.0.6
+  firebase_core: ^4.5.0
+  firebase_messaging: ^16.1.2
+  flutter_local_notifications: ^21.0.0
 
 dev_dependencies:
   flutter_test:

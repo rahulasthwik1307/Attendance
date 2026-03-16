@@ -6,6 +6,7 @@ import '../../widgets/fade_slide_y.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math' as math;
 import '../../main.dart';
+import '../../services/notification_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -49,6 +50,11 @@ class _SettingsScreenState extends State<SettingsScreen>
     });
     if (_notificationsEnabled) {
       _playBellAnimation();
+      // Save FCM token to Supabase — student will now receive notifications
+      await NotificationService.enableNotifications();
+    } else {
+      // Remove FCM token from Supabase — student will stop receiving notifications
+      await NotificationService.disableNotifications();
     }
   }
 
@@ -280,8 +286,10 @@ class _SettingsScreenState extends State<SettingsScreen>
                         title: 'Logout',
                         subtitle: 'Sign out from your account',
                         isDestructive: true,
-                        onTap: () {
+                        onTap: () async {
                           HapticFeedback.lightImpact();
+                          await NotificationService.removeTokenOnLogout();
+                          if (!context.mounted) return;
                           Navigator.of(context).pushReplacementNamed('/home');
                         },
                       ),

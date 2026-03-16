@@ -172,8 +172,8 @@ class _DashboardScreenState extends State<DashboardScreen>
         ),
       );
 
-      double centerLat = 17.409904;
-      double centerLng = 78.590623;
+      double centerLat = 17.402513;
+      double centerLng = 78.652668;
       double radiusMeters = 200.0;
 
       try {
@@ -274,7 +274,8 @@ class _DashboardScreenState extends State<DashboardScreen>
               .substring(0, 5);
       int remaining = 0;
       for (final row in rows) {
-        final startStr = (row['period'] as Map?)?['start_time'] as String? ?? '00:00';
+        final startStr =
+            (row['period'] as Map?)?['start_time'] as String? ?? '00:00';
         final parts = startStr.split(':');
         final startMin = int.parse(parts[0]) * 60 + int.parse(parts[1]);
         if (startMin > nowMinutes) remaining++;
@@ -283,7 +284,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       if (mounted) {
         setState(
           () => _upcomingPeriodText =
-              'Period $periodNum · $subjectName · $startTime$remainingLabel',
+              'P$periodNum · $subjectName · $startTime$remainingLabel',
         );
       }
     } catch (e) {
@@ -302,7 +303,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           .select('created_at')
           .eq('id', user.id)
           .maybeSingle();
-      
+
       final registrationDate = userData != null
           ? DateTime.parse(userData['created_at'] as String)
           : DateTime.now().subtract(const Duration(days: 365));
@@ -324,18 +325,18 @@ class _DashboardScreenState extends State<DashboardScreen>
       // Calculate streak — walk backwards from today, skip weekends
       int streak = 0;
       final today = DateTime.now();
-      
+
       for (int i = 0; i < 365; i++) {
         final checkDay = today.subtract(Duration(days: i));
         final dayOfWeek = checkDay.weekday; // Mon=1 ... Sun=7
-        
+
         // Skip Sunday (7)
         if (dayOfWeek == 7) continue;
-        
+
         // Don't count today if it's in the future or attendance not yet taken
         final dateStr = checkDay.toIso8601String().split('T')[0];
         final status = attendanceMap[dateStr];
-        
+
         if (status == 'present') {
           streak++;
         } else if (status == 'absent') {
@@ -358,17 +359,20 @@ class _DashboardScreenState extends State<DashboardScreen>
       // Find Monday of current week
       final monday = today.subtract(Duration(days: today.weekday - 1));
       final List<bool?> weekDays = [];
-      
-      for (int d = 0; d < 6; d++) { // Mon to Sat
+
+      for (int d = 0; d < 6; d++) {
+        // Mon to Sat
         final day = monday.add(Duration(days: d));
         final dayStr = day.toIso8601String().split('T')[0];
         final todayStr = today.toIso8601String().split('T')[0];
-        
+
         if (day.isAfter(today)) {
           weekDays.add(null); // Future day
         } else if (dayStr == todayStr) {
           final status = attendanceMap[dayStr];
-          weekDays.add(status == 'present' ? true : null); // Today — only mark if present
+          weekDays.add(
+            status == 'present' ? true : null,
+          ); // Today — only mark if present
         } else {
           final status = attendanceMap[dayStr];
           weekDays.add(status == 'present' ? true : false);
@@ -596,16 +600,17 @@ class _DashboardScreenState extends State<DashboardScreen>
                             ),
                             AnimatedSwitcher(
                               duration: const Duration(milliseconds: 400),
-                              transitionBuilder: (child, anim) => SlideTransition(
-                                position: Tween<Offset>(
-                                  begin: const Offset(0, 0.5),
-                                  end: Offset.zero,
-                                ).animate(anim),
-                                child: FadeTransition(
-                                  opacity: anim,
-                                  child: child,
-                                ),
-                              ),
+                              transitionBuilder: (child, anim) =>
+                                  SlideTransition(
+                                    position: Tween<Offset>(
+                                      begin: const Offset(0, 0.5),
+                                      end: Offset.zero,
+                                    ).animate(anim),
+                                    child: FadeTransition(
+                                      opacity: anim,
+                                      child: child,
+                                    ),
+                                  ),
                               child: Text(
                                 _liveTime,
                                 key: ValueKey(_liveTime),
@@ -623,7 +628,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                     const SizedBox(width: 6),
                     GestureDetector(
                       onTap: () {
-                        if (mounted) setState(() => _geofenceStatus = 'checking');
+                        if (mounted)
+                          setState(() => _geofenceStatus = 'checking');
                         _checkGeofenceStatus();
                       },
                       child: _CompactGeofenceBadge(status: _geofenceStatus),
@@ -686,7 +692,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                                   style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w600,
-                                    color: isDark ? Colors.white : AppStyles.primaryBlue,
+                                    color: isDark
+                                        ? Colors.white
+                                        : AppStyles.primaryBlue,
                                   ),
                                 )
                               : RichText(
@@ -701,7 +709,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                                         style: TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w600,
-                                          color: isDark ? Colors.white : AppStyles.primaryBlue,
+                                          color: isDark
+                                              ? Colors.white
+                                              : AppStyles.primaryBlue,
                                           height: 1.3,
                                         ),
                                       ),
@@ -1275,30 +1285,36 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
       decoration: BoxDecoration(
         color: (theme.cardTheme.color ?? Colors.white).withValues(alpha: 0.96),
         border: Border.all(
-          color: (_pct >= 0.75
-              ? Colors.indigo.shade400
-              : _pct >= 0.60
-              ? AppStyles.amberWarning
-              : AppStyles.errorRed).withValues(alpha: isDark ? 0.55 : 0.45),
+          color:
+              (_pct >= 0.75
+                      ? Colors.indigo.shade400
+                      : _pct >= 0.60
+                      ? AppStyles.amberWarning
+                      : AppStyles.errorRed)
+                  .withValues(alpha: isDark ? 0.55 : 0.45),
           width: 2.5,
         ),
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: (_pct >= 0.75
-                ? Colors.indigo.shade400
-                : _pct >= 0.60
-                ? AppStyles.amberWarning
-                : AppStyles.errorRed).withValues(alpha: isDark ? 0.15 : 0.10),
+            color:
+                (_pct >= 0.75
+                        ? Colors.indigo.shade400
+                        : _pct >= 0.60
+                        ? AppStyles.amberWarning
+                        : AppStyles.errorRed)
+                    .withValues(alpha: isDark ? 0.15 : 0.10),
             blurRadius: 16,
             offset: const Offset(0, 8),
           ),
           BoxShadow(
-            color: (_pct >= 0.75
-                ? Colors.indigo.shade400
-                : _pct >= 0.60
-                ? AppStyles.amberWarning
-                : AppStyles.errorRed).withValues(alpha: isDark ? 0.05 : 0.03),
+            color:
+                (_pct >= 0.75
+                        ? Colors.indigo.shade400
+                        : _pct >= 0.60
+                        ? AppStyles.amberWarning
+                        : AppStyles.errorRed)
+                    .withValues(alpha: isDark ? 0.05 : 0.03),
             blurRadius: 4,
             offset: const Offset(0, 2),
             spreadRadius: 1,
@@ -2220,8 +2236,11 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       _userClassId = studentData['class_id'] as String;
       debugPrint('AttendanceBanner: Fetched user class_id = $_userClassId');
 
-      // 2. Fetch active session initially
+      // 2. Fetch active session initially - call twice to handle race condition
       _fetchActiveSession();
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        if (mounted) _fetchActiveSession();
+      });
 
       // 3. Subscribe to period_attendance for this student
       _attendanceSubscription = supabase
@@ -2388,11 +2407,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
   void _startPolling() {
     _pollingTimer?.cancel();
-    _pollingTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+    _pollingTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
       if (!mounted) return;
-      debugPrint(
-        'AttendanceBanner: Fallback polling checking for active session...',
-      );
       _fetchActiveSession();
     });
   }
@@ -3929,7 +3945,8 @@ class _CompactGeofenceBadgeState extends State<_CompactGeofenceBadge>
 
 class _AttendanceStreakCard extends StatefulWidget {
   final int streak;
-  final List<bool?> weekDays; // Mon–Sat: true=present, false=absent, null=future
+  final List<bool?>
+  weekDays; // Mon–Sat: true=present, false=absent, null=future
   const _AttendanceStreakCard({required this.streak, required this.weekDays});
   @override
   State<_AttendanceStreakCard> createState() => _AttendanceStreakCardState();
@@ -3943,7 +3960,14 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
   late Animation<double> _fireScaleAnim;
   late List<AnimationController> _circleControllers;
 
-  static const List<String> _dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  static const List<String> _dayLabels = [
+    'Mon',
+    'Tue',
+    'Wed',
+    'Thu',
+    'Fri',
+    'Sat',
+  ];
 
   // Color based on streak length
   Color get streakColor {
@@ -4022,10 +4046,7 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
       decoration: BoxDecoration(
         color: cardBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: color.withValues(alpha: 0.30),
-          width: 1.5,
-        ),
+        border: Border.all(color: color.withValues(alpha: 0.30), width: 1.5),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -4057,12 +4078,16 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
                         boxShadow: hasStreak
                             ? [
                                 BoxShadow(
-                                  color: color.withValues(alpha: _glowAnim.value * 0.8),
+                                  color: color.withValues(
+                                    alpha: _glowAnim.value * 0.8,
+                                  ),
                                   blurRadius: 14 + (_glowAnim.value * 14),
                                   spreadRadius: 2 + (_glowAnim.value * 3),
                                 ),
                                 BoxShadow(
-                                  color: Colors.orange.withValues(alpha: _glowAnim.value * 0.4),
+                                  color: Colors.orange.withValues(
+                                    alpha: _glowAnim.value * 0.4,
+                                  ),
                                   blurRadius: 6,
                                   spreadRadius: 0,
                                 ),
@@ -4104,9 +4129,14 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
                 animation: _glowAnim,
                 builder: (context, child) {
                   return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.12 + (_glowAnim.value * 0.08)),
+                      color: color.withValues(
+                        alpha: 0.12 + (_glowAnim.value * 0.08),
+                      ),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
                         color: color.withValues(alpha: 0.3),
@@ -4130,10 +4160,10 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
           Text(
             hasStreak
                 ? widget.streak >= 10
-                    ? 'Incredible! You\'re unstoppable 🏆'
-                    : widget.streak >= 5
-                    ? 'Amazing consistency! Don\'t break it now.'
-                    : 'Great start! Attend tomorrow to grow it.'
+                      ? 'Incredible! You\'re unstoppable 🏆'
+                      : widget.streak >= 5
+                      ? 'Amazing consistency! Don\'t break it now.'
+                      : 'Great start! Attend tomorrow to grow it.'
                 : 'Start attending to build your streak!',
             style: const TextStyle(
               fontSize: 11,
@@ -4142,7 +4172,11 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
             ),
           ),
           const SizedBox(height: 12),
-          Divider(height: 1, thickness: 1, color: color.withValues(alpha: 0.15)),
+          Divider(
+            height: 1,
+            thickness: 1,
+            color: color.withValues(alpha: 0.15),
+          ),
           const SizedBox(height: 12),
           // ── Day circles Mon–Sat ───────────────────
           Row(
@@ -4163,7 +4197,10 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
                   children: [
                     isPresent
                         ? AnimatedBuilder(
-                            animation: Listenable.merge([_glowAnim, _fireScaleAnim]),
+                            animation: Listenable.merge([
+                              _glowAnim,
+                              _fireScaleAnim,
+                            ]),
                             builder: (context, child) {
                               return Container(
                                 width: 38,
@@ -4177,7 +4214,9 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
                                   ),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: color.withValues(alpha: _glowAnim.value * 0.5),
+                                      color: color.withValues(
+                                        alpha: _glowAnim.value * 0.5,
+                                      ),
                                       blurRadius: 8 + (_glowAnim.value * 6),
                                       spreadRadius: 1,
                                     ),
@@ -4186,7 +4225,10 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
                                 child: Center(
                                   child: Transform.scale(
                                     scale: _fireScaleAnim.value,
-                                    child: const Text('🔥', style: TextStyle(fontSize: 16)),
+                                    child: const Text(
+                                      '🔥',
+                                      style: TextStyle(fontSize: 16),
+                                    ),
                                   ),
                                 ),
                               );
