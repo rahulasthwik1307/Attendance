@@ -253,19 +253,21 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       if (!mounted) return;
 
       // Real location check
-      final bool locationOk = await _checkGeofence();
+      final String locationResult = await _checkGeofence();
       if (!mounted) return;
 
-      if (!locationOk) {
+      if (locationResult != 'ok') {
         setState(() {
           _locationVerified = false;
         });
-        // Show error and go back after 2 seconds
+        final String message = locationResult == 'off'
+            ? 'Location is turned off. Please enable location to mark attendance.'
+            : 'You must be on campus to mark attendance.';
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('You must be on campus to mark attendance.'),
+          SnackBar(
+            content: Text(message),
             backgroundColor: Colors.red,
-            duration: Duration(seconds: 3),
+            duration: const Duration(seconds: 3),
           ),
         );
         await Future.delayed(const Duration(seconds: 3));
@@ -291,17 +293,17 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   static const double _campusLng = 78.652668;
   static const double _campusRadiusMeters = 200.0;
 
-  Future<bool> _checkGeofence() async {
+  Future<String> _checkGeofence() async {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return false;
+      if (!serviceEnabled) return 'off';
 
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) return false;
+        if (permission == LocationPermission.denied) return 'off';
       }
-      if (permission == LocationPermission.deniedForever) return false;
+      if (permission == LocationPermission.deniedForever) return 'off';
 
       final Position position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -319,10 +321,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       debugPrint(
         '[GEOFENCE] Distance from campus: ${distance.toStringAsFixed(1)}m',
       );
-      return distance <= _campusRadiusMeters;
+      return distance <= _campusRadiusMeters ? 'ok' : 'outside';
     } catch (e) {
       debugPrint('[GEOFENCE] Error: $e');
-      return false;
+      return 'off';
     }
   }
 
@@ -832,7 +834,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         storedEmbeddingA: _embeddingA!,
         storedEmbeddingB: _embeddingB!,
         storedEmbeddingC: _embeddingC!,
-        threshold: 0.75,
+        threshold: 0.82,
       );
 
       debugPrint(

@@ -499,11 +499,11 @@ class FaceLandmarkService {
 
     // MobileFaceNet thresholds in working range
     if (variance < 0.005) {
-      return 0.72; // Low variance — consistent scores, slightly relaxed
+      return 0.82; // Low variance — consistent scores, slightly relaxed
     } else if (variance < 0.02) {
-      return 0.74; // Medium variance
+      return 0.82; // Medium variance
     } else {
-      return 0.75; // High variance
+      return 0.82; // High variance
     }
   }
 

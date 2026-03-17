@@ -3926,9 +3926,9 @@ class _CompactGeofenceBadgeState extends State<_CompactGeofenceBadge>
       message: widget.status == 'oncampus'
           ? 'On Campus'
           : widget.status == 'offcampus'
-          ? 'Off Campus'
+          ? 'Off Campus — you are outside campus'
           : widget.status == 'off'
-          ? 'Location Off'
+          ? 'Location is turned off — tap to retry'
           : 'Checking location...',
       child: Container(
         width: 26,

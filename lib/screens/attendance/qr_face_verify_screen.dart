@@ -828,7 +828,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         storedEmbeddingA: _embeddingA!,
         storedEmbeddingB: _embeddingB!,
         storedEmbeddingC: _embeddingC!,
-        threshold: 0.60,
+        threshold: 0.82,
       );
 
       debugPrint(

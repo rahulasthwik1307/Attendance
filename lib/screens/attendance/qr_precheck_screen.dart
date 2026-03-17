@@ -18,6 +18,7 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
   _CheckState _attendanceState = _CheckState.checking;
   _CheckState _locationState = _CheckState.pending;
   bool _hasFailed = false;
+  bool _isLocationOff = false;
 
   @override
   void initState() {
@@ -93,7 +94,10 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
       // Check device location permission
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        setState(() => _locationState = _CheckState.error);
+        setState(() {
+          _locationState = _CheckState.error;
+          _isLocationOff = true;
+        });
         _handleFailure();
         return;
       }
@@ -102,13 +106,19 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
-          setState(() => _locationState = _CheckState.error);
+          setState(() {
+            _locationState = _CheckState.error;
+            _isLocationOff = true;
+          });
           _handleFailure();
           return;
         }
       }
       if (permission == LocationPermission.deniedForever) {
-        setState(() => _locationState = _CheckState.error);
+        setState(() {
+          _locationState = _CheckState.error;
+          _isLocationOff = true;
+        });
         _handleFailure();
         return;
       }
@@ -278,7 +288,9 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
                     title: 'Campus Location',
                     subtitleChecking: 'Verifying your location...',
                     subtitleSuccess: 'Location verified — inside campus',
-                    subtitleError: 'You are outside the campus boundary',
+                    subtitleError: _isLocationOff
+                        ? 'Location is turned off — please enable it'
+                        : 'You are outside the campus boundary',
                     icon: Icons.location_on_rounded,
                     state: _locationState,
                     isDark: isDark,
