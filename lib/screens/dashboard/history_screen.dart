@@ -139,62 +139,75 @@ class _HistoryScreenState extends State<HistoryScreen>
       final user = supabase.auth.currentUser;
       if (user == null) return;
 
+      // Fetch real attendance records
       final records = await supabase
           .from('college_attendance')
           .select('id, date, marked_at, status')
           .eq('student_id', user.id)
           .order('date', ascending: false)
-          .limit(60);
+          .limit(180);
+
+      // Fetch student created_at to know start date
+      final studentData = await supabase
+          .from('students')
+          .select('created_at')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      // Determine start date — day student account was created
+      DateTime startDate;
+      if (studentData != null && studentData['created_at'] != null) {
+        final created = DateTime.parse(studentData['created_at'] as String).toLocal();
+        startDate = DateTime(created.year, created.month, created.day);
+      } else {
+        // Fallback: start of current month
+        final now = DateTime.now();
+        startDate = DateTime(now.year, now.month, 1);
+      }
+
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final cutoff = DateTime(now.year, now.month, now.day, 16, 0); // 4 PM
+
+      // Build a map of existing records keyed by date string
+      final Map<String, Map<String, dynamic>> recordsByDate = {};
+      for (final r in records) {
+        recordsByDate[r['date'] as String] = r;
+      }
+
+      // Generate all working days (Mon–Sat) from startDate to today
+      final List<String> workingDays = [];
+      DateTime cursor = startDate;
+      while (!cursor.isAfter(today)) {
+        // weekday: 1=Mon ... 6=Sat, 7=Sun
+        if (cursor.weekday != 7) {
+          workingDays.add(cursor.toIso8601String().split('T')[0]);
+        }
+        cursor = cursor.add(const Duration(days: 1));
+      }
 
       final List<Map<String, dynamic>> built = [];
-      for (final r in records) {
-        final dateStr = r['date'] as String;
-        final markedAtStr = r['marked_at'] as String?;
-        String status = r['status'] as String? ?? 'absent';
 
-        String timeDisplay = '\u2014';
-        if (markedAtStr != null) {
-          final markedAt = DateTime.parse(markedAtStr).toLocal();
-          final hour = markedAt.hour;
-          final minute = markedAt.minute.toString().padLeft(2, '0');
-          final period = hour >= 12 ? 'PM' : 'AM';
-          final displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
-          timeDisplay = '$displayHour:$minute $period';
+      final weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      final months = [
+        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      ];
 
-          // Derive late: present but marked after 9:15 AM
-          if (status == 'present') {
-            final cutoff = DateTime(
-              markedAt.year,
-              markedAt.month,
-              markedAt.day,
-              9,
-              15,
-            );
-            if (markedAt.isAfter(cutoff)) status = 'late';
-          }
-        }
-
-        // Build dateLabel exactly as hardcoded: Today / Yesterday / Weekday • Mon DD
+      for (final dateStr in workingDays.reversed) {
         final date = DateTime.parse(dateStr);
-        final now = DateTime.now();
-        final today = DateTime(now.year, now.month, now.day);
-        final yesterday = today.subtract(const Duration(days: 1));
         final recordDay = DateTime(date.year, date.month, date.day);
-        final weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-        final months = [
-          'Jan',
-          'Feb',
-          'Mar',
-          'Apr',
-          'May',
-          'Jun',
-          'Jul',
-          'Aug',
-          'Sep',
-          'Oct',
-          'Nov',
-          'Dec',
-        ];
+        final yesterday = today.subtract(const Duration(days: 1));
+
+        // Skip today if before 4 PM and no record exists
+        final isToday = recordDay == today;
+        final isPast = recordDay.isBefore(today);
+        final isTodayPastCutoff = isToday && now.isAfter(cutoff);
+
+        // Only show today if past cutoff or has a real record
+        if (isToday && !isTodayPastCutoff && !recordsByDate.containsKey(dateStr)) {
+          continue;
+        }
 
         String dateLabel;
         if (recordDay == today) {
@@ -207,13 +220,48 @@ class _HistoryScreenState extends State<HistoryScreen>
           dateLabel = '$weekday \u2022 $monthAbbr ${date.day}';
         }
 
-        built.add({
-          'dateLabel': dateLabel,
-          'fullDate': '${months[date.month - 1]} ${date.day}, ${date.year}',
-          'time': timeDisplay,
-          'status': status,
-          'rawDate': dateStr,
-        });
+        final existingRecord = recordsByDate[dateStr];
+
+        if (existingRecord != null) {
+          // Real record exists — use it
+          final markedAtStr = existingRecord['marked_at'] as String?;
+          String status = existingRecord['status'] as String? ?? 'absent';
+          String timeDisplay = '\u2014';
+
+          if (markedAtStr != null) {
+            final markedAt = DateTime.parse(markedAtStr).toLocal();
+            final hour = markedAt.hour;
+            final minute = markedAt.minute.toString().padLeft(2, '0');
+            final period = hour >= 12 ? 'PM' : 'AM';
+            final displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+            timeDisplay = '$displayHour:$minute $period';
+
+            // Derive late: present but marked after 9:15 AM
+            if (status == 'present') {
+              final cutoffMorning = DateTime(
+                markedAt.year, markedAt.month, markedAt.day, 9, 15,
+              );
+              if (markedAt.isAfter(cutoffMorning)) status = 'late';
+            }
+          }
+
+          built.add({
+            'dateLabel': dateLabel,
+            'fullDate': '${months[date.month - 1]} ${date.day}, ${date.year}',
+            'time': timeDisplay,
+            'status': status,
+            'rawDate': dateStr,
+          });
+        } else if (isPast || isTodayPastCutoff) {
+          // No record and day is past or today past 4 PM — mark as absent
+          built.add({
+            'dateLabel': dateLabel,
+            'fullDate': '${months[date.month - 1]} ${date.day}, ${date.year}',
+            'time': '\u2014',
+            'status': 'absent',
+            'rawDate': dateStr,
+          });
+        }
       }
 
       if (mounted) setState(() => _collegeRecords = built);
