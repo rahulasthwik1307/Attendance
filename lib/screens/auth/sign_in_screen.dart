@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/app_styles.dart';
 import '../../utils/auth_flow_state.dart';
@@ -6,6 +7,7 @@ import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
 import '../../services/auth_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/biometric_auth_service.dart';
 
 class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key});
@@ -14,27 +16,61 @@ class SignInScreen extends StatefulWidget {
   State<SignInScreen> createState() => _SignInScreenState();
 }
 
-class _SignInScreenState extends State<SignInScreen> {
+class _SignInScreenState extends State<SignInScreen>
+    with SingleTickerProviderStateMixin {
   final _rollController = TextEditingController();
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-
   final _rollFieldKey = GlobalKey<_ShakeWidgetState>();
   final _passwordFieldKey = GlobalKey<_ShakeWidgetState>();
 
   bool _obscurePassword = true;
   bool _isLoading = false;
-  // Only validate after the first submit attempt
   bool _hasTried = false;
   bool _isSuccess = false;
+  bool _biometricAvailable = false;
+  bool _biometricSaved = false;
+
+  // ── Fingerprint icon pulse ──────────────────────────────
+  late AnimationController _fpPulseController;
+  late Animation<double> _fpPulseAnim;
+
+  // ── Fingerprint button press scale ──────────────────────
+  bool _fpPressed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fpPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+    _fpPulseAnim = Tween<double>(begin: 1.0, end: 1.22).animate(
+      CurvedAnimation(parent: _fpPulseController, curve: Curves.easeInOut),
+    );
+    _initBiometric();
+  }
+
+  Future<void> _initBiometric() async {
+    final available = await BiometricAuthService.isAvailable();
+    final saved = await BiometricAuthService.hasCredentials();
+    if (mounted) {
+      setState(() {
+        _biometricAvailable = available;
+        _biometricSaved = saved;
+      });
+    }
+  }
 
   @override
   void dispose() {
     _rollController.dispose();
     _passwordController.dispose();
+    _fpPulseController.dispose();
     super.dispose();
   }
 
+  // ── Manual sign in ──────────────────────────────────────
   void _onSignIn() async {
     if (!mounted) return;
     if (_isSuccess || _isLoading) return;
@@ -76,12 +112,8 @@ class _SignInScreenState extends State<SignInScreen> {
             .eq('id', currentUser.id)
             .maybeSingle();
 
-        debugPrint('[SIGNIN] currentUser.id: ${currentUser.id}');
-        debugPrint('[SIGNIN] students data: $data');
-
         if (!mounted) return;
 
-        // Not a student record at all
         if (data == null) {
           setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
@@ -98,8 +130,6 @@ class _SignInScreenState extends State<SignInScreen> {
         final bool isRejected = data['is_rejected'] == true;
         final bool hasFace = data['embedding_a'] != null;
 
-        // Never activated — embedding is null, not rejected.
-        // Student must use Activate Account first, not Sign In.
         if (!hasFace && !isRejected) {
           setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
@@ -115,7 +145,6 @@ class _SignInScreenState extends State<SignInScreen> {
           return;
         }
 
-        // Rejected — face was wiped. Allow sign in and send to face registration.
         if (isRejected) {
           AuthFlowState.instance.passwordSet = true;
           AuthFlowState.instance.faceRegistered = false;
@@ -124,17 +153,19 @@ class _SignInScreenState extends State<SignInScreen> {
           return;
         }
 
-        // Has face but not approved yet — waiting for teacher
         if (hasFace && !isApproved) {
           Navigator.pushReplacementNamed(context, '/registration_success');
           return;
         }
 
-        // Fully approved — go to dashboard
+        // Fully approved — save credentials + go to dashboard
         AuthFlowState.instance.passwordSet = true;
         AuthFlowState.instance.faceRegistered = true;
-        // Save FCM token so student receives push notifications
         await NotificationService.initAndSaveToken();
+        await BiometricAuthService.saveCredentials(
+          _rollController.text.trim(),
+          _passwordController.text,
+        );
         if (!mounted) return;
         Navigator.pushReplacementNamed(context, '/dashboard');
       }
@@ -147,15 +178,157 @@ class _SignInScreenState extends State<SignInScreen> {
       } else if (message.contains('Email not confirmed')) {
         message = 'Account not activated. Contact your teacher.';
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     } catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toString())));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  // ── Biometric sign in ───────────────────────────────────
+  Future<void> _onBiometricSignIn() async {
+    if (_isLoading || _isSuccess) return;
+
+    HapticFeedback.lightImpact();
+
+    final credentials = await BiometricAuthService.authenticate();
+    if (credentials == null) return;
+
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+
+    try {
+      final user = await AuthService().signInWithRollNumber(
+        credentials['roll']!,
+        credentials['password']!,
+      );
+
+      if (user != null) {
+        if (!mounted) return;
+        setState(() {
+          _isLoading = false;
+          _isSuccess = true;
+        });
+
+        await Future.delayed(const Duration(milliseconds: 600));
+        if (!mounted) return;
+
+        final currentUser = Supabase.instance.client.auth.currentUser;
+        if (currentUser == null) return;
+
+        final data = await Supabase.instance.client
+            .from('students')
+            .select('embedding_a, is_approved, is_rejected, face_registered')
+            .eq('id', currentUser.id)
+            .maybeSingle();
+
+        if (!mounted) return;
+
+        // Account deleted
+        if (data == null) {
+          setState(() {
+            _isLoading = false;
+            _isSuccess = false;
+          });
+          await BiometricAuthService.clearCredentials();
+          if (!mounted) return;
+          setState(() => _biometricSaved = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Student record not found. Contact your teacher.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          await Supabase.instance.client.auth.signOut();
+          return;
+        }
+
+        final bool isApproved = data['is_approved'] == true;
+        final bool isRejected = data['is_rejected'] == true;
+        final bool hasFace = data['embedding_a'] != null;
+
+        // Face rejected — password still valid, do not clear credentials
+        if (isRejected) {
+          if (!mounted) return;
+          setState(() {
+            _isLoading = false;
+            _isSuccess = false;
+          });
+          AuthFlowState.instance.passwordSet = true;
+          AuthFlowState.instance.faceRegistered = false;
+          AuthFlowState.instance.isFirstTimeUser = false;
+          Navigator.pushReplacementNamed(context, '/register');
+          return;
+        }
+
+        // Pending approval
+        if (hasFace && !isApproved) {
+          if (!mounted) return;
+          setState(() {
+            _isLoading = false;
+            _isSuccess = false;
+          });
+          Navigator.pushReplacementNamed(context, '/registration_success');
+          return;
+        }
+
+        // Not activated — clear credentials
+        if (!hasFace && !isRejected) {
+          if (!mounted) return;
+          setState(() {
+            _isLoading = false;
+            _isSuccess = false;
+          });
+          await BiometricAuthService.clearCredentials();
+          if (!mounted) return;
+          setState(() => _biometricSaved = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Account not activated yet. Please use Activate Account first.',
+              ),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 4),
+            ),
+          );
+          await Supabase.instance.client.auth.signOut();
+          return;
+        }
+
+        // Fully approved
+        AuthFlowState.instance.passwordSet = true;
+        AuthFlowState.instance.faceRegistered = true;
+        await NotificationService.initAndSaveToken();
+        if (!mounted) return;
+        Navigator.pushReplacementNamed(context, '/dashboard');
+      }
+    } on AuthException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _isSuccess = false;
+      });
+      String message = error.message;
+      if (message.contains('Invalid login credentials')) {
+        await BiometricAuthService.clearCredentials();
+        if (!mounted) return;
+        setState(() => _biometricSaved = false);
+        message = 'Saved credentials are outdated. Please sign in manually.';
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _isSuccess = false;
+      });
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
 
@@ -164,10 +337,7 @@ class _SignInScreenState extends State<SignInScreen> {
   }
 
   Widget _buildHeader(
-    ThemeData theme,
-    Color headingColor,
-    Color subtitleColor,
-  ) {
+      ThemeData theme, Color headingColor, Color subtitleColor) {
     return Column(
       children: [
         FadeSlideY(
@@ -179,11 +349,7 @@ class _SignInScreenState extends State<SignInScreen> {
               color: theme.primaryColor.withValues(alpha: 0.09),
               borderRadius: BorderRadius.circular(18),
             ),
-            child: Icon(
-              Icons.login_rounded,
-              size: 32,
-              color: theme.primaryColor,
-            ),
+            child: Icon(Icons.login_rounded, size: 32, color: theme.primaryColor),
           ),
         ),
         const SizedBox(height: 20),
@@ -277,12 +443,8 @@ class _SignInScreenState extends State<SignInScreen> {
                   onFieldSubmitted: (_) => _onSignIn(),
                   isDark: isDark,
                   validator: (v) {
-                    if (v == null || v.isEmpty) {
-                      return 'Please enter your password';
-                    }
-                    if (v.length < 6) {
-                      return 'At least 6 characters required';
-                    }
+                    if (v == null || v.isEmpty) return 'Please enter your password';
+                    if (v.length < 6) return 'At least 6 characters required';
                     return null;
                   },
                   suffixIcon: IconButton(
@@ -305,6 +467,8 @@ class _SignInScreenState extends State<SignInScreen> {
                 ),
               ),
               const SizedBox(height: 20),
+
+              // ── Sign In button ────────────────────────────
               Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(14),
@@ -362,6 +526,114 @@ class _SignInScreenState extends State<SignInScreen> {
                   ),
                 ),
               ),
+
+              // ── OR divider + fingerprint — only when saved ─
+              if (_biometricAvailable && _biometricSaved) ...[
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Divider(
+                        color: borderColor,
+                        thickness: 1,
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text(
+                        'or',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppStyles.textGray.withValues(alpha: 0.6),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Divider(
+                        color: borderColor,
+                        thickness: 1,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // ── Fingerprint button ──────────────────────
+                GestureDetector(
+                  onTapDown: (_) {
+                    HapticFeedback.lightImpact();
+                    setState(() => _fpPressed = true);
+                  },
+                  onTapUp: (_) {
+                    setState(() => _fpPressed = false);
+                    _onBiometricSignIn();
+                  },
+                  onTapCancel: () => setState(() => _fpPressed = false),
+                  child: AnimatedScale(
+                    scale: _fpPressed ? 0.93 : 1.0,
+                    duration: const Duration(milliseconds: 120),
+                    curve: Curves.easeInOut,
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      decoration: BoxDecoration(
+                        color: theme.primaryColor.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: theme.primaryColor.withValues(alpha: 0.25),
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          // Pulsing fingerprint icon
+                          AnimatedBuilder(
+                            animation: _fpPulseAnim,
+                            builder: (context, child) {
+                              return Transform.scale(
+                                scale: _fpPulseAnim.value,
+                                child: child,
+                              );
+                            },
+                            child: Icon(
+                              Icons.fingerprint_rounded,
+                              size: 28,
+                              color: theme.primaryColor,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'Quick Sign In',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: theme.primaryColor,
+                                  letterSpacing: -0.2,
+                                ),
+                              ),
+                              Text(
+                                'Use your fingerprint',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                  color: theme.primaryColor
+                                      .withValues(alpha: 0.6),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -377,7 +649,6 @@ class _SignInScreenState extends State<SignInScreen> {
         theme.textTheme.displayLarge?.color ?? AppStyles.textDark;
     final subtitleColor =
         theme.textTheme.bodyMedium?.color ?? AppStyles.textGray;
-
     final surfaceColor = isDark ? AppStyles.surfaceDark : Colors.white;
     final borderColor = isDark
         ? Colors.white.withValues(alpha: 0.10)
@@ -455,7 +726,7 @@ class _SignInScreenState extends State<SignInScreen> {
   }
 }
 
-// ─── Reusable input widget (mirrors Set New Password / Activate Account) ────────
+// ─── _SignInField ─────────────────────────────────────────────────────────────
 class _SignInField extends StatefulWidget {
   final TextEditingController controller;
   final String label;
@@ -501,11 +772,7 @@ class _SignInFieldState extends State<_SignInField> {
   }
 
   void _handleFocus() {
-    if (mounted) {
-      setState(() {
-        _isFocused = _focusNode.hasFocus;
-      });
-    }
+    if (mounted) setState(() => _isFocused = _focusNode.hasFocus);
   }
 
   @override
@@ -518,7 +785,6 @@ class _SignInFieldState extends State<_SignInField> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Soft muted red — calmer than AppStyles.errorRed
     const softErrorColor = Color(0xFFD05050);
 
     return AnimatedContainer(
@@ -567,7 +833,6 @@ class _SignInFieldState extends State<_SignInField> {
           suffixIcon: widget.suffixIcon,
           filled: true,
           fillColor: widget.fillColor,
-          // Keep error text small and calm
           errorStyle: const TextStyle(
             fontSize: 11.5,
             color: softErrorColor,
@@ -599,6 +864,7 @@ class _SignInFieldState extends State<_SignInField> {
   }
 }
 
+// ─── _KeyboardGap ─────────────────────────────────────────────────────────────
 class _KeyboardGap extends StatelessWidget {
   const _KeyboardGap();
 
@@ -613,6 +879,7 @@ class _KeyboardGap extends StatelessWidget {
   }
 }
 
+// ─── _ShakeWidget ─────────────────────────────────────────────────────────────
 class _ShakeWidget extends StatefulWidget {
   final Widget child;
   const _ShakeWidget({super.key, required this.child});
@@ -633,7 +900,6 @@ class _ShakeWidgetState extends State<_ShakeWidget>
       vsync: this,
       duration: const Duration(milliseconds: 400),
     );
-
     _offsetAnimation = TweenSequence<double>([
       TweenSequenceItem(tween: Tween(begin: 0.0, end: -6.0), weight: 1),
       TweenSequenceItem(tween: Tween(begin: -6.0, end: 6.0), weight: 2),
@@ -643,9 +909,7 @@ class _ShakeWidgetState extends State<_ShakeWidget>
     ]).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
   }
 
-  void shake() {
-    _controller.forward(from: 0.0);
-  }
+  void shake() => _controller.forward(from: 0.0);
 
   @override
   void dispose() {
@@ -657,12 +921,10 @@ class _ShakeWidgetState extends State<_ShakeWidget>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _offsetAnimation,
-      builder: (context, child) {
-        return Transform.translate(
-          offset: Offset(_offsetAnimation.value, 0),
-          child: child,
-        );
-      },
+      builder: (context, child) => Transform.translate(
+        offset: Offset(_offsetAnimation.value, 0),
+        child: child,
+      ),
       child: widget.child,
     );
   }
