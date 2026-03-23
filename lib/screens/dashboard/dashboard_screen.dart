@@ -995,6 +995,61 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
       );
     }
 
+    // Sunday — no college
+    if (DateTime.now().weekday == 7) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        decoration: BoxDecoration(
+          color: AppStyles.primaryBlue.withValues(alpha: widget.isDark ? 0.15 : 0.07),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: AppStyles.primaryBlue.withValues(alpha: 0.3),
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: widget.isDark ? 0.15 : 0.9),
+                shape: BoxShape.circle,
+              ),
+              child: const Text('😴', style: TextStyle(fontSize: 22)),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'No College Today',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3,
+                      color: widget.isDark ? Colors.white : AppStyles.textDark,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Today is Sunday — enjoy your day!',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: widget.isDark
+                          ? Colors.white.withValues(alpha: 0.7)
+                          : AppStyles.textDark.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     final color = _isPresentToday
         ? AppStyles.successGreen
         : (!_isPresentToday && _isPastCutoff)

@@ -2387,97 +2387,7 @@ class _TimetableTabState extends State<_TimetableTab> {
 
     return Column(
       children: [
-        // ── Day selector strip ──────────────────────────
-        Container(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: activeDays.map((day) {
-                final isSelected = day == _selectedDay;
-                final isToday = day == DateTime.now().weekday;
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: GestureDetector(
-                    onTap: () {
-                      if (_selectedDay != day) {
-                        setState(() {
-                          _previousDay = _selectedDay;
-                          _selectedDay = day;
-                          _goingForward = day > _previousDay;
-                          _isWeekView = false;
-                        });
-                      }
-                    },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      curve: Curves.easeInOut,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 9),
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? widget.theme.primaryColor
-                            : (widget.isDark
-                                ? Colors.white.withValues(alpha: 0.07)
-                                : Colors.black.withValues(alpha: 0.05)),
-                        borderRadius: BorderRadius.circular(50),
-                        border: isSelected
-                            ? null
-                            : Border.all(
-                                color: widget.isDark
-                                    ? Colors.white.withValues(alpha: 0.12)
-                                    : Colors.black.withValues(alpha: 0.09),
-                                width: 1,
-                              ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _dayShort[day - 1],
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: isSelected
-                                  ? FontWeight.w800
-                                  : FontWeight.w600,
-                              letterSpacing: isSelected ? 0.6 : 0,
-                              color: isSelected
-                                  ? Colors.white
-                                  : (widget.isDark
-                                      ? Colors.white.withValues(alpha: 0.55)
-                                      : AppStyles.textGray),
-                            ),
-                          ),
-                          if (isSelected && isToday) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 5, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.25),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: const Text(
-                                'TODAY',
-                                style: TextStyle(
-                                  fontSize: 8,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-        ),
-
-        // ── View toggle pill ────────────────────────────
+        // ── View toggle pill — always on top ────────────────
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 10, 20, 6),
           child: Container(
@@ -2490,7 +2400,6 @@ class _TimetableTabState extends State<_TimetableTab> {
             ),
             child: Row(
               children: [
-                // Day view pill
                 Expanded(
                   child: GestureDetector(
                     onTap: () => setState(() => _isWeekView = false),
@@ -2544,7 +2453,6 @@ class _TimetableTabState extends State<_TimetableTab> {
                     ),
                   ),
                 ),
-                // Week grid pill
                 Expanded(
                   child: GestureDetector(
                     onTap: () => setState(() => _isWeekView = true),
@@ -2603,7 +2511,97 @@ class _TimetableTabState extends State<_TimetableTab> {
           ),
         ),
 
-        // ── Content area ────────────────────────────────
+        // ── Day selector strip — only in Day View ───────────
+        if (!_isWeekView)
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: activeDays.map((day) {
+                  final isSelected = day == _selectedDay;
+                  final isToday = day == DateTime.now().weekday;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: GestureDetector(
+                      onTap: () {
+                        if (_selectedDay != day) {
+                          setState(() {
+                            _previousDay = _selectedDay;
+                            _selectedDay = day;
+                            _goingForward = day > _previousDay;
+                          });
+                        }
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        curve: Curves.easeInOut,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 9),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? widget.theme.primaryColor
+                              : (widget.isDark
+                                  ? Colors.white.withValues(alpha: 0.07)
+                                  : Colors.black.withValues(alpha: 0.05)),
+                          borderRadius: BorderRadius.circular(50),
+                          border: isSelected
+                              ? null
+                              : Border.all(
+                                  color: widget.isDark
+                                      ? Colors.white.withValues(alpha: 0.12)
+                                      : Colors.black.withValues(alpha: 0.09),
+                                  width: 1,
+                                ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _dayShort[day - 1],
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: isSelected
+                                    ? FontWeight.w800
+                                    : FontWeight.w600,
+                                letterSpacing: isSelected ? 0.6 : 0,
+                                color: isSelected
+                                    ? Colors.white
+                                    : (widget.isDark
+                                        ? Colors.white.withValues(alpha: 0.55)
+                                        : AppStyles.textGray),
+                              ),
+                            ),
+                            if (isSelected && isToday) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 5, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.25),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text(
+                                  'TODAY',
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+
+        // ── Content area ────────────────────────────────────
         Expanded(
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
@@ -2649,28 +2647,31 @@ class _TimetableTabState extends State<_TimetableTab> {
                       padding: const EdgeInsets.only(
                           left: 20, right: 20, top: 4, bottom: 20),
                       child: Column(
-                        children:
-                            (byDay[_selectedDay] ?? []).asMap().entries.map(
-                          (entry) {
-                            final index = entry.key;
-                            final slot = entry.value;
-                            return FadeSlideY(
-                              delay: Duration(
-                                  milliseconds: 40 + (index * 50)),
-                              child: Padding(
-                                padding:
-                                    const EdgeInsets.only(bottom: 8),
-                                child: _TimetablePeriodRow(
-                                  slot: slot,
-                                  isToday: _selectedDay ==
-                                      DateTime.now().weekday,
-                                  isDark: widget.isDark,
-                                  theme: widget.theme,
-                                ),
-                              ),
-                            );
-                          },
-                        ).toList(),
+                        children: (byDay[_selectedDay] ?? [])
+                            .asMap()
+                            .entries
+                            .map(
+                              (entry) {
+                                final index = entry.key;
+                                final slot = entry.value;
+                                return FadeSlideY(
+                                  delay: Duration(
+                                      milliseconds: 40 + (index * 50)),
+                                  child: Padding(
+                                    padding:
+                                        const EdgeInsets.only(bottom: 8),
+                                    child: _TimetablePeriodRow(
+                                      slot: slot,
+                                      isToday: _selectedDay ==
+                                          DateTime.now().weekday,
+                                      isDark: widget.isDark,
+                                      theme: widget.theme,
+                                    ),
+                                  ),
+                                );
+                              },
+                            )
+                            .toList(),
                       ),
                     ),
                   ),
