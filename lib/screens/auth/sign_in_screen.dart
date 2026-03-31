@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/app_styles.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
 import '../../utils/auth_flow_state.dart';
+import '../../services/auth_service.dart';
+import '../../services/supabase_service.dart';
 
 class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key});
@@ -47,23 +50,105 @@ class _SignInScreenState extends State<SignInScreen> {
     if (!rollValid || !passValid) return;
 
     setState(() => _isLoading = true);
-    // Simulate auth — replace with real call.
-    await Future.delayed(const Duration(milliseconds: 800));
-    if (!mounted) return;
 
-    setState(() {
-      _isLoading = false;
-      _isSuccess = true;
-    });
+    try {
+      final user = await AuthService().signInWithRollNumber(
+        _rollController.text.trim(),
+        _passwordController.text,
+      );
 
-    await Future.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
+      if (user != null) {
+        // Fetch student profile
+        // ignore: unused_local_variable
+        final profileData = await supabase
+            .from('students')
+            .select(
+              '*, users!inner(full_name), classes!inner(name, section), departments!inner(name)',
+            )
+            .eq('id', user.id)
+            .maybeSingle();
 
-    // Set password as set (since they signed in successfully with one)
-    AuthFlowState.instance.passwordSet = true;
-    AuthFlowState.instance.faceRegistered = true;
+        // ── Step 1: Check if student has embedding_a (face registered?) ──────
+        final studentData = await supabase
+            .from('students')
+            .select('embedding_a')
+            .eq('id', user.id)
+            .maybeSingle();
 
-    Navigator.of(context).pushReplacementNamed('/dashboard');
+        final bool hasEmbedding =
+            studentData != null && studentData['embedding_a'] != null;
+
+        if (!mounted) return;
+        setState(() {
+          _isLoading = false;
+          _isSuccess = true;
+        });
+
+        await Future.delayed(const Duration(milliseconds: 600));
+        if (!mounted) return;
+
+        // Set password as set (since they signed in successfully with one)
+        AuthFlowState.instance.passwordSet = true;
+
+        if (!hasEmbedding) {
+          // Face not registered yet → go to registration
+          AuthFlowState.instance.faceRegistered = false;
+          Navigator.of(context).pushReplacementNamed('/register');
+          return;
+        }
+
+        // ── Step 2: Check teacher approval status ─────────────────────────────
+        final faceRegData = await supabase
+            .from('face_registrations')
+            .select('approved')
+            .eq('student_id', user.id)
+            .maybeSingle();
+
+        // Also check is_approved directly from students table as fallback
+        final approvalData = await supabase
+            .from('students')
+            .select('is_approved')
+            .eq('id', user.id)
+            .maybeSingle();
+
+        final bool isApproved =
+            (faceRegData != null && faceRegData['approved'] == true) ||
+            (approvalData != null && approvalData['is_approved'] == true);
+
+        if (!isApproved) {
+          // Face registered but not approved → waiting screen
+          AuthFlowState.instance.faceRegistered = false;
+          if (mounted) {
+            Navigator.of(context).pushReplacementNamed('/registration_success');
+          }
+          return;
+        }
+
+        // ── Step 3: Approved — go to dashboard ────────────────────────────────
+        AuthFlowState.instance.faceRegistered = true;
+        if (mounted) {
+          Navigator.of(context).pushReplacementNamed('/dashboard');
+        }
+      }
+    } on AuthException catch (error) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      String message = error.message;
+      if (message.contains('Invalid login credentials')) {
+        message = 'Wrong roll number or password.';
+      } else if (message.contains('Email not confirmed')) {
+        message = 'Account not activated. Contact your teacher.';
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
   }
 
   void _onForgotPassword() {

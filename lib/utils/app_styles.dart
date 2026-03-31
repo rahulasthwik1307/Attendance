@@ -8,6 +8,7 @@ class AppStyles {
   static const Color successGreen = Color(0xFF4CAF50); // Brighter green
   static const Color errorRed = Color(0xFFE53935); // Brighter red
   static const Color warningYellow = Color(0xFFFFB300);
+  static const Color amberWarning = Color(0xFFFFA726);
   static const Color textDark = Color(0xFF2D3748);
   static const Color textGray = Color(0xFF718096);
 
@@ -142,8 +143,12 @@ class AppStyles {
   }
 
   // Unified premium page transition: fade + subtle upward slide.
-  static PageRouteBuilder buildPageTransition(Widget page) {
+  static PageRouteBuilder buildPageTransition(
+    Widget page, {
+    RouteSettings? settings,
+  }) {
     return PageRouteBuilder(
+      settings: settings,
       pageBuilder: (context, animation, secondaryAnimation) => page,
       transitionsBuilder: (context, animation, secondaryAnimation, child) {
         const curve = Curves.easeInOutCubic;
