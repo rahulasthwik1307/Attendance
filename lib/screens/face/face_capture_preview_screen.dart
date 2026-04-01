@@ -1,8 +1,11 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 import '../../utils/app_styles.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
 import '../../utils/auth_flow_state.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class FaceCapturePreviewScreen extends StatefulWidget {
   const FaceCapturePreviewScreen({super.key});
@@ -19,6 +22,7 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
 
   bool _isLoading = false;
   bool _isSuccess = false;
+  Uint8List? _croppedPhotoBytes;
 
   @override
   void initState() {
@@ -32,6 +36,87 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
       end: 1.0,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
     _controller.forward();
+
+    _processImage();
+  }
+
+  Future<void> _processImage() async {
+    await Future.delayed(Duration.zero);
+    if (!mounted) return;
+
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is! Map) return;
+
+    final rawBytes = args['photoBytes'] as Uint8List?;
+    final faceBbox = args['faceBbox'] as Rect?;
+    if (rawBytes == null) return;
+
+    Future(() async {
+      final img.Image? decoded = img.decodeJpg(rawBytes);
+      if (decoded == null) return;
+
+      debugPrint('[PREVIEW] decoded: ${decoded.width}x${decoded.height}');
+      debugPrint('[PREVIEW] faceBbox: $faceBbox');
+
+      // The JPEG from _convertYuvToJpegSync is built pixel-by-pixel from
+      // YUV planes in landscape orientation (e.g. 1280x720).
+      // ML Kit bbox with sensorOrientation=270 reports coordinates in a
+      // virtual portrait space where:
+      //   x maps to the Y axis of the landscape image
+      //   y maps to the X axis of the landscape image
+      // So we need to rotate the JPEG 90° counter-clockwise to get portrait,
+      // then use bbox as-is since it is already in portrait space.
+
+      // Rotate 90° counter-clockwise for 270° sensor orientation
+      final img.Image rotated = img.copyRotate(decoded, angle: -90);
+      debugPrint('[PREVIEW] rotated: ${rotated.width}x${rotated.height}');
+
+      Uint8List croppedBytes;
+
+      if (faceBbox != null && faceBbox.width > 0 && faceBbox.height > 0) {
+        // bbox is in portrait space — matches rotated image directly
+        // Use generous padding so face fills the circle naturally
+        final double padX = faceBbox.width * 0.30;
+        final double padY = faceBbox.height * 0.40;
+
+        final int cropX = (faceBbox.left - padX).toInt().clamp(
+          0,
+          rotated.width - 1,
+        );
+        final int cropY = (faceBbox.top - padY).toInt().clamp(
+          0,
+          rotated.height - 1,
+        );
+        final int cropW = (faceBbox.width + 2 * padX).toInt().clamp(
+          1,
+          rotated.width - cropX,
+        );
+        final int cropH = (faceBbox.height + 2 * padY).toInt().clamp(
+          1,
+          rotated.height - cropY,
+        );
+
+        debugPrint('[PREVIEW] crop: x=$cropX y=$cropY w=$cropW h=$cropH');
+
+        final img.Image cropped = img.copyCrop(
+          rotated,
+          x: cropX,
+          y: cropY,
+          width: cropW,
+          height: cropH,
+        );
+        croppedBytes = Uint8List.fromList(img.encodeJpg(cropped, quality: 90));
+      } else {
+        debugPrint('[PREVIEW] No valid bbox — using full rotated image');
+        croppedBytes = Uint8List.fromList(img.encodeJpg(rotated, quality: 90));
+      }
+
+      if (mounted) {
+        setState(() {
+          _croppedPhotoBytes = croppedBytes;
+        });
+      }
+    });
   }
 
   @override
@@ -93,26 +178,47 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
                   child: Center(
                     child: ScaleTransition(
                       scale: _scaleAnimation,
-                      child: Container(
-                        width: 250,
-                        height: 250,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: AppStyles.primaryBlue.withValues(alpha: 0.5),
-                            width: 4,
-                          ),
-                          image: const DecorationImage(
-                            image: NetworkImage(
-                              'https://picsum.photos/400/400?grayscale',
+                      child: SizedBox(
+                        width: 260,
+                        height: 260,
+                        child: Stack(
+                          children: [
+                            // Single layer: sharp cropped face fills the full circle
+                            ClipOval(
+                              child: _croppedPhotoBytes != null
+                                  ? Image.memory(
+                                      _croppedPhotoBytes!,
+                                      width: 260,
+                                      height: 260,
+                                      fit: BoxFit.cover,
+                                    )
+                                  : Container(
+                                      color: Colors.grey.shade200,
+                                      child: const Center(
+                                        child: CircularProgressIndicator(),
+                                      ),
+                                    ),
                             ),
-                            fit: BoxFit.cover,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
+                            // Circle border on top
+                            Container(
+                              width: 260,
+                              height: 260,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: AppStyles.primaryBlue.withValues(
+                                    alpha: 0.5,
+                                  ),
+                                  width: 4,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.1),
+                                    blurRadius: 20,
+                                    offset: const Offset(0, 10),
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
@@ -176,25 +282,89 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
                     child: AnimatedButton(
                       onPressed: () async {
                         if (_isLoading || _isSuccess) return;
+                        if (_croppedPhotoBytes == null) return;
+
                         setState(() => _isLoading = true);
-                        await Future.delayed(const Duration(milliseconds: 800));
-                        if (!context.mounted) return;
-                        setState(() {
-                          _isLoading = false;
-                          _isSuccess = true;
-                        });
-                        await Future.delayed(const Duration(milliseconds: 600));
-                        if (!context.mounted) return;
-                        AuthFlowState.instance.faceRegistered = true;
-                        if (AuthFlowState.instance.isFaceReset) {
-                          AuthFlowState.instance.isFaceReset = false;
-                          Navigator.of(
-                            context,
-                          ).pushReplacementNamed('/face_updated_success');
-                        } else {
-                          Navigator.of(
-                            context,
-                          ).pushReplacementNamed('/registration_success');
+
+                        try {
+                          // Step 1 — get current user
+                          final user =
+                              Supabase.instance.client.auth.currentUser;
+                          if (user == null) {
+                            setState(() => _isLoading = false);
+                            return;
+                          }
+
+                          // Step 2 — upload cropped face photo to storage with timestamp to bust cache
+                          final String fileName =
+                              'preview_${DateTime.now().millisecondsSinceEpoch}.jpg';
+                          final String filePath = '${user.id}/$fileName';
+
+                          await Supabase.instance.client.storage
+                              .from('face-registrations')
+                              .uploadBinary(
+                                filePath,
+                                _croppedPhotoBytes!,
+                                fileOptions: const FileOptions(
+                                  contentType: 'image/jpeg',
+                                  upsert: false,
+                                ),
+                              );
+
+                          // Step 3 — get public URL
+                          final photoUrl = Supabase.instance.client.storage
+                              .from('face-registrations')
+                              .getPublicUrl(filePath);
+
+                          // Step 4 — save URL to students table and reset rejection state
+                          final updateResult = await Supabase.instance.client
+                              .from('students')
+                              .update({
+                                'registration_photo_url': photoUrl,
+                                'is_rejected': false,
+                              })
+                              .eq('id', user.id)
+                              .select();
+
+                          debugPrint('[PREVIEW] update result: $updateResult');
+                          debugPrint('[PREVIEW] photoUrl: $photoUrl');
+                          debugPrint('[PREVIEW] user.id: ${user.id}');
+
+                          if (!context.mounted) return;
+
+                          // Step 5 — show success animation
+                          setState(() {
+                            _isLoading = false;
+                            _isSuccess = true;
+                          });
+
+                          await Future.delayed(
+                            const Duration(milliseconds: 600),
+                          );
+                          if (!context.mounted) return;
+
+                          // Step 6 — student is NOT approved yet — teacher must approve
+                          AuthFlowState.instance.faceRegistered = false;
+
+                          if (AuthFlowState.instance.isFaceReset) {
+                            AuthFlowState.instance.isFaceReset = false;
+                            Navigator.of(
+                              context,
+                            ).pushReplacementNamed('/face_updated_success');
+                          } else {
+                            Navigator.of(
+                              context,
+                            ).pushReplacementNamed('/registration_success');
+                          }
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          setState(() => _isLoading = false);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Upload failed: $e'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
                         }
                       },
                       style: ElevatedButton.styleFrom(
