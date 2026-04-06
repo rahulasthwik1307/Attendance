@@ -51,9 +51,7 @@ import '../../utils/auth_flow_state.dart';
 enum _Phase {
   initializing, // Camera starting up
   liveness, // Blink verification (looking straight) — first gate
-  left, // Capture 3 left frames (no liveness gate)
-  front, // Capture 3 front frames (no blink — just capture)
-  right, // Capture 3 right frames (no liveness gate)
+  front, // Capture 9 front frames
   processing, // Running embeddings + uploading to Supabase
   done, // Complete — navigating away
   error, // Something went wrong
@@ -89,22 +87,18 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // ─── Registration state ───────────────────────────────────────────────────
   _Phase _phase = _Phase.initializing;
 
-  // Captured frame bytes per phase (JPEG)
+  // Captured frame bytes (JPEG)
   final List<Uint8List> _frontFrames = [];
-  final List<Uint8List> _leftFrames = [];
-  final List<Uint8List> _rightFrames = [];
 
   // First front frame saved as registration photo
   Uint8List? _registrationPhotoBytes;
   Rect? _registrationPhotoBbox;
 
-  // Embeddings per phase
+  // Embeddings
   final List<List<double>> _frontEmbeddings = [];
-  final List<List<double>> _leftEmbeddings = [];
-  final List<List<double>> _rightEmbeddings = [];
 
-  // How many quality frames to capture per phase
-  static const int _framesPerPhase = 3;
+  // How many quality frames to capture (all front)
+  static const int _framesPerPhase = 9;
 
   // Instruction / UI state
   String _instructionTitle = 'Setting up camera…';
@@ -438,20 +432,14 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           if (!_challengeVerified) {
             await _handleLivenessChallenge(face, ChallengeType.blink);
           } else {
-            // Blink verified — transition to left capture phase
-            debugPrint('[FACE_REG] Liveness verified — moving to left phase');
+            // Blink verified — transition to front capture phase
+            debugPrint('[FACE_REG] Liveness verified — moving directly to front capture phase');
             await Future.delayed(const Duration(milliseconds: 500));
-            if (mounted) _setPhase(_Phase.left);
+            if (mounted) _setPhase(_Phase.front);
           }
-          break;
-        case _Phase.left:
-          await _handleCapture(face, cameraImage, _Phase.left);
           break;
         case _Phase.front:
           await _handleCapture(face, cameraImage, _Phase.front);
-          break;
-        case _Phase.right:
-          await _handleCapture(face, cameraImage, _Phase.right);
           break;
         default:
           break;
@@ -688,7 +676,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           _frontEmbeddings.add(emb);
           setState(() {
             _captureProgress++;
-            _progressLabel = '$_captureProgress / ${_framesPerPhase * 3}';
+            _progressLabel = '$_captureProgress / $_framesPerPhase';
             _borderColor = AppStyles.successGreen;
           });
           HapticFeedback.lightImpact();
@@ -704,89 +692,19 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           );
         }
         break;
-      case _Phase.left:
-        _leftFrames.add(jpegBytes);
-        if (emb != null) {
-          _leftEmbeddings.add(emb);
-          setState(() {
-            _captureProgress++;
-            _progressLabel = '$_captureProgress / ${_framesPerPhase * 3}';
-            _borderColor = AppStyles.successGreen;
-          });
-          HapticFeedback.lightImpact();
-        } else {
-          debugPrint(
-            '[FACE_REG] Failed to generate embedding for phase left (frame ${_leftFrames.length})',
-          );
-          _updateInstruction(
-            'Improve lighting',
-            subtitle:
-                'Move to a well-lit area and avoid bright windows behind you',
-            animate: false,
-          );
-        }
-        break;
-      case _Phase.right:
-        _rightFrames.add(jpegBytes);
-        if (emb != null) {
-          _rightEmbeddings.add(emb);
-          setState(() {
-            _captureProgress++;
-            _progressLabel = '$_captureProgress / ${_framesPerPhase * 3}';
-            _borderColor = AppStyles.successGreen;
-          });
-          HapticFeedback.lightImpact();
-        } else {
-          debugPrint(
-            '[FACE_REG] Failed to generate embedding for phase right (frame ${_rightFrames.length})',
-          );
-          _updateInstruction(
-            'Improve lighting',
-            subtitle:
-                'Move to a well-lit area and avoid bright windows behind you',
-            animate: false,
-          );
-        }
-        break;
       default:
         break;
     }
 
     _lastCaptureTime = DateTime.now();
 
-    // Check if phase is complete
-    if (currentPhase == _Phase.left && _leftFrames.length >= _framesPerPhase) {
-      debugPrint(
-        '[FACE_REG] PHASE: left → front (${_leftFrames.length} left frames collected)',
-      );
-      _updateInstruction(
-        'Great job!',
-        subtitle: 'Left profile saved',
-        animate: false,
-      );
-      HapticFeedback.mediumImpact();
-      await Future.delayed(const Duration(milliseconds: 500));
-      _setPhase(_Phase.front);
-    } else if (currentPhase == _Phase.front &&
+    // Check if all 9 front frames collected
+    if (currentPhase == _Phase.front &&
         _frontFrames.length >= _framesPerPhase) {
       debugPrint(
-        '[FACE_REG] PHASE: front → right (${_frontFrames.length} front frames collected)',
+        '[FACE_REG] All ${_frontFrames.length} front frames collected — processing',
       );
-      _updateInstruction(
-        'Perfect!',
-        subtitle: 'Front profile saved',
-        animate: false,
-      );
-      HapticFeedback.mediumImpact();
-      await Future.delayed(const Duration(milliseconds: 500));
-      _setPhase(_Phase.right);
-    } else if (currentPhase == _Phase.right &&
-        _rightFrames.length >= _framesPerPhase) {
-      debugPrint(
-        '[FACE_REG] PHASE: right → processing (${_rightFrames.length} right frames collected)',
-      );
-      // All phases done — process and upload
-      // Stop camera FIRST — no delay, instant black-out on 9/9
+      // Stop camera FIRST
       try {
         await _cameraController?.stopImageStream();
       } catch (_) {}
@@ -824,25 +742,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     // ── Final frame count check ──────────────────────────────────────────
     debugPrint(
-      '[FACE_REG] Final Frame Check: Front: ${_frontFrames.length}, '
-      'Left: ${_leftFrames.length}, Right: ${_rightFrames.length}',
+      '[FACE_REG] Final Frame Check: Front: ${_frontFrames.length}',
     );
 
     if (_frontFrames.length < _framesPerPhase) {
       _setError(
-        'Capture incomplete (Front frames missed). Please stay inside the circle.',
-      );
-      return;
-    }
-    if (_leftFrames.length < _framesPerPhase) {
-      _setError(
-        'Capture incomplete (Left side missed). Please stay inside the circle.',
-      );
-      return;
-    }
-    if (_rightFrames.length < _framesPerPhase) {
-      _setError(
-        'Capture incomplete (Right side missed). Please stay inside the circle.',
+        'Capture incomplete. Please stay inside the circle.',
       );
       return;
     }
@@ -850,37 +755,36 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _updateInstruction('Processing…', subtitle: 'Generating your face profile');
 
     try {
-      // FIXED: Embeddings already generated during capture phase on main thread.
-      // No more compute() isolate calls — avoids BackgroundIsolateBinaryMessenger crash.
-      final List<List<double>> embASource = [..._frontEmbeddings];
-      final List<List<double>> embBSource = [..._leftEmbeddings];
-      final List<List<double>> embCSource = [..._rightEmbeddings];
+      // Split 9 front embeddings into 3 groups of 3
+      final List<List<double>> group1 = _frontEmbeddings.sublist(0, 3);
+      final List<List<double>> group2 = _frontEmbeddings.sublist(3, 6);
+      final List<List<double>> group3 = _frontEmbeddings.sublist(6, 9);
 
       // Debug: verify source list lengths
-      debugPrint('[FACE_REG] embASource length: ${embASource.length}');
-      debugPrint('[FACE_REG] embBSource length: ${embBSource.length}');
-      debugPrint('[FACE_REG] embCSource length: ${embCSource.length}');
+      debugPrint('[FACE_REG] group1 length: ${group1.length}');
+      debugPrint('[FACE_REG] group2 length: ${group2.length}');
+      debugPrint('[FACE_REG] group3 length: ${group3.length}');
 
-      if (embASource.isEmpty || embBSource.isEmpty || embCSource.isEmpty) {
+      if (group1.isEmpty || group2.isEmpty || group3.isEmpty) {
         debugPrint(
-          '[FACE_REG] ERROR: Missing embeddings - front:${embASource.length}, left:${embBSource.length}, right:${embCSource.length}',
+          '[FACE_REG] ERROR: Missing embeddings',
         );
-        _setError('Failed to capture all face angles. Please try again.');
+        _setError('Failed to capture face. Please try again.');
         return;
       }
 
       debugPrint(
-        '[FACE_REG] Processing embeddings: front=${_frontEmbeddings.length}, left=${_leftEmbeddings.length}, right=${_rightEmbeddings.length}',
+        '[FACE_REG] Processing embeddings: total=${_frontEmbeddings.length}',
       );
 
       final List<double> embeddingA = _landmarkService.averageEmbeddings(
-        embASource,
+        group1,
       );
       final List<double> embeddingB = _landmarkService.averageEmbeddings(
-        embBSource,
+        group2,
       );
       final List<double> embeddingC = _landmarkService.averageEmbeddings(
-        embCSource,
+        group3,
       );
 
       if (embeddingA.isEmpty || embeddingB.isEmpty || embeddingC.isEmpty) {
@@ -1387,10 +1291,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     }
 
     // Phase-dependent centering tolerance
-    // FRONT: strict 0.25 — anchor image must be well-centred.
-    // LEFT/RIGHT: relaxed 0.45 — side turns naturally shift the bounding box.
-    final bool isSideTurn = phase == _Phase.left || phase == _Phase.right;
-    final double maxOffset = isSideTurn ? 0.45 : 0.25;
+    final double maxOffset = 0.25;
 
     final double centerX = face.boundingBox.left + face.boundingBox.width / 2;
     final double imageCenterX = image.width / 2;
@@ -1401,13 +1302,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         '[FACE_REG] _isFaceAcceptable() returns false (centerOffset: ${centerOffset.toStringAsFixed(3)} > $maxOffset for phase=${phase.name})',
       );
       return false;
-    }
-
-    if (isSideTurn && centerOffset > 0.25) {
-      // Accepted only because of the relaxed side-turn threshold — log it
-      debugPrint(
-        '[FACE_REG] Side-turn accepted with relaxed offset: ${centerOffset.toStringAsFixed(3)} (phase=${phase.name})',
-      );
     }
 
     // Head pitch check — allow ±35 degrees tolerance (natural downward gaze)
@@ -1430,17 +1324,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     final double? yawRaw = face.headEulerAngleY;
     if (yawRaw == null) return false;
 
-    // Fix: Negate yaw for front camera (common Xiaomi/POCO inversion)
-    // This makes "Turn slightly left" match user's physical left turn
     final double yaw = -yawRaw;
 
     switch (phase) {
       case _Phase.front:
-        return yaw.abs() <= 6; // ±6° — ensures truly straight front capture
-      case _Phase.left:
-        return yaw >= -28 && yaw <= -8; // Turned left (negative after flip)
-      case _Phase.right:
-        return yaw >= 8 && yaw <= 28; // Turned right
+        return yaw.abs() <= 15; // ±15° for front
       default:
         return true;
     }
@@ -1450,10 +1338,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     switch (phase) {
       case _Phase.front:
         return 'Look straight ahead';
-      case _Phase.left:
-        return 'Turn slightly left';
-      case _Phase.right:
-        return 'Turn slightly right';
       default:
         return 'Hold still…';
     }
@@ -1573,22 +1457,10 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           subtitle: 'Centre your face and hold steady to begin',
         );
         break;
-      case _Phase.left:
-        _updateInstruction(
-          'Turn Left',
-          subtitle: 'Turn your head slowly to the left',
-        );
-        break;
       case _Phase.front:
         _updateInstruction(
-          'Look Straight',
-          subtitle: 'Face the camera and hold still',
-        );
-        break;
-      case _Phase.right:
-        _updateInstruction(
-          'Turn Right',
-          subtitle: 'Turn your head slowly to the right',
+          'Hold still…',
+          subtitle: 'Scanning your face silently',
         );
         break;
       case _Phase.processing:
@@ -1903,9 +1775,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                                     child: TweenAnimationBuilder<double>(
                                       tween: Tween<double>(
                                         begin: 0.0,
-                                        end:
-                                            _captureProgress /
-                                            (_framesPerPhase * 3),
+                                        end: _captureProgress / _framesPerPhase,
                                       ),
                                       duration: const Duration(
                                         milliseconds: 800,
@@ -1962,9 +1832,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                               duration: const Duration(milliseconds: 600),
                               curve: Curves.easeOut,
                               opacity:
-                                  (_phase == _Phase.left ||
-                                      _phase == _Phase.front ||
-                                      _phase == _Phase.right)
+                                  (_phase == _Phase.front)
                                   ? 0.3 // Gently fades in to 30% to act as a Flash
                                   : 0.0,
                               child: CustomPaint(
@@ -2187,60 +2055,29 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                                               children: [
                                                 _NeonChip(
                                                   label: 'Blink',
-                                                  isActive:
-                                                      _phase == _Phase.liveness,
+                                                  isActive: _phase == _Phase.liveness,
                                                   isDone: _challengeVerified,
-                                                  pulseValue:
-                                                      _pulseController.value,
+                                                  pulseValue: _pulseController.value,
                                                 ),
                                                 _ShimmerLine(
-                                                  isDone: _challengeVerified,
-                                                  pulseController:
-                                                      _pulseController,
-                                                ),
-                                                _NeonChip(
-                                                  label: 'Left',
-                                                  isActive:
-                                                      _phase == _Phase.left,
-                                                  isDone:
-                                                      _leftEmbeddings.length >=
-                                                      _framesPerPhase,
-                                                  pulseValue:
-                                                      _pulseController.value,
-                                                ),
-                                                _ShimmerLine(
-                                                  isDone:
-                                                      _leftEmbeddings.length >=
-                                                      _framesPerPhase,
-                                                  pulseController:
-                                                      _pulseController,
+                                                  isDone: _frontEmbeddings.length >= _framesPerPhase,
+                                                  pulseController: _pulseController,
                                                 ),
                                                 _NeonChip(
                                                   label: 'Front',
-                                                  isActive:
-                                                      _phase == _Phase.front,
-                                                  isDone:
-                                                      _frontEmbeddings.length >=
-                                                      _framesPerPhase,
-                                                  pulseValue:
-                                                      _pulseController.value,
+                                                  isActive: _phase == _Phase.front,
+                                                  isDone: _frontEmbeddings.length >= _framesPerPhase,
+                                                  pulseValue: _pulseController.value,
                                                 ),
                                                 _ShimmerLine(
-                                                  isDone:
-                                                      _frontEmbeddings.length >=
-                                                      _framesPerPhase,
-                                                  pulseController:
-                                                      _pulseController,
+                                                  isDone: _phase == _Phase.done || _phase == _Phase.processing,
+                                                  pulseController: _pulseController,
                                                 ),
                                                 _NeonChip(
-                                                  label: 'Right',
-                                                  isActive:
-                                                      _phase == _Phase.right,
-                                                  isDone:
-                                                      _rightEmbeddings.length >=
-                                                      _framesPerPhase,
-                                                  pulseValue:
-                                                      _pulseController.value,
+                                                  label: 'Done',
+                                                  isActive: _phase == _Phase.processing,
+                                                  isDone: _phase == _Phase.done,
+                                                  pulseValue: _pulseController.value,
                                                 ),
                                               ],
                                             );
@@ -2399,11 +2236,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     // Reset all state and try again
     _livenessService.reset();
     _frontEmbeddings.clear();
-    _leftEmbeddings.clear();
-    _rightEmbeddings.clear();
     _frontFrames.clear();
-    _leftFrames.clear();
-    _rightFrames.clear();
     _registrationPhotoBytes = null;
     _captureProgress = 0;
     _progressLabel = '';
@@ -2706,60 +2539,7 @@ class _BorderPainter extends CustomPainter {
     canvas.drawArc(rect, -math.pi * 0.85, 1.57, false, topHighlightPaint);
     canvas.drawArc(rect, math.pi * 0.15, 1.57, false, bottomShadowPaint);
 
-    // 3. Directional Guidance (Turn Left / Right)
-    if (phase == _Phase.left || phase == _Phase.right) {
-      _drawDirectionalFlow(canvas, center, radius, phase);
-    }
-  }
-
-  void _drawDirectionalFlow(
-    Canvas canvas,
-    Offset center,
-    double radius,
-    _Phase phase,
-  ) {
-    // Flowing energy trail / arrows
-    final bool isLeft = phase == _Phase.left;
-    final double sign = isLeft ? -1.0 : 1.0;
-
-    final arrowPaint = Paint()
-      ..color = AppStyles.primaryBlue.withValues(alpha: 0.8)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0
-      ..strokeCap = StrokeCap.round;
-
-    final arrowGlow = Paint()
-      ..color = AppStyles.primaryBlue.withValues(alpha: 0.5)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 6.0
-      ..strokeCap = StrokeCap.round
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
-
-    // Base position for arrows (side of the circle)
-    final double arrowRadius = radius * 0.75;
-    final Offset arrowCenter = center + Offset(sign * arrowRadius, 0);
-
-    // Draw 3 chevrons
-    for (int i = 0; i < 3; i++) {
-      final double xOffset = sign * (i * 12.0);
-      final double phaseShift = i * 0.33;
-      double opacity = math.sin((flowValue * math.pi) + phaseShift).abs();
-
-      arrowPaint.color = AppStyles.primaryBlue.withValues(alpha: 0.8 * opacity);
-      arrowGlow.color = AppStyles.primaryBlue.withValues(alpha: 0.5 * opacity);
-
-      final Path path = Path();
-      final double pX = arrowCenter.dx + xOffset;
-      final double pY = arrowCenter.dy;
-      const double size = 8.0;
-
-      path.moveTo(pX - sign * size, pY - size);
-      path.lineTo(pX, pY);
-      path.lineTo(pX - sign * size, pY + size);
-
-      canvas.drawPath(path, arrowGlow);
-      canvas.drawPath(path, arrowPaint);
-    }
+    // Directional guidance removed — front-only registration
   }
 
   @override

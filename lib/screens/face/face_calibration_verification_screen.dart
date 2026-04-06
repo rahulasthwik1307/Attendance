@@ -1,10 +1,8 @@
-// lib/screens/face/face_verification_screen.dart
-//
-// Face verification screen — captures 5 front frames after liveness check,
-// generates embeddings and compares against stored profile.
+// lib/screens/face/face_calibration_verification_screen.dart
+// Face verification screen used immediately after teacher approval.
+// No location check. Saves personal threshold on success.
 
 import 'dart:async';
-import 'dart:convert';
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -15,16 +13,13 @@ import 'package:facial_liveness_verification/facial_liveness_verification.dart'
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/face_ml_service.dart';
 import '../../services/face_landmark_service.dart';
 import '../../utils/app_styles.dart';
-import '../../utils/auth_flow_state.dart';
 
 // ─── Verification phases ──────────────────────────────────────────────────────
 enum _Phase {
@@ -37,14 +32,14 @@ enum _Phase {
   error,
 }
 
-class FaceVerificationScreen extends StatefulWidget {
-  const FaceVerificationScreen({super.key});
+class FaceCalibrationVerificationScreen extends StatefulWidget {
+  const FaceCalibrationVerificationScreen({super.key});
 
   @override
-  State<FaceVerificationScreen> createState() => _FaceVerificationScreenState();
+  State<FaceCalibrationVerificationScreen> createState() => _FaceCalibrationVerificationScreenState();
 }
 
-class _FaceVerificationScreenState extends State<FaceVerificationScreen>
+class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerificationScreen>
     with TickerProviderStateMixin {
   // ─── Animation controllers ──────────────────────────────────────────────
   late AnimationController _pulseController;
@@ -54,10 +49,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   late AnimationController _particleController;
   late AnimationController _scanLineController;
 
-  // ─── Location card ──────────────────────────────────────────────────────
-  late AnimationController _locationCardController;
-  late Animation<double> _locationFade;
-  bool _locationVerified = false;
+
 
   // ─── Timer ring ─────────────────────────────────────────────────────────
   late AnimationController _timerPulseController;
@@ -91,7 +83,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   List<double>? _embeddingA;
   List<double>? _embeddingB;
   List<double>? _embeddingC;
-  double _verificationThreshold = 0.82;
+  Uint8List? _lastCaptureJpegBytes;
+  double _verificationThreshold = 0.75;
+  dynamic _lastCaptureFace;
 
   int _attemptCount = 1;
 
@@ -219,15 +213,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       duration: const Duration(milliseconds: 2000),
     )..repeat(reverse: true);
 
-    _locationCardController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    );
-
-    _locationFade = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _locationCardController, curve: Curves.easeOut),
-    );
-
     // Timer pulse every second
     _timerPulseController = AnimationController(
       vsync: this,
@@ -248,85 +233,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     ).animate(CurvedAnimation(parent: _ringController, curve: Curves.linear));
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      _locationCardController.forward();
-
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (!mounted) return;
-
-      // Real location check
-      final String locationResult = await _checkGeofence();
-      if (!mounted) return;
-
-      if (locationResult != 'ok') {
-        setState(() {
-          _locationVerified = false;
-        });
-        final String message = locationResult == 'off'
-            ? 'Location is turned off. Please enable location to mark attendance.'
-            : 'You must be on campus to mark attendance.';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(message),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
-        await Future.delayed(const Duration(seconds: 3));
-        if (mounted) Navigator.of(context).pop();
-        return;
-      }
-
-      setState(() {
-        _locationVerified = true;
-      });
-      await Future.delayed(const Duration(milliseconds: 1000));
-      if (!mounted) return;
-      await _locationCardController.reverse();
-
-      // Auto-start camera immediately after location check passes
       await _initializeCamera();
     });
-  }
-
-  // ── CHANGE THESE COORDINATES BEFORE EXECUTION ──
-  // Currently set to test location — replace with college coordinates tomorrow
-  static const double _campusLat = 17.409601;
-  static const double _campusLng = 78.591013;
-  static const double _campusRadiusMeters = 200.0;
-
-  Future<String> _checkGeofence() async {
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return 'off';
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) return 'off';
-      }
-      if (permission == LocationPermission.deniedForever) return 'off';
-
-      final Position position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      );
-
-      final double distance = Geolocator.distanceBetween(
-        position.latitude,
-        position.longitude,
-        _campusLat,
-        _campusLng,
-      );
-
-      debugPrint(
-        '[GEOFENCE] Distance from campus: ${distance.toStringAsFixed(1)}m',
-      );
-      return distance <= _campusRadiusMeters ? 'ok' : 'outside';
-    } catch (e) {
-      debugPrint('[GEOFENCE] Error: $e');
-      return 'off';
-    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -387,9 +295,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         } else {
           setState(() => _secondsRemaining = 0);
           timer.cancel();
-          // Timer expired → navigate to failed
+          // Timer expired → restart calibration verification
           if (mounted && _phase != _Phase.done) {
-            Navigator.of(context).pushReplacementNamed('/attendance_failed');
+            debugPrint('[FACE_CAL] Timer expired — restarting calibration verification');
+            Navigator.of(context).pushReplacementNamed('/face_calibration_verify');
           }
         }
       });
@@ -402,45 +311,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // LOAD EMBEDDINGS — cache-first from SharedPreferences, fallback Supabase
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _loadEmbeddings() async {
+    debugPrint('[FACE_CAL] Loading embeddings and personal threshold from Supabase for calibration');
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final cachedStudentId = prefs.getString('emb_student_id');
-      final cachedAt = prefs.getInt('emb_cached_at') ?? 0;
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final isExpired = (now - cachedAt) > (24 * 60 * 60 * 1000);
       final user = Supabase.instance.client.auth.currentUser;
 
-      if (user != null &&
-          cachedStudentId == user.id &&
-          !isExpired &&
-          cachedStudentId != null) {
-        final embAJson = prefs.getString('emb_a');
-        final embBJson = prefs.getString('emb_b');
-        final embCJson = prefs.getString('emb_c');
-        final String? thresholdStr = prefs.getString(
-          'emb_threshold_${user.id}',
-        );
-        if (embAJson != null && embBJson != null && embCJson != null) {
-          _embeddingA = (jsonDecode(embAJson) as List)
-              .map((e) => (e as num).toDouble())
-              .toList();
-          _embeddingB = (jsonDecode(embBJson) as List)
-              .map((e) => (e as num).toDouble())
-              .toList();
-          _embeddingC = (jsonDecode(embCJson) as List)
-              .map((e) => (e as num).toDouble())
-              .toList();
-          _verificationThreshold = thresholdStr != null
-              ? double.tryParse(thresholdStr) ?? 0.82
-              : 0.82;
-          debugPrint(
-            '[FACE_VER] Threshold loaded from cache: $_verificationThreshold',
-          );
-          return;
-        }
-      }
-
-      // Cache miss — fetch from Supabase
       if (user == null) {
         _setError('Could not load face profile. Please try again.');
         return;
@@ -448,9 +322,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       final data = await Supabase.instance.client
           .from('students')
-          .select(
-            'embedding_a, embedding_b, embedding_c, verification_threshold',
-          )
+          .select('embedding_a, embedding_b, embedding_c, verification_threshold')
           .eq('id', user.id)
           .maybeSingle();
 
@@ -471,34 +343,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _embeddingC = (data['embedding_c'] as List)
           .map((e) => (e as num).toDouble())
           .toList();
-      _verificationThreshold =
-          (data['verification_threshold'] as num?)?.toDouble() ?? 0.82;
-      debugPrint(
-        '[FACE_VER] Threshold loaded from Supabase: $_verificationThreshold',
-      );
+      
+      _verificationThreshold = (data['verification_threshold'] as num?)?.toDouble() ?? 0.75;
+      debugPrint('[FACE_CAL] Personal threshold loaded: $_verificationThreshold');
 
-      // Clear any previous user's cached embeddings first
-      await prefs.remove('emb_a');
-      await prefs.remove('emb_b');
-      await prefs.remove('emb_c');
-      await prefs.remove('emb_student_id');
-      await prefs.remove('emb_cached_at');
-      // Cache for next time
-      await prefs.setString('emb_a', jsonEncode(_embeddingA));
-      await prefs.setString('emb_b', jsonEncode(_embeddingB));
-      await prefs.setString('emb_c', jsonEncode(_embeddingC));
-      await prefs.setString(
-        'emb_threshold_${user.id}',
-        _verificationThreshold.toString(),
-      );
-      debugPrint(
-        '[FACE_VER] Threshold cached for user ${user.id}: $_verificationThreshold',
-      );
-      await prefs.setString('emb_student_id', user.id);
-      await prefs.setInt('emb_cached_at', now);
-      debugPrint(
-        '[FACE_VER] Embeddings A, B, C loaded from Supabase and cached',
-      );
     } catch (e) {
       _setError('Could not load face profile. Please try again.');
     }
@@ -795,6 +643,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     final Uint8List? jpegBytes = await _captureCurrentFrame();
     if (jpegBytes == null) return;
 
+    if (_liveEmbeddings.isEmpty) {
+      _lastCaptureJpegBytes = jpegBytes;
+      _lastCaptureFace = face;
+      debugPrint('[FACE_CAL] Saved first capture frame and face bbox for preview');
+    }
+
     // Generate embedding
     final emb = await _landmarkService.generateEmbedding(
       jpegBytes: jpegBytes,
@@ -852,9 +706,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           .toList();
       final double dynamicThreshold = _calculateDynamicThreshold(frontScores);
 
-      debugPrint(
-        '[FACE_VER] Using personal threshold: $_verificationThreshold',
-      );
       final result = _landmarkService.verifyFace(
         liveEmbeddings: _liveEmbeddings,
         storedEmbeddingA: _embeddingA!,
@@ -866,6 +717,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       debugPrint(
         '[FACE_VER] Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | EmbALen: ${_embeddingA?.length} | EmbBLen: ${_embeddingB?.length} | EmbCLen: ${_embeddingC?.length} | DynThreshold: ${dynamicThreshold.toStringAsFixed(4)}',
       );
+      debugPrint('[FACE_CAL] Running calibration verification with threshold: $_verificationThreshold');
 
       if (result.isMatch) {
         // ── Success ──
@@ -881,47 +733,19 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         _setPhase(_Phase.done);
         _updateInstruction('Verified!', subtitle: 'Face matched successfully');
 
+        debugPrint('[FACE_CAL] Calibration verification passed — score: ${result.score.toStringAsFixed(4)} — navigating to preview');
         await Future.delayed(const Duration(milliseconds: 600));
         if (!mounted) return;
-
         _countdownTimer?.cancel();
-
-        // Save college attendance record
-        try {
-          final user = Supabase.instance.client.auth.currentUser;
-          if (user != null) {
-            final todayStr = DateTime.now().toIso8601String().split('T')[0];
-            await Supabase.instance.client.from('college_attendance').upsert({
-              'student_id': user.id,
-              'date': todayStr,
-              'marked_at': DateTime.now().toUtc().toIso8601String(),
-              'face_verified': true,
-              'status': 'present',
-            }, onConflict: 'student_id,date');
-            debugPrint('[FACE_VER] College attendance saved');
-          }
-        } catch (e) {
-          debugPrint('[FACE_VER] Failed to save college attendance: $e');
-        }
-
-        if (!mounted) return;
-
-        final String? mode =
-            ModalRoute.of(context)?.settings.arguments as String?;
-        if (mode == 'password_reset') {
-          Navigator.of(
-            context,
-          ).pushReplacementNamed('/password_reset_face_success');
-        } else if (mode == 'face_reset') {
-          Navigator.of(
-            context,
-          ).pushNamedAndRemoveUntil('/register', (route) => false);
-          AuthFlowState.instance.passwordSet = true;
-          AuthFlowState.instance.faceRegistered = false;
-          AuthFlowState.instance.isFirstTimeUser = false;
-        } else {
-          Navigator.of(context).pushReplacementNamed('/attendance_success');
-        }
+        Navigator.of(context).pushReplacementNamed(
+          '/face_calibration_preview',
+          arguments: {
+            'score': result.score,
+            'liveEmbeddings': _liveEmbeddings,
+            'photoBytes': _lastCaptureJpegBytes,
+            'faceBbox': _lastCaptureFace?.boundingBox,
+          },
+        );
       } else {
         // ── Failure ──
         setState(() => _borderColor = AppStyles.errorRed);
@@ -956,9 +780,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _setPhase(_Phase.positioning);
         } else {
           // 3 attempts exhausted
+          debugPrint('[FACE_CAL] 3 attempts exhausted — restarting calibration verification');
           await Future.delayed(const Duration(milliseconds: 600));
           if (mounted) {
-            Navigator.of(context).pushReplacementNamed('/attendance_failed');
+            Navigator.of(context).pushReplacementNamed('/face_calibration_verify');
           }
         }
       }
@@ -1464,7 +1289,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     _successBounceController.dispose();
     _particleController.dispose();
     _scanLineController.dispose();
-    _locationCardController.dispose();
     _timerPulseController.dispose();
     _ringController.dispose();
     _countdownTimer?.cancel();
@@ -1538,71 +1362,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                 ),
               ),
 
-              // ── Location Card ──────────────────────────────────────────
-              FadeTransition(
-                opacity: _locationFade,
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 24.0),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16.0,
-                    vertical: 12.0,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        _locationVerified
-                            ? Icons.check_circle_rounded
-                            : Icons.location_searching_rounded,
-                        color: _locationVerified
-                            ? AppStyles.successGreen
-                            : AppStyles.primaryBlue,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          _locationVerified
-                              ? 'Location verified'
-                              : 'Checking your location…',
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: AppStyles.textDark,
-                          ),
-                        ),
-                      ),
-                      if (!_locationVerified)
-                        SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppStyles.primaryBlue.withValues(alpha: 0.5),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-
               // ── Camera Preview — uses Expanded to fill available space ──
               Expanded(
-                child: AnimatedOpacity(
-                  opacity: _locationVerified ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 400),
-                  curve: Curves.easeIn,
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
                       final double availW = constraints.maxWidth;
                       final double availH = constraints.maxHeight;
                       final double circleSize = availW * 0.80;
@@ -2227,7 +1990,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                       );
                     },
                   ),
-                ),
               ),
             ],
           ),

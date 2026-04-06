@@ -86,6 +86,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   List<double>? _embeddingA;
   List<double>? _embeddingB;
   List<double>? _embeddingC;
+  double _verificationThreshold = 0.82;
 
   int _attemptCount = 1;
 
@@ -430,6 +431,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         final embAJson = prefs.getString('emb_a');
         final embBJson = prefs.getString('emb_b');
         final embCJson = prefs.getString('emb_c');
+        final String? thresholdStr = prefs.getString('emb_threshold_${user.id}');
         if (embAJson != null && embBJson != null && embCJson != null) {
           _embeddingA = (jsonDecode(embAJson) as List)
               .map((e) => (e as num).toDouble())
@@ -440,7 +442,10 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
           _embeddingC = (jsonDecode(embCJson) as List)
               .map((e) => (e as num).toDouble())
               .toList();
-          debugPrint('[FACE_VER] Embeddings A, B, C loaded from cache');
+          _verificationThreshold = thresholdStr != null 
+              ? double.tryParse(thresholdStr) ?? 0.82 
+              : 0.82;
+          debugPrint('[FACE_VER] Threshold loaded from cache: $_verificationThreshold');
           return;
         }
       }
@@ -453,7 +458,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
       final data = await Supabase.instance.client
           .from('students')
-          .select('embedding_a, embedding_b, embedding_c')
+          .select('embedding_a, embedding_b, embedding_c, verification_threshold')
           .eq('id', user.id)
           .maybeSingle();
 
@@ -474,11 +479,15 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       _embeddingC = (data['embedding_c'] as List)
           .map((e) => (e as num).toDouble())
           .toList();
+      _verificationThreshold = (data['verification_threshold'] as num?)?.toDouble() ?? 0.82;
+      debugPrint('[FACE_VER] Threshold loaded from Supabase: $_verificationThreshold');
 
       // Cache for next time
       await prefs.setString('emb_a', jsonEncode(_embeddingA));
       await prefs.setString('emb_b', jsonEncode(_embeddingB));
       await prefs.setString('emb_c', jsonEncode(_embeddingC));
+      await prefs.setString('emb_threshold_${user.id}', _verificationThreshold.toString());
+      debugPrint('[FACE_VER] Threshold cached for user ${user.id}: $_verificationThreshold');
       await prefs.setString('emb_student_id', user.id);
       await prefs.setInt('emb_cached_at', now);
       debugPrint(
@@ -823,12 +832,13 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     _updateInstruction('Processing…', subtitle: 'Comparing your face');
 
     try {
+      debugPrint('[FACE_VER] Using personal threshold: $_verificationThreshold');
       final result = _landmarkService.verifyFace(
         liveEmbeddings: _liveEmbeddings,
         storedEmbeddingA: _embeddingA!,
         storedEmbeddingB: _embeddingB!,
         storedEmbeddingC: _embeddingC!,
-        threshold: 0.82,
+        threshold: _verificationThreshold,
       );
 
       debugPrint(

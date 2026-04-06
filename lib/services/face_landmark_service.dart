@@ -455,16 +455,15 @@ class FaceLandmarkService {
       );
     }
 
-    // Take median score
-    final List<double> sortedScores = List.from(frontScores)..sort();
-    final double medianScore = sortedScores[sortedScores.length ~/ 2];
+    // Take max score
+    final double medianScore = frontScores.reduce(math.max);
 
     final double dynamicThreshold = _calculateDynamicThreshold(frontScores);
     // Use the stricter of the two thresholds (provided default or dynamic)
     final double effectiveThreshold = math.max(threshold, dynamicThreshold);
 
     debugPrint(
-      '[FACE_VER] medianScore=${medianScore.toStringAsFixed(4)} fixed_threshold=$threshold dynamic_threshold=${dynamicThreshold.toStringAsFixed(4)}',
+      '[FACE_VER] maxScore=${medianScore.toStringAsFixed(4)} fixed_threshold=$threshold dynamic_threshold=${dynamicThreshold.toStringAsFixed(4)} effectiveThreshold=${effectiveThreshold.toStringAsFixed(4)}',
     );
 
     if (medianScore >= effectiveThreshold) {
@@ -497,13 +496,13 @@ class FaceLandmarkService {
         scores.map((s) => (s - mean) * (s - mean)).reduce((a, b) => a + b) /
         scores.length;
 
-    // MobileFaceNet thresholds in working range
+    // Dynamic threshold reset to 0.75 — personal threshold from Supabase is now the real gate
     if (variance < 0.005) {
-      return 0.82; // Low variance — consistent scores, slightly relaxed
+      return 0.75;
     } else if (variance < 0.02) {
-      return 0.82; // Medium variance
+      return 0.75;
     } else {
-      return 0.82; // High variance
+      return 0.75;
     }
   }
 

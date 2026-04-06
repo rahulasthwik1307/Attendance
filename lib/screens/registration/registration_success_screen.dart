@@ -67,10 +67,10 @@ class _RegistrationSuccessScreenState extends State<RegistrationSuccessScreen>
 
     if (isApproved) {
       AuthFlowState.instance.passwordSet = true;
-      AuthFlowState.instance.faceRegistered = true;
+      debugPrint('[REG_SUCCESS] Teacher approved — navigating to calibration verification');
       Navigator.of(
         context,
-      ).pushNamedAndRemoveUntil('/dashboard', (route) => false);
+      ).pushNamedAndRemoveUntil('/face_calibration_verify', (route) => false);
     } else if (isRejected) {
       // Show rejection dialog then redirect to home
       await showDialog(

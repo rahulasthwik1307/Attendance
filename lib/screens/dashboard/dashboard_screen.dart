@@ -172,8 +172,8 @@ class _DashboardScreenState extends State<DashboardScreen>
         ),
       );
 
-      double centerLat = 17.402513;
-      double centerLng = 78.652668;
+      double centerLat = 17.409601;
+      double centerLng = 78.591013;
       double radiusMeters = 200.0;
 
       try {
@@ -1000,7 +1000,9 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
         decoration: BoxDecoration(
-          color: AppStyles.primaryBlue.withValues(alpha: widget.isDark ? 0.15 : 0.07),
+          color: AppStyles.primaryBlue.withValues(
+            alpha: widget.isDark ? 0.15 : 0.07,
+          ),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
             color: AppStyles.primaryBlue.withValues(alpha: 0.3),
@@ -1012,7 +1014,9 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: widget.isDark ? 0.15 : 0.9),
+                color: Colors.white.withValues(
+                  alpha: widget.isDark ? 0.15 : 0.9,
+                ),
                 shape: BoxShape.circle,
               ),
               child: const Text('😴', style: TextStyle(fontSize: 22)),

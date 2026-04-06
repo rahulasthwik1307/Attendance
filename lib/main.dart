@@ -12,6 +12,8 @@ import 'screens/face/face_capture_preview_screen.dart' as preview;
 import 'screens/dashboard/dashboard_screen.dart' as dashboard;
 import 'screens/dashboard/history_screen.dart' as history;
 import 'screens/face/face_verification_screen.dart' as verify;
+import 'screens/face/face_calibration_verification_screen.dart' as calibration_verify;
+import 'screens/face/face_calibration_preview_screen.dart' as calibration_preview;
 import 'screens/attendance/attendance_success_screen.dart' as att_success;
 import 'screens/attendance/attendance_failed_screen.dart' as att_fail;
 import 'screens/attendance/location_error_screen.dart' as loc_error;
@@ -182,6 +184,12 @@ class SmartAttendanceApp extends StatelessWidget {
                 break;
               case '/face_verification':
                 page = const verify.FaceVerificationScreen();
+                break;
+              case '/face_calibration_verify':
+                page = const calibration_verify.FaceCalibrationVerificationScreen();
+                break;
+              case '/face_calibration_preview':
+                page = const calibration_preview.FaceCalibrationPreviewScreen();
                 break;
               case '/attendance_success':
                 page = const att_success.AttendanceSuccessScreen();
