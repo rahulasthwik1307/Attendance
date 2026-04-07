@@ -210,42 +210,10 @@ class FaceLandmarkService {
         interpolation: img.Interpolation.linear,
       );
 
-      // Step 3.5 — Adaptive gamma correction
-      double brightnessSum = 0.0;
-      for (int y = 0; y < 112; y++) {
-        for (int x = 0; x < 112; x++) {
-          final p = resized.getPixel(x, y);
-          brightnessSum +=
-              0.299 * p.r.toDouble() +
-              0.587 * p.g.toDouble() +
-              0.114 * p.b.toDouble();
-        }
-      }
-      final double avgBrightness = (brightnessSum / (112 * 112 * 255)).clamp(
-        0.01,
-        0.99,
-      );
-      double gamma = math.log(0.5) / math.log(avgBrightness);
-      gamma = gamma.clamp(0.5, 2.5);
-      debugPrint(
-        '[FACE_LANDMARK] Gamma correction applied: gamma=${gamma.toStringAsFixed(4)} avgBrightness=${avgBrightness.toStringAsFixed(4)}',
-      );
-      final img.Image gammaCorrected = img.Image(width: 112, height: 112);
-      for (int y = 0; y < 112; y++) {
-        for (int x = 0; x < 112; x++) {
-          final p = resized.getPixel(x, y);
-          final int newR = (255 * math.pow(p.r.toDouble() / 255.0, gamma))
-              .round()
-              .clamp(0, 255);
-          final int newG = (255 * math.pow(p.g.toDouble() / 255.0, gamma))
-              .round()
-              .clamp(0, 255);
-          final int newB = (255 * math.pow(p.b.toDouble() / 255.0, gamma))
-              .round()
-              .clamp(0, 255);
-          gammaCorrected.setPixelRgb(x, y, newR, newG, newB);
-        }
-      }
+      // Step 3.5 — CLAHE (Contrast Limited Adaptive Histogram Equalization)
+      // Replaces gamma correction - makes embeddings robust to position changes
+      final img.Image gammaCorrected = _applyCLAHE(resized, clipLimit: 2.0, tileSize: 8);
+      debugPrint('[FACE_LANDMARK] CLAHE applied: clipLimit=2.0');
 
       // Step 3.7 — Laplace sharpening
       final img.Image sharpened = img.Image(width: 112, height: 112);
@@ -458,12 +426,10 @@ class FaceLandmarkService {
     // Take max score
     final double medianScore = frontScores.reduce(math.max);
 
-    final double dynamicThreshold = _calculateDynamicThreshold(frontScores);
-    // Use the stricter of the two thresholds (provided default or dynamic)
-    final double effectiveThreshold = math.max(threshold, dynamicThreshold);
-
+    // NEW: Hybrid threshold with hard floor at 0.72
+    double effectiveThreshold = math.max(threshold, 0.72); // HARD FLOOR
     debugPrint(
-      '[FACE_VER] maxScore=${medianScore.toStringAsFixed(4)} fixed_threshold=$threshold dynamic_threshold=${dynamicThreshold.toStringAsFixed(4)} effectiveThreshold=${effectiveThreshold.toStringAsFixed(4)}',
+      '[FACE_VER] threshold=$threshold, floor=0.72, effective=$effectiveThreshold',
     );
 
     if (medianScore >= effectiveThreshold) {
@@ -484,27 +450,6 @@ class FaceLandmarkService {
     );
   }
 
-  // DYNAMIC THRESHOLD — adjusts based on score consistency (MobileFaceNet thresholds)
-  double _calculateDynamicThreshold(List<double> scores) {
-    if (scores.isEmpty) return 0.75;
-
-    // Calculate mean
-    double mean = scores.reduce((a, b) => a + b) / scores.length;
-
-    // Calculate variance
-    double variance =
-        scores.map((s) => (s - mean) * (s - mean)).reduce((a, b) => a + b) /
-        scores.length;
-
-    // Dynamic threshold reset to 0.75 — personal threshold from Supabase is now the real gate
-    if (variance < 0.005) {
-      return 0.75;
-    } else if (variance < 0.02) {
-      return 0.75;
-    } else {
-      return 0.75;
-    }
-  }
 
   // CLEAR EMBEDDINGS CACHE
   Future<void> clearEmbeddingsCache() async {
@@ -522,6 +467,114 @@ class FaceLandmarkService {
     _interpreter?.close();
     _interpreter = null;
     _isInitialized = false;
+  }
+
+  /// CLAHE: Contrast Limited Adaptive Histogram Equalization
+  /// Normalizes local contrast to make face recognition robust to lighting/position changes
+  img.Image _applyCLAHE(img.Image src, {double clipLimit = 2.0, int tileSize = 8}) {
+    final int width = src.width;
+    final int height = src.height;
+    final int tilesX = (width / tileSize).ceil();
+    final int tilesY = (height / tileSize).ceil();
+
+    // Convert to grayscale for analysis
+    final List<List<double>> gray = List.generate(
+      height,
+      (y) => List.generate(
+        width,
+        (x) {
+          final p = src.getPixel(x, y);
+          return 0.299 * p.r + 0.587 * p.g + 0.114 * p.b;
+        },
+      ),
+    );
+
+    // Build tile histograms with clipping
+    final List<List<List<int>>> tileCDFs = List.generate(
+      tilesY,
+      (ty) => List.generate(
+        tilesX,
+        (tx) {
+          final List<int> hist = List.filled(256, 0);
+          final int startY = ty * tileSize;
+          final int startX = tx * tileSize;
+          final int endY = math.min(startY + tileSize, height);
+          final int endX = math.min(startX + tileSize, width);
+
+          // Build histogram
+          for (int y = startY; y < endY; y++) {
+            for (int x = startX; x < endX; x++) {
+              final int bin = gray[y][x].round().clamp(0, 255);
+              hist[bin]++;
+            }
+          }
+
+          // Clip histogram
+          final int totalPixels = (endY - startY) * (endX - startX);
+          final int clipLimitPixels = ((clipLimit * totalPixels) / 256).round();
+          int excess = 0;
+          for (int i = 0; i < 256; i++) {
+            if (hist[i] > clipLimitPixels) {
+              excess += hist[i] - clipLimitPixels;
+              hist[i] = clipLimitPixels;
+            }
+          }
+          final int redistribution = excess ~/ 256;
+          for (int i = 0; i < 256; i++) {
+            hist[i] += redistribution;
+          }
+
+          // Build CDF
+          final List<int> cdf = List.filled(256, 0);
+          cdf[0] = hist[0];
+          for (int i = 1; i < 256; i++) {
+            cdf[i] = cdf[i - 1] + hist[i];
+          }
+          final int total = cdf[255];
+          if (total > 0) {
+            for (int i = 0; i < 256; i++) {
+              cdf[i] = ((cdf[i] * 255) ~/ total).clamp(0, 255);
+            }
+          }
+          return cdf;
+        },
+      ),
+    );
+
+    // Apply with bilinear interpolation
+    final img.Image result = img.Image(width: width, height: height);
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final double tileX = (x / tileSize) - 0.5;
+        final double tileY = (y / tileSize) - 0.5;
+        final int tx = tileX.floor().clamp(0, tilesX - 1);
+        final int ty = tileY.floor().clamp(0, tilesY - 1);
+        final int txNext = (tx + 1).clamp(0, tilesX - 1);
+        final int tyNext = (ty + 1).clamp(0, tilesY - 1);
+        final double fx = (tileX - tx).clamp(0.0, 1.0);
+        final double fy = (tileY - ty).clamp(0.0, 1.0);
+
+        final int grayVal = gray[y][x].round().clamp(0, 255);
+        final int v00 = tileCDFs[ty][tx][grayVal];
+        final int v01 = tileCDFs[ty][txNext][grayVal];
+        final int v10 = tileCDFs[tyNext][tx][grayVal];
+        final int v11 = tileCDFs[tyNext][txNext][grayVal];
+
+        final double v0 = v00 * (1 - fx) + v01 * fx;
+        final double v1 = v10 * (1 - fx) + v11 * fx;
+        final int newGray = (v0 * (1 - fy) + v1 * fy).round().clamp(0, 255);
+
+        final p = src.getPixel(x, y);
+        final double factor = newGray / (gray[y][x] + 1e-6);
+        result.setPixelRgb(
+          x, y,
+          (p.r * factor).round().clamp(0, 255),
+          (p.g * factor).round().clamp(0, 255),
+          (p.b * factor).round().clamp(0, 255),
+        );
+      }
+    }
+    return result;
   }
 }
 

@@ -172,8 +172,8 @@ class _DashboardScreenState extends State<DashboardScreen>
         ),
       );
 
-      double centerLat = 17.409601;
-      double centerLng = 78.591013;
+      double centerLat = 17.402564;
+      double centerLng = 78.652667;
       double radiusMeters = 200.0;
 
       try {

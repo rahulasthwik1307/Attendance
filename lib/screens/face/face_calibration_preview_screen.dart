@@ -287,7 +287,7 @@ class _FaceCalibrationPreviewScreenState extends State<FaceCalibrationPreviewScr
 
                         setState(() => _isLoading = true);
                         try {
-                          final double personalThreshold = math.max(0.72, _score - 0.12);
+                          final double personalThreshold = math.max(0.72, _score - 0.15);
                           debugPrint('[FACE_CAL_PREVIEW] Saving personal threshold: $personalThreshold (from score: ${_score.toStringAsFixed(4)})');
 
                           final user = Supabase.instance.client.auth.currentUser;

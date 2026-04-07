@@ -68,8 +68,8 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
 
     // ── Check 2: Geofence from Supabase ─────────────────────────
     try {
-      double campusLat = 17.409904;
-      double campusLng = 78.590623;
+      double campusLat = 17.402564;
+      double campusLng = 78.652667;
       double campusRadius = 200.0;
 
       try {
@@ -346,7 +346,9 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
                   child: SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: () => Navigator.of(context).pushReplacementNamed('/dashboard'),
+                      onPressed: () => Navigator.of(
+                        context,
+                      ).pushReplacementNamed('/dashboard'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppStyles.errorRed,
                         foregroundColor: Colors.white,
