@@ -275,155 +275,217 @@ class _HistoryScreenState extends State<HistoryScreen>
       final user = supabase.auth.currentUser;
       if (user == null || _studentClassId == null) return;
 
-      // Fetch finalized sessions with finalized_at for time display
+      // Fetch student account creation date
+      final studentData = await supabase
+          .from('students')
+          .select('created_at')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      DateTime startDate;
+      if (studentData != null && studentData['created_at'] != null) {
+        final created = DateTime.parse(
+          studentData['created_at'] as String,
+        ).toLocal();
+        startDate = DateTime(created.year, created.month, created.day);
+      } else {
+        final now = DateTime.now();
+        startDate = DateTime(now.year, now.month, 1);
+      }
+
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final nowMinutes = now.hour * 60 + now.minute;
+
+      // Fetch timetable for student's class
+      final timetableRows = await supabase
+          .from('timetables')
+          .select('''
+            day_of_week, subject_id, period_id,
+            subject:subjects ( name ),
+            period:periods ( period_number, start_time, end_time )
+          ''')
+          .eq('class_id', _studentClassId!);
+
+      if ((timetableRows as List).isEmpty) {
+        if (mounted) setState(() => _classRecords = []);
+        return;
+      }
+
+      // Fetch all finalized sessions for this class from startDate
+      final startDateStr = startDate.toIso8601String().split('T')[0];
+      final todayStr = today.toIso8601String().split('T')[0];
+
       final sessions = await supabase
           .from('attendance_sessions')
           .select('id, session_date, subject_id, period_id, finalized_at')
           .eq('class_id', _studentClassId!)
           .eq('status', 'finalized')
+          .gte('session_date', startDateStr)
+          .lte('session_date', todayStr)
           .order('finalized_at', ascending: false)
-          .limit(200);
+          .limit(500);
 
-      if ((sessions as List).isEmpty) {
-        if (mounted) setState(() => _classRecords = []);
-        return;
-      }
+      final sessionIds =
+          (sessions as List).map((s) => s['id'] as String).toList();
 
-      final sessionIds = sessions.map((s) => s['id'] as String).toList();
-
-      final attendance = await supabase
-          .from('period_attendance')
-          .select('session_id, status')
-          .eq('student_id', user.id)
-          .inFilter('session_id', sessionIds);
-
-      final Map<String, String> sessionStatusMap = {};
-      for (final a in attendance) {
-        sessionStatusMap[a['session_id'] as String] =
-            a['status'] as String? ?? 'absent';
-      }
-
-      final subjectIds =
-          sessions.map((s) => s['subject_id'] as String).toSet().toList();
-      final periodIds =
-          sessions.map((s) => s['period_id'] as String).toSet().toList();
-
-      final subjectsResp = await supabase
-          .from('subjects')
-          .select('id, name')
-          .inFilter('id', subjectIds);
-      final periodsResp = await supabase
-          .from('periods')
-          .select('id, period_number')
-          .inFilter('id', periodIds);
-
-      final Map<String, String> subjectNames = {
-        for (final s in subjectsResp) s['id'] as String: s['name'] as String,
-      };
-
-      String getOrdinal(int n) {
-        if (n >= 11 && n <= 13) return '${n}th';
-        switch (n % 10) {
-          case 1: return '${n}st';
-          case 2: return '${n}nd';
-          case 3: return '${n}rd';
-          default: return '${n}th';
+      // Fetch student's period_attendance
+      Map<String, String> sessionStatusMap = {};
+      if (sessionIds.isNotEmpty) {
+        final attendance = await supabase
+            .from('period_attendance')
+            .select('session_id, status')
+            .eq('student_id', user.id)
+            .inFilter('session_id', sessionIds);
+        for (final a in attendance) {
+          sessionStatusMap[a['session_id'] as String] =
+              a['status'] as String? ?? 'absent';
         }
       }
 
-      final Map<String, String> periodLabels = {
-        for (final p in periodsResp)
-          p['id'] as String: '${getOrdinal(p['period_number'] as int)} Period',
-      };
-
-      final months = ['Jan','Feb','Mar','Apr','May','Jun',
-                      'Jul','Aug','Sep','Oct','Nov','Dec'];
-      final weekdays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      final yesterday = today.subtract(const Duration(days: 1));
-
-      // Deduplicate: per day, per subject+period combo — keep latest finalized_at
-      // Key = "date__subjectId__periodId"
-      final Map<String, Map<String, dynamic>> latestMap = {};
-
+      // Build session lookup: "date__subjectId__periodId" → sessionId
+      final Map<String, String> sessionKeyMap = {};
       for (final s in sessions) {
-        final dateStr = s['session_date'] as String;
-        final subjectId = s['subject_id'] as String;
-        final periodId = s['period_id'] as String;
-        final key = '${dateStr}__${subjectId}__$periodId';
-
-        final existing = latestMap[key];
-        final thisFinalized = s['finalized_at'] as String?;
-
-        if (existing == null) {
-          latestMap[key] = s;
-        } else {
-          // Keep the more recently finalized one
-          final existingFinalized = existing['finalized_at'] as String?;
-          if (thisFinalized != null && existingFinalized != null) {
-            if (thisFinalized.compareTo(existingFinalized) > 0) {
-              latestMap[key] = s;
-            }
-          }
+        final key =
+            '${s['session_date']}__${s['subject_id']}__${s['period_id']}';
+        // Keep latest finalized_at if duplicate
+        if (!sessionKeyMap.containsKey(key)) {
+          sessionKeyMap[key] = s['id'] as String;
         }
       }
 
-      // Build records from deduplicated map
+      // Also build finalized_at map for time display
+      final Map<String, String?> sessionFinalizedAt = {};
+      for (final s in sessions) {
+        final key =
+            '${s['session_date']}__${s['subject_id']}__${s['period_id']}';
+        if (!sessionFinalizedAt.containsKey(key)) {
+          sessionFinalizedAt[key] = s['finalized_at'] as String?;
+        }
+      }
+
+      // Generate all working days from startDate to today
       final List<Map<String, dynamic>> built = [];
 
-      for (final s in latestMap.values) {
-        final sessionId = s['id'] as String;
-        final dateStr = s['session_date'] as String;
-        final finalizedAtStr = s['finalized_at'] as String?;
+      final months = [
+        'Jan','Feb','Mar','Apr','May','Jun',
+        'Jul','Aug','Sep','Oct','Nov','Dec',
+      ];
+      final weekdays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      final yesterday = today.subtract(const Duration(days: 1));
 
-        final date = DateTime.parse(dateStr);
-        final recordDay = DateTime(date.year, date.month, date.day);
-        final monthAbbr = months[date.month - 1];
+      DateTime cursor = startDate;
+      while (!cursor.isAfter(today)) {
+        // Skip Sunday
+        if (cursor.weekday == 7) {
+          cursor = cursor.add(const Duration(days: 1));
+          continue;
+        }
+
+        final dateStr = cursor.toIso8601String().split('T')[0];
+        final isToday = cursor == today;
+        final recordDay = DateTime(cursor.year, cursor.month, cursor.day);
 
         String dateGroup;
         if (recordDay == today) {
-          dateGroup = 'Today \u2022 $monthAbbr ${date.day}, ${date.year}';
+          dateGroup =
+              'Today \u2022 ${months[cursor.month - 1]} ${cursor.day}, ${cursor.year}';
         } else if (recordDay == yesterday) {
-          dateGroup = 'Yesterday \u2022 $monthAbbr ${date.day}, ${date.year}';
+          dateGroup =
+              'Yesterday \u2022 ${months[cursor.month - 1]} ${cursor.day}, ${cursor.year}';
         } else {
-          final weekday = weekdays[date.weekday - 1];
-          dateGroup = '$weekday \u2022 $monthAbbr ${date.day}, ${date.year}';
+          final weekday = weekdays[cursor.weekday - 1];
+          dateGroup =
+              '$weekday \u2022 ${months[cursor.month - 1]} ${cursor.day}, ${cursor.year}';
         }
 
-        // Format finalized_at as time
-        String timeDisplay = '\u2014';
-        if (finalizedAtStr != null) {
-          final dt = DateTime.parse(finalizedAtStr).toLocal();
-          final hour = dt.hour;
-          final minute = dt.minute.toString().padLeft(2, '0');
-          final ampm = hour >= 12 ? 'PM' : 'AM';
-          final displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
-          timeDisplay = '$displayHour:$minute $ampm';
+        // Find timetable slots for this day
+        for (final slot in timetableRows) {
+          final slotDay = slot['day_of_week'] as int;
+          if (slotDay != cursor.weekday) continue;
+
+          final subjectId = slot['subject_id'] as String;
+          final periodId = slot['period_id'] as String;
+          final subjectName =
+              (slot['subject'] as Map?)?['name'] as String? ?? 'Unknown';
+          final periodNum =
+              (slot['period'] as Map?)?['period_number'] as int? ?? 0;
+          final endTimeStr =
+              (slot['period'] as Map?)?['end_time'] as String? ?? '00:00';
+          final startTimeStr =
+              (slot['period'] as Map?)?['start_time'] as String? ?? '00:00';
+
+          // Parse end time
+          final endParts = endTimeStr.split(':');
+          final endMinutes =
+              int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+
+          // For today: only show if period end time has passed
+          if (isToday && nowMinutes < endMinutes) continue;
+
+          final startDisplay = startTimeStr.length >= 5
+              ? startTimeStr.substring(0, 5)
+              : startTimeStr;
+
+          // Get ordinal
+          String getOrdinal(int n) {
+            if (n >= 11 && n <= 13) return '${n}th';
+            switch (n % 10) {
+              case 1: return '${n}st';
+              case 2: return '${n}nd';
+              case 3: return '${n}rd';
+              default: return '${n}th';
+            }
+          }
+
+          final periodLabel = '${getOrdinal(periodNum)} Period';
+          final sessionKey = '${dateStr}__${subjectId}__$periodId';
+          final sessionId = sessionKeyMap[sessionKey];
+
+          String status;
+          String timeDisplay = '\u2014';
+
+          if (sessionId != null) {
+            // Session exists — get student status
+            final studentStatus = sessionStatusMap[sessionId];
+            status = (studentStatus == 'present') ? 'present' : 'absent';
+
+            final finalizedAtStr = sessionFinalizedAt[sessionKey];
+            if (finalizedAtStr != null) {
+              final dt = DateTime.parse(finalizedAtStr).toLocal();
+              final hour = dt.hour;
+              final minute = dt.minute.toString().padLeft(2, '0');
+              final ampm = hour >= 12 ? 'PM' : 'AM';
+              final displayHour =
+                  hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+              timeDisplay = '$displayHour:$minute $ampm';
+            }
+          } else {
+            // No session — Pending
+            status = 'pending';
+          }
+
+          built.add({
+            'dateGroup': dateGroup,
+            'subject': subjectName,
+            'period': periodLabel,
+            'time': timeDisplay,
+            'status': status,
+            'rawDate': dateStr,
+            'periodNumber': periodNum,
+            'startTime': startDisplay,
+          });
         }
 
-        final status = sessionStatusMap[sessionId] ?? 'absent';
-        final subjectName =
-            subjectNames[s['subject_id'] as String] ?? 'Unknown';
-        final periodLabel =
-            periodLabels[s['period_id'] as String] ?? 'Period';
-
-        built.add({
-          'dateGroup': dateGroup,
-          'subject': subjectName,
-          'period': periodLabel,
-          'time': timeDisplay,
-          'status': status == 'present' ? 'present' : 'absent',
-          'rawDate': dateStr,
-        });
+        cursor = cursor.add(const Duration(days: 1));
       }
 
-      // Sort by date descending, then by period label
+      // Sort by date descending then period ascending
       built.sort((a, b) {
         final dateCompare =
             (b['rawDate'] as String).compareTo(a['rawDate'] as String);
         if (dateCompare != 0) return dateCompare;
-        return (a['period'] as String).compareTo(b['period'] as String);
+        return (a['periodNumber'] as int).compareTo(b['periodNumber'] as int);
       });
 
       if (mounted) setState(() => _classRecords = built);
@@ -749,7 +811,9 @@ class _HistoryScreenState extends State<HistoryScreen>
     final int classPresentCount = filteredClasses
         .where((e) => e['status'] == 'present')
         .length;
-    final int classTotal = filteredClasses.length;
+    final int classTotal = filteredClasses
+        .where((e) => e['status'] != 'pending')
+        .length;
 
     return PopScope(
       canPop: false,
@@ -1313,7 +1377,7 @@ class _CollegeAttendanceTab extends StatelessWidget {
   }
 }
 
-class _ClassAttendanceTab extends StatelessWidget {
+class _ClassAttendanceTab extends StatefulWidget {
   final bool isDark;
   final ThemeData theme;
   final int presentCount;
@@ -1329,14 +1393,34 @@ class _ClassAttendanceTab extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final int absentCount = records
-        .where((e) => e['status'] == 'absent')
-        .length;
+  State<_ClassAttendanceTab> createState() => _ClassAttendanceTabState();
+}
 
-    // Group records by dateGroup
+class _ClassAttendanceTabState extends State<_ClassAttendanceTab> {
+  // Status filter: 'all', 'present', 'absent', 'pending'
+  String _statusFilter = 'all';
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    final theme = widget.theme;
+    final records = widget.records;
+
+    final int absentCount =
+        records.where((e) => e['status'] == 'absent').length;
+    final int pendingCount =
+        records.where((e) => e['status'] == 'pending').length;
+
+    // Apply status filter
+    final filteredRecords = _statusFilter == 'all'
+        ? records
+        : records
+            .where((e) => e['status'] == _statusFilter)
+            .toList();
+
+    // Group filtered records by dateGroup
     final Map<String, List<Map<String, dynamic>>> grouped = {};
-    for (final record in records) {
+    for (final record in filteredRecords) {
       final key = record['dateGroup'] as String;
       grouped.putIfAbsent(key, () => []).add(record);
     }
@@ -1345,6 +1429,7 @@ class _ClassAttendanceTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
       children: [
+        // ── Stat chips ───────────────────────────────────
         FadeSlideY(
           delay: const Duration(milliseconds: 100),
           child: Row(
@@ -1352,12 +1437,12 @@ class _ClassAttendanceTab extends StatelessWidget {
               Expanded(
                 child: _StatChip(
                   label: 'Present',
-                  value: '$presentCount',
+                  value: '${widget.presentCount}',
                   color: AppStyles.successGreen,
                   isDark: isDark,
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               Expanded(
                 child: _StatChip(
                   label: 'Absent',
@@ -1366,94 +1451,212 @@ class _ClassAttendanceTab extends StatelessWidget {
                   isDark: isDark,
                 ),
               ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _StatChip(
+                  label: 'Pending',
+                  value: '$pendingCount',
+                  color: AppStyles.amberWarning,
+                  isDark: isDark,
+                ),
+              ),
             ],
           ),
         ),
-        const SizedBox(height: 20),
-        ...groups.asMap().entries.map((groupEntry) {
-          final gi = groupEntry.key;
-          final groupDate = groupEntry.value.key;
-          final groupRecords = groupEntry.value.value;
+        const SizedBox(height: 14),
 
-          return FadeSlideY(
-            delay: Duration(milliseconds: 160 + (gi * 80)),
+        // ── Status filter pills ──────────────────────────
+        FadeSlideY(
+          delay: const Duration(milliseconds: 140),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _FilterPill(
+                  label: 'All',
+                  isSelected: _statusFilter == 'all',
+                  color: theme.primaryColor,
+                  isDark: isDark,
+                  onTap: () => setState(() => _statusFilter = 'all'),
+                ),
+                const SizedBox(width: 8),
+                _FilterPill(
+                  label: 'Present',
+                  isSelected: _statusFilter == 'present',
+                  color: AppStyles.successGreen,
+                  isDark: isDark,
+                  onTap: () => setState(() => _statusFilter = 'present'),
+                ),
+                const SizedBox(width: 8),
+                _FilterPill(
+                  label: 'Absent',
+                  isSelected: _statusFilter == 'absent',
+                  color: AppStyles.errorRed,
+                  isDark: isDark,
+                  onTap: () => setState(() => _statusFilter = 'absent'),
+                ),
+                const SizedBox(width: 8),
+                _FilterPill(
+                  label: 'Pending',
+                  isSelected: _statusFilter == 'pending',
+                  color: AppStyles.amberWarning,
+                  isDark: isDark,
+                  onTap: () => setState(() => _statusFilter = 'pending'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // ── Records ──────────────────────────────────────
+        if (filteredRecords.isEmpty)
+          Center(
             child: Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Date header with accent line
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 3,
-                          height: 16,
-                          decoration: BoxDecoration(
-                            color: theme.primaryColor,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Text(
-                          groupDate,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color:
-                                theme.textTheme.displayLarge?.color ??
-                                AppStyles.textDark,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // All periods in unified card
-                  Container(
-                    decoration: BoxDecoration(
-                      color: theme.cardTheme.color ?? Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(
-                            alpha: isDark ? 0.15 : 0.05,
-                          ),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      children: [
-                        for (int pi = 0; pi < groupRecords.length; pi++) ...[
-                          _ClassPeriodRow(
-                            record: groupRecords[pi],
-                            theme: theme,
-                            isDark: isDark,
-                          ),
-                          if (pi < groupRecords.length - 1)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                              ),
-                              child: Divider(
-                                height: 1,
-                                color: isDark
-                                    ? Colors.white.withValues(alpha: 0.08)
-                                    : Colors.black.withValues(alpha: 0.06),
-                              ),
-                            ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
+              padding: const EdgeInsets.only(top: 40),
+              child: Text(
+                'No $_statusFilter records found.',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: AppStyles.textGray.withValues(alpha: 0.7),
+                ),
               ),
             ),
-          );
-        }),
+          )
+        else
+          ...groups.asMap().entries.map((groupEntry) {
+            final gi = groupEntry.key;
+            final groupDate = groupEntry.value.key;
+            final groupRecords = groupEntry.value.value;
+
+            return FadeSlideY(
+              delay: Duration(milliseconds: 160 + (gi * 80)),
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 3,
+                            height: 16,
+                            decoration: BoxDecoration(
+                              color: theme.primaryColor,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            groupDate,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color:
+                                  theme.textTheme.displayLarge?.color ??
+                                  AppStyles.textDark,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: theme.cardTheme.color ?? Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(
+                              alpha: isDark ? 0.15 : 0.05,
+                            ),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          for (int pi = 0;
+                              pi < groupRecords.length;
+                              pi++) ...[
+                            _ClassPeriodRow(
+                              record: groupRecords[pi],
+                              theme: theme,
+                              isDark: isDark,
+                            ),
+                            if (pi < groupRecords.length - 1)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                ),
+                                child: Divider(
+                                  height: 1,
+                                  color: isDark
+                                      ? Colors.white.withValues(alpha: 0.08)
+                                      : Colors.black.withValues(alpha: 0.06),
+                                ),
+                              ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
       ],
+    );
+  }
+}
+
+class _FilterPill extends StatelessWidget {
+  final String label;
+  final bool isSelected;
+  final Color color;
+  final bool isDark;
+  final VoidCallback onTap;
+
+  const _FilterPill({
+    required this.label,
+    required this.isSelected,
+    required this.color,
+    required this.isDark,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? color
+              : color.withValues(alpha: isDark ? 0.12 : 0.08),
+          borderRadius: BorderRadius.circular(50),
+          border: Border.all(
+            color: isSelected
+                ? color
+                : color.withValues(alpha: 0.3),
+            width: 1.5,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: isSelected
+                ? Colors.white
+                : color,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1474,11 +1677,19 @@ class _ClassPeriodRow extends StatelessWidget {
     final status = record['status'] as String;
     final Color statusColor = status == 'present'
         ? AppStyles.successGreen
+        : status == 'pending'
+        ? AppStyles.amberWarning
         : AppStyles.errorRed;
     final IconData statusIcon = status == 'present'
         ? Icons.check_circle_rounded
+        : status == 'pending'
+        ? Icons.hourglass_top_rounded
         : Icons.cancel_rounded;
-    final String statusLabel = status == 'present' ? 'Present' : 'Absent';
+    final String statusLabel = status == 'present'
+        ? 'Present'
+        : status == 'pending'
+        ? 'Pending'
+        : 'Absent';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),

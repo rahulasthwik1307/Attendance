@@ -288,11 +288,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     });
   }
 
-  // ── CHANGE THESE COORDINATES BEFORE EXECUTION ──
-  // Currently set to test location — replace with college coordinates tomorrow
-  static const double _campusLat = 17.402564;
-  static const double _campusLng = 78.652667;
-  static const double _campusRadiusMeters = 200.0;
+
 
   Future<String> _checkGeofence() async {
     try {
@@ -306,6 +302,22 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       }
       if (permission == LocationPermission.deniedForever) return 'off';
 
+      // Fetch geofence settings from Supabase
+      final geoData = await Supabase.instance.client
+          .from('geofence_settings')
+          .select('latitude, longitude, radius_meters')
+          .limit(1)
+          .maybeSingle();
+
+      if (geoData == null) {
+        debugPrint('[GEOFENCE] No geofence settings found in Supabase');
+        return 'off';
+      }
+
+      final double campusLat = (geoData['latitude'] as num).toDouble();
+      final double campusLng = (geoData['longitude'] as num).toDouble();
+      final double campusRadius = (geoData['radius_meters'] as num).toDouble();
+
       final Position position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
@@ -315,14 +327,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       final double distance = Geolocator.distanceBetween(
         position.latitude,
         position.longitude,
-        _campusLat,
-        _campusLng,
+        campusLat,
+        campusLng,
       );
 
       debugPrint(
-        '[GEOFENCE] Distance from campus: ${distance.toStringAsFixed(1)}m',
+        '[GEOFENCE] Distance from campus: ${distance.toStringAsFixed(1)}m, radius: ${campusRadius}m',
       );
-      return distance <= _campusRadiusMeters ? 'ok' : 'outside';
+      return distance <= campusRadius ? 'ok' : 'outside';
     } catch (e) {
       debugPrint('[GEOFENCE] Error: $e');
       return 'off';

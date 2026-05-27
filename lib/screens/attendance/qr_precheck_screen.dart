@@ -68,28 +68,26 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
 
     // ── Check 2: Geofence from Supabase ─────────────────────────
     try {
-      double campusLat = 17.402564;
-      double campusLng = 78.652667;
-      double campusRadius = 200.0;
+      // Fetch geofence settings from Supabase — no hardcoded fallback
+      final geoData = await Supabase.instance.client
+          .from('geofence_settings')
+          .select('latitude, longitude, radius_meters')
+          .limit(1)
+          .maybeSingle();
 
-      try {
-        final geoData = await Supabase.instance.client
-            .from('geofence_settings')
-            .select('latitude, longitude, radius_meters')
-            .limit(1)
-            .maybeSingle();
-
-        if (geoData != null &&
-            geoData['latitude'] != null &&
-            geoData['longitude'] != null &&
-            geoData['radius_meters'] != null) {
-          campusLat = (geoData['latitude'] as num).toDouble();
-          campusLng = (geoData['longitude'] as num).toDouble();
-          campusRadius = (geoData['radius_meters'] as num).toDouble();
-        }
-      } catch (e) {
-        debugPrint('[PRECHECK] Geofence fetch failed, using fallback: $e');
+      if (geoData == null ||
+          geoData['latitude'] == null ||
+          geoData['longitude'] == null ||
+          geoData['radius_meters'] == null) {
+        debugPrint('[PRECHECK] No geofence settings found in Supabase');
+        setState(() => _locationState = _CheckState.error);
+        _handleFailure();
+        return;
       }
+
+      final double campusLat = (geoData['latitude'] as num).toDouble();
+      final double campusLng = (geoData['longitude'] as num).toDouble();
+      final double campusRadius = (geoData['radius_meters'] as num).toDouble();
 
       // Check device location permission
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
