@@ -248,12 +248,24 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     ).animate(CurvedAnimation(parent: _ringController, curve: Curves.linear));
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Read mode from route arguments
+      final String? mode =
+          ModalRoute.of(context)?.settings.arguments as String?;
+      final bool isPasswordReset = mode == 'password_reset';
+
+      if (isPasswordReset) {
+        // Skip location check for password reset — student can be anywhere
+        setState(() => _locationVerified = true);
+        await _initializeCamera();
+        return;
+      }
+
+      // Location check required for attendance flows only
       _locationCardController.forward();
 
       await Future.delayed(const Duration(milliseconds: 500));
       if (!mounted) return;
 
-      // Real location check
       final String locationResult = await _checkGeofence();
       if (!mounted) return;
 
@@ -283,7 +295,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       if (!mounted) return;
       await _locationCardController.reverse();
 
-      // Auto-start camera immediately after location check passes
       await _initializeCamera();
     });
   }
@@ -898,28 +909,31 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
         _countdownTimer?.cancel();
 
-        // Save college attendance record
-        try {
-          final user = Supabase.instance.client.auth.currentUser;
-          if (user != null) {
-            final todayStr = DateTime.now().toIso8601String().split('T')[0];
-            await Supabase.instance.client.from('college_attendance').upsert({
-              'student_id': user.id,
-              'date': todayStr,
-              'marked_at': DateTime.now().toUtc().toIso8601String(),
-              'face_verified': true,
-              'status': 'present',
-            }, onConflict: 'student_id,date');
-            debugPrint('[FACE_VER] College attendance saved');
+        final String? mode =
+            ModalRoute.of(context)?.settings.arguments as String?;
+
+        // Save college attendance only for regular attendance flow
+        if (mode != 'password_reset' && mode != 'face_reset') {
+          try {
+            final user = Supabase.instance.client.auth.currentUser;
+            if (user != null) {
+              final todayStr = DateTime.now().toIso8601String().split('T')[0];
+              await Supabase.instance.client.from('college_attendance').upsert({
+                'student_id': user.id,
+                'date': todayStr,
+                'marked_at': DateTime.now().toUtc().toIso8601String(),
+                'face_verified': true,
+                'status': 'present',
+              }, onConflict: 'student_id,date');
+              debugPrint('[FACE_VER] College attendance saved');
+            }
+          } catch (e) {
+            debugPrint('[FACE_VER] Failed to save college attendance: $e');
           }
-        } catch (e) {
-          debugPrint('[FACE_VER] Failed to save college attendance: $e');
         }
 
         if (!mounted) return;
 
-        final String? mode =
-            ModalRoute.of(context)?.settings.arguments as String?;
         if (mode == 'password_reset') {
           Navigator.of(
             context,

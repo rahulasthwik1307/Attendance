@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/app_styles.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
@@ -13,6 +16,12 @@ class ForgotPasswordScreen extends StatefulWidget {
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
     with TickerProviderStateMixin {
+  final _rollController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  bool _isLoading = false;
+  String? _errorMessage;
+
   late AnimationController _breatheController;
   late Animation<double> _breatheAnimation;
   late AnimationController _scanController;
@@ -49,10 +58,70 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
 
   @override
   void dispose() {
+    _rollController.dispose();
     _breatheController.dispose();
     _scanController.dispose();
     _pulseController.dispose();
     super.dispose();
+  }
+
+  Future<void> _onVerifyFace() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final rollNumber = _rollController.text.trim().toUpperCase();
+
+      // Call Next.js API to get temporary session
+      // Local development + production support
+      const apiBase = String.fromEnvironment(
+        'API_BASE',
+        defaultValue: 'http://192.168.29.97:3000',
+      );
+
+      final response = await http.post(
+        Uri.parse('$apiBase/api/auth/forgot-password-token'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'roll_number': rollNumber}),
+      );
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (response.statusCode != 200) {
+        setState(() {
+          _errorMessage = data['error'] as String? ?? 'Something went wrong.';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      final refreshToken = data['refresh_token'] as String;
+
+      // Set the temporary session in Supabase client
+      await Supabase.instance.client.auth.setSession(refreshToken);
+
+      if (!mounted) return;
+
+      setState(() => _isLoading = false);
+
+      // Navigate to real face verification with password_reset mode
+      Navigator.of(
+        context,
+      ).pushNamed('/face_verification', arguments: 'password_reset');
+    } catch (e) {
+      debugPrint('[FORGOT_PW] Error: $e');
+
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Error: ${e.toString()}';
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   @override
@@ -63,6 +132,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
         theme.textTheme.displayLarge?.color ?? AppStyles.textDark;
     final subtitleColor =
         theme.textTheme.bodyMedium?.color ?? AppStyles.textGray;
+    final borderColor = isDark
+        ? Colors.white.withValues(alpha: 0.10)
+        : Colors.black.withValues(alpha: 0.07);
+    final inputFill = isDark
+        ? const Color(0xFF1E2433)
+        : AppStyles.backgroundLight;
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -71,108 +146,87 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
         elevation: 0,
         centerTitle: true,
         leading: IconButton(
-          icon: const Icon(
+          icon: Icon(
             Icons.arrow_back_ios_new_rounded,
-            color: AppStyles.textDark,
+            color: headingColor,
             size: 20,
           ),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: const Text(
+        title: Text(
           'Forgot Password',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w700,
-            color: AppStyles.textDark,
+            color: headingColor,
           ),
         ),
       ),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 28.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Spacer(flex: 1),
+              const SizedBox(height: 16),
 
-              // ── Hero: Face Scan Visual ─────────────────────────────────────
-              Flexible(
-                flex: 12,
-                child: FadeSlideY(
-                  delay: const Duration(milliseconds: 160),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final heroSize = constraints.maxHeight.clamp(
-                        160.0,
-                        220.0,
-                      );
-                      return Center(
-                        child: SizedBox(
-                          width: heroSize,
-                          height: heroSize,
-                          child: AnimatedBuilder(
-                            animation: Listenable.merge([
-                              _breatheAnimation,
-                              _scanController,
-                              _pulseAnimation,
-                            ]),
-                            builder: (context, child) {
-                              return Transform.scale(
-                                scale: _breatheAnimation.value,
-                                child: CustomPaint(
-                                  painter: _SecurityScanPainter(
-                                    progress: _scanController.value,
-                                    pulse: _pulseAnimation.value,
-                                    primaryColor: theme.primaryColor,
-                                    isDark: isDark,
-                                  ),
-                                  child: child,
-                                ),
-                              );
-                            },
-                            child: Center(
-                              child: Builder(
-                                builder: (context) {
-                                  final heroSize = constraints.maxHeight.clamp(
-                                    160.0,
-                                    220.0,
-                                  );
-                                  return Container(
-                                    width: heroSize * 0.50,
-                                    height: heroSize * 0.50,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: theme.primaryColor.withValues(
-                                        alpha: 0.08,
-                                      ),
-                                    ),
-                                    child: Icon(
-                                      Icons.lock_person_rounded,
-                                      size: heroSize * 0.265,
-                                      color: theme.primaryColor,
-                                    ),
-                                  );
-                                },
-                              ),
+              // ── Hero animation ──────────────────────────────────────────
+              FadeSlideY(
+                delay: const Duration(milliseconds: 160),
+                child: Center(
+                  child: SizedBox(
+                    width: 180,
+                    height: 180,
+                    child: AnimatedBuilder(
+                      animation: Listenable.merge([
+                        _breatheAnimation,
+                        _scanController,
+                        _pulseAnimation,
+                      ]),
+                      builder: (context, child) {
+                        return Transform.scale(
+                          scale: _breatheAnimation.value,
+                          child: CustomPaint(
+                            painter: _SecurityScanPainter(
+                              progress: _scanController.value,
+                              pulse: _pulseAnimation.value,
+                              primaryColor: theme.primaryColor,
+                              isDark: isDark,
                             ),
+                            child: child,
+                          ),
+                        );
+                      },
+                      child: Center(
+                        child: Container(
+                          width: 90,
+                          height: 90,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: theme.primaryColor.withValues(alpha: 0.08),
+                          ),
+                          child: Icon(
+                            Icons.lock_person_rounded,
+                            size: 48,
+                            color: theme.primaryColor,
                           ),
                         ),
-                      );
-                    },
+                      ),
+                    ),
                   ),
                 ),
               ),
 
-              const Spacer(flex: 1),
+              const SizedBox(height: 24),
 
-              // ── Headline ──────────────────────────────────────────────────
+              // ── Heading ─────────────────────────────────────────────────
               FadeSlideY(
                 delay: const Duration(milliseconds: 280),
                 child: Text(
                   'Reset Your Password',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 28,
+                    fontSize: 26,
                     fontWeight: FontWeight.w800,
                     height: 1.2,
                     color: headingColor,
@@ -182,24 +236,139 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
               ),
               const SizedBox(height: 10),
 
-              // ── Sub-text ──────────────────────────────────────────────────
               FadeSlideY(
-                delay: const Duration(milliseconds: 360),
+                delay: const Duration(milliseconds: 340),
                 child: Text(
-                  'Verify your face to reset your password.\nNo OTP. No email. Just you.',
+                  'Enter your roll number, then verify\nyour face to reset your password.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 14,
                     height: 1.55,
                     color: subtitleColor,
-                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ),
 
-              const Spacer(flex: 2),
+              const SizedBox(height: 28),
 
-              // ── Security Badge ────────────────────────────────────────────
+              // ── Roll number input ────────────────────────────────────────
+              FadeSlideY(
+                delay: const Duration(milliseconds: 400),
+                child: Form(
+                  key: _formKey,
+                  child: TextFormField(
+                    controller: _rollController,
+                    textCapitalization: TextCapitalization.characters,
+                    textInputAction: TextInputAction.done,
+                    onFieldSubmitted: (_) => _onVerifyFace(),
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: headingColor,
+                      letterSpacing: 0.5,
+                    ),
+                    decoration: InputDecoration(
+                      labelText: 'Roll Number',
+                      hintText: 'e.g. 227Z1A6755',
+                      labelStyle: const TextStyle(
+                        color: AppStyles.textGray,
+                        fontSize: 14,
+                      ),
+                      hintStyle: TextStyle(
+                        color: AppStyles.textGray.withValues(alpha: 0.45),
+                        fontSize: 14,
+                      ),
+                      prefixIcon: Icon(
+                        Icons.badge_outlined,
+                        size: 20,
+                        color: AppStyles.textGray.withValues(alpha: 0.65),
+                      ),
+                      filled: true,
+                      fillColor: inputFill,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 16,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: borderColor, width: 1),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(
+                          color: theme.primaryColor,
+                          width: 1.5,
+                        ),
+                      ),
+                      errorBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: AppStyles.errorRed,
+                          width: 1.2,
+                        ),
+                      ),
+                      focusedErrorBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: AppStyles.errorRed,
+                          width: 1.5,
+                        ),
+                      ),
+                    ),
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) {
+                        return 'Please enter your roll number';
+                      }
+                      return null;
+                    },
+                  ),
+                ),
+              ),
+
+              // ── Error message ────────────────────────────────────────────
+              if (_errorMessage != null) ...[
+                const SizedBox(height: 12),
+                FadeSlideY(
+                  delay: Duration.zero,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppStyles.errorRed.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: AppStyles.errorRed.withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.error_outline_rounded,
+                          color: AppStyles.errorRed,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _errorMessage!,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: AppStyles.errorRed,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 24),
+
+              // ── Security badge ────────────────────────────────────────────
               FadeSlideY(
                 delay: const Duration(milliseconds: 440),
                 child: Center(
@@ -226,7 +395,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          'Biometric — no admin required',
+                          'Face verified — no admin required',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
@@ -241,7 +410,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
 
               const SizedBox(height: 20),
 
-              // ── Primary CTA: Verify Face ───────────────────────────────────
+              // ── Verify Face button ────────────────────────────────────────
               FadeSlideY(
                 delay: const Duration(milliseconds: 500),
                 child: Container(
@@ -256,26 +425,44 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                     ],
                   ),
                   child: AnimatedButton(
-                    onPressed: () => Navigator.of(
-                      context,
-                    ).pushNamed('/forgot_password_face_verify'),
+                    onPressed: _isLoading ? () {} : _onVerifyFace,
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 20),
                       elevation: 0,
                     ),
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.face_retouching_natural_rounded, size: 20),
-                        SizedBox(width: 8),
-                        Text('Verify Face', style: TextStyle(fontSize: 16)),
-                      ],
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      child: _isLoading
+                          ? const SizedBox(
+                              key: ValueKey('loading'),
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Row(
+                              key: ValueKey('default'),
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.face_retouching_natural_rounded,
+                                  size: 20,
+                                ),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Verify Face',
+                                  style: TextStyle(fontSize: 16),
+                                ),
+                              ],
+                            ),
                     ),
                   ),
                 ),
               ),
 
-              const Spacer(flex: 2),
+              const SizedBox(height: 32),
             ],
           ),
         ),
@@ -284,7 +471,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
   }
 }
 
-// ─── Security Scan Painter ──────────────────────────────────────────────────
+// ─── Security Scan Painter (unchanged) ─────────────────────────────────────
 class _SecurityScanPainter extends CustomPainter {
   final double progress;
   final double pulse;
@@ -304,20 +491,17 @@ class _SecurityScanPainter extends CustomPainter {
     final outerRadius = size.width / 2;
     final midRadius = outerRadius * 0.78;
 
-    // Pulsing outer glow
     final glowPaint = Paint()
       ..color = primaryColor.withValues(alpha: 0.04 + pulse * 0.06)
       ..style = PaintingStyle.fill;
     canvas.drawCircle(center, outerRadius, glowPaint);
 
-    // Mid ring
     final ringPaint = Paint()
       ..color = primaryColor.withValues(alpha: isDark ? 0.18 : 0.12)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
     canvas.drawCircle(center, midRadius, ringPaint);
 
-    // Animated scanning arc
     final sweepPaint = Paint()
       ..shader = SweepGradient(
         center: Alignment.center,
@@ -343,7 +527,6 @@ class _SecurityScanPainter extends CustomPainter {
       sweepPaint,
     );
 
-    // Corner brackets
     _drawBrackets(canvas, center, midRadius * 0.88, primaryColor);
   }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/app_styles.dart';
 import '../../widgets/custom_bottom_nav.dart';
 import '../../widgets/fade_slide_y.dart';
@@ -271,7 +272,10 @@ class _SettingsScreenState extends State<SettingsScreen>
                         isDestructive: false,
                         onTap: () => Navigator.of(
                           context,
-                        ).pushNamed('/forgot_password_face_verify'),
+                        ).pushNamed(
+                          '/face_verification',
+                          arguments: 'password_reset',
+                        ),
                       ),
                       const Divider(height: 1, color: Color(0xFFE2E8F0)),
                       _buildSettingsItem(
@@ -289,8 +293,12 @@ class _SettingsScreenState extends State<SettingsScreen>
                         onTap: () async {
                           HapticFeedback.lightImpact();
                           await NotificationService.removeTokenOnLogout();
+                          await Supabase.instance.client.auth.signOut();
                           if (!context.mounted) return;
-                          Navigator.of(context).pushReplacementNamed('/home');
+                          Navigator.of(context).pushNamedAndRemoveUntil(
+                            '/home',
+                            (route) => false,
+                          );
                         },
                       ),
                     ],
