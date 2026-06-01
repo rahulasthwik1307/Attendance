@@ -19,6 +19,7 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
   _CheckState _locationState = _CheckState.pending;
   bool _hasFailed = false;
   bool _isLocationOff = false;
+  bool _isMockLocation = false;
 
   @override
   void initState() {
@@ -118,6 +119,31 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
           _isLocationOff = true;
         });
         _handleFailure();
+        return;
+      }
+
+      // Check for GPS spoofing / mock location
+      bool isMock = false;
+      try {
+        await Geolocator.getLocationAccuracy();
+        // On Android, check if mock locations are enabled
+        final testPosition = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+          ),
+        );
+        isMock = testPosition.isMocked;
+      } catch (_) {}
+
+      if (isMock) {
+        debugPrint('[PRECHECK] Mock location detected — rejecting');
+        if (mounted) {
+          setState(() {
+            _locationState = _CheckState.error;
+            _isMockLocation = true;
+          });
+          _handleFailure();
+        }
         return;
       }
 
@@ -288,6 +314,8 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
                     subtitleSuccess: 'Location verified — inside campus',
                     subtitleError: _isLocationOff
                         ? 'Location is turned off — please enable it'
+                        : _isMockLocation
+                        ? 'GPS spoofing detected — use real location'
                         : 'You are outside the campus boundary',
                     icon: Icons.location_on_rounded,
                     state: _locationState,

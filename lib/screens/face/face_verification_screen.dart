@@ -275,6 +275,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         });
         final String message = locationResult == 'off'
             ? 'Location is turned off. Please enable location to mark attendance.'
+            : locationResult == 'mock'
+            ? 'GPS spoofing detected. Use your real location to mark attendance.'
             : 'You must be on campus to mark attendance.';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -334,6 +336,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           accuracy: LocationAccuracy.high,
         ),
       );
+
+      // Reject mock/spoofed locations
+      if (position.isMocked) {
+        debugPrint('[GEOFENCE] Mock location detected — rejecting');
+        return 'mock';
+      }
 
       final double distance = Geolocator.distanceBetween(
         position.latitude,

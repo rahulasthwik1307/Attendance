@@ -78,6 +78,128 @@ class _SettingsScreenState extends State<SettingsScreen>
     if (index == 3) Navigator.of(context).pushReplacementNamed('/profile');
   }
 
+  void _showAboutDialog() {
+    final theme = Theme.of(context);
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        backgroundColor: theme.cardTheme.color ?? Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: theme.primaryColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(
+                  Icons.school_rounded,
+                  size: 32,
+                  color: theme.primaryColor,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Factor Attendance',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Version 1.0.0',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: theme.primaryColor.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: theme.primaryColor.withValues(alpha: 0.15),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    _AboutRow(
+                      icon: Icons.location_city_rounded,
+                      label: 'College',
+                      value: 'NNRG College, Hyderabad',
+                      theme: theme,
+                    ),
+                    const SizedBox(height: 8),
+                    _AboutRow(
+                      icon: Icons.face_retouching_natural_rounded,
+                      label: 'Auth',
+                      value: 'Face Recognition + Geofence',
+                      theme: theme,
+                    ),
+                    const SizedBox(height: 8),
+                    _AboutRow(
+                      icon: Icons.security_rounded,
+                      label: 'Backend',
+                      value: 'Supabase + Next.js',
+                      theme: theme,
+                    ),
+                    const SizedBox(height: 8),
+                    _AboutRow(
+                      icon: Icons.build_rounded,
+                      label: 'Built with',
+                      value: 'Flutter + TensorFlow Lite',
+                      theme: theme,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Smart attendance management for NNRG College. Secure, fast and reliable with AI-powered face verification.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.5,
+                  color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: theme.primaryColor,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text(
+                    'Close',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -281,8 +403,8 @@ class _SettingsScreenState extends State<SettingsScreen>
                       _buildSettingsItem(
                         icon: Icons.info_outline_rounded,
                         title: 'About App',
-                        subtitle: 'Learn more about this application',
-                        onTap: () {},
+                        subtitle: 'Version, college and app information',
+                        onTap: () => _showAboutDialog(),
                       ),
                       const Divider(height: 1, color: Color(0xFFE2E8F0)),
                       _buildSettingsItem(
@@ -557,6 +679,53 @@ class _SettingsScreenState extends State<SettingsScreen>
           ),
         ],
       ),
+    );
+  }
+}
+
+class _AboutRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final ThemeData theme;
+
+  const _AboutRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.theme,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(
+          icon,
+          size: 16,
+          color: theme.primaryColor,
+        ),
+        const SizedBox(width: 8),
+        Text(
+          '$label: ',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }
