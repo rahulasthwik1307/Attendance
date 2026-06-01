@@ -178,13 +178,15 @@ class _SignInScreenState extends State<SignInScreen>
       } else if (message.contains('Email not confirmed')) {
         message = 'Account not activated. Contact your teacher.';
       }
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
 
@@ -319,16 +321,18 @@ class _SignInScreenState extends State<SignInScreen>
         message = 'Saved credentials are outdated. Please sign in manually.';
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
         _isSuccess = false;
       });
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
 
@@ -337,7 +341,10 @@ class _SignInScreenState extends State<SignInScreen>
   }
 
   Widget _buildHeader(
-      ThemeData theme, Color headingColor, Color subtitleColor) {
+    ThemeData theme,
+    Color headingColor,
+    Color subtitleColor,
+  ) {
     return Column(
       children: [
         FadeSlideY(
@@ -349,7 +356,11 @@ class _SignInScreenState extends State<SignInScreen>
               color: theme.primaryColor.withValues(alpha: 0.09),
               borderRadius: BorderRadius.circular(18),
             ),
-            child: Icon(Icons.login_rounded, size: 32, color: theme.primaryColor),
+            child: Icon(
+              Icons.login_rounded,
+              size: 32,
+              color: theme.primaryColor,
+            ),
           ),
         ),
         const SizedBox(height: 20),
@@ -443,7 +454,9 @@ class _SignInScreenState extends State<SignInScreen>
                   onFieldSubmitted: (_) => _onSignIn(),
                   isDark: isDark,
                   validator: (v) {
-                    if (v == null || v.isEmpty) return 'Please enter your password';
+                    if (v == null || v.isEmpty) {
+                      return 'Please enter your password';
+                    }
                     if (v.length < 6) return 'At least 6 characters required';
                     return null;
                   },
@@ -529,15 +542,10 @@ class _SignInScreenState extends State<SignInScreen>
 
               // ── OR divider + fingerprint — only when saved ─
               if (_biometricAvailable && _biometricSaved) ...[
-                const SizedBox(height: 20),
+                const SizedBox(height: 12),
                 Row(
                   children: [
-                    Expanded(
-                      child: Divider(
-                        color: borderColor,
-                        thickness: 1,
-                      ),
-                    ),
+                    Expanded(child: Divider(color: borderColor, thickness: 1)),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       child: Text(
@@ -549,15 +557,10 @@ class _SignInScreenState extends State<SignInScreen>
                         ),
                       ),
                     ),
-                    Expanded(
-                      child: Divider(
-                        color: borderColor,
-                        thickness: 1,
-                      ),
-                    ),
+                    Expanded(child: Divider(color: borderColor, thickness: 1)),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 10),
 
                 // ── Fingerprint button ──────────────────────
                 GestureDetector(
@@ -576,7 +579,7 @@ class _SignInScreenState extends State<SignInScreen>
                     curve: Curves.easeInOut,
                     child: Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
                       decoration: BoxDecoration(
                         color: theme.primaryColor.withValues(alpha: 0.06),
                         borderRadius: BorderRadius.circular(14),
@@ -622,8 +625,9 @@ class _SignInScreenState extends State<SignInScreen>
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w500,
-                                  color: theme.primaryColor
-                                      .withValues(alpha: 0.6),
+                                  color: theme.primaryColor.withValues(
+                                    alpha: 0.6,
+                                  ),
                                 ),
                               ),
                             ],
