@@ -80,7 +80,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
       // Local development + production support
       const apiBase = String.fromEnvironment(
         'API_BASE',
-        defaultValue: 'http://192.168.29.97:3000',
+        defaultValue: 'https://attend-secure.vercel.app',
       );
 
       final response = await http.post(
@@ -101,7 +101,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
 
       final refreshToken = data['refresh_token'] as String;
 
-      // Set the temporary session in Supabase client
+      // Establish session using both tokens
       await Supabase.instance.client.auth.setSession(refreshToken);
 
       if (!mounted) return;
@@ -117,7 +117,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
 
       if (mounted) {
         setState(() {
-          _errorMessage = 'Error: ${e.toString()}';
+          _errorMessage = 'Network error. Check your connection and try again.';
           _isLoading = false;
         });
       }
