@@ -130,6 +130,28 @@ class _SignInScreenState extends State<SignInScreen>
         final bool isRejected = data['is_rejected'] == true;
         final bool hasFace = data['embedding_a'] != null;
 
+        // Check must_change_password from users table
+        final userData = await Supabase.instance.client
+            .from('users')
+            .select('must_change_password')
+            .eq('id', currentUser.id)
+            .maybeSingle();
+        final bool mustChangePassword =
+            userData?['must_change_password'] == true;
+
+        if (!mounted) return;
+
+        if (mustChangePassword) {
+          // Sign in succeeded but teacher forced a password reset
+          // Go directly to set new password — no face needed
+          AuthFlowState.instance.passwordSet = true;
+          AuthFlowState.instance.faceRegistered = true;
+          AuthFlowState.instance.isFirstTimeUser = false;
+          if (!mounted) return;
+          Navigator.pushReplacementNamed(context, '/set_new_password');
+          return;
+        }
+
         if (!hasFace && !isRejected) {
           setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
@@ -251,6 +273,28 @@ class _SignInScreenState extends State<SignInScreen>
         final bool isApproved = data['is_approved'] == true;
         final bool isRejected = data['is_rejected'] == true;
         final bool hasFace = data['embedding_a'] != null;
+
+        // Check must_change_password from users table
+        final userData = await Supabase.instance.client
+            .from('users')
+            .select('must_change_password')
+            .eq('id', currentUser.id)
+            .maybeSingle();
+        final bool mustChangePassword =
+            userData?['must_change_password'] == true;
+
+        if (!mounted) return;
+
+        if (mustChangePassword) {
+          // Sign in succeeded but teacher forced a password reset
+          // Go directly to set new password — no face needed
+          AuthFlowState.instance.passwordSet = true;
+          AuthFlowState.instance.faceRegistered = true;
+          AuthFlowState.instance.isFirstTimeUser = false;
+          if (!mounted) return;
+          Navigator.pushReplacementNamed(context, '/set_new_password');
+          return;
+        }
 
         // Face rejected — password still valid, do not clear credentials
         if (isRejected) {

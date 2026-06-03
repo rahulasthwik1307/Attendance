@@ -80,120 +80,137 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   void _showAboutDialog() {
     final theme = Theme.of(context);
+  
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         backgroundColor: theme.cardTheme.color ?? Colors.white,
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: theme.primaryColor.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Icon(
-                  Icons.school_rounded,
-                  size: 32,
-                  color: theme.primaryColor,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Factor Attendance',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Version 1.0.0',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: theme.primaryColor.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: theme.primaryColor.withValues(alpha: 0.15),
+        elevation: 8,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24), // Better side padding
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: 380,           // Prevents it from becoming too wide on tablets
+            maxHeight: MediaQuery.of(context).size.height * 0.75,
+          ),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Icon
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: theme.primaryColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Icon(
+                    Icons.school_rounded,
+                    size: 36,
+                    color: theme.primaryColor,
                   ),
                 ),
-                child: Column(
-                  children: [
-                    _AboutRow(
-                      icon: Icons.location_city_rounded,
-                      label: 'College',
-                      value: 'NNRG College, Hyderabad',
-                      theme: theme,
-                    ),
-                    const SizedBox(height: 8),
-                    _AboutRow(
-                      icon: Icons.face_retouching_natural_rounded,
-                      label: 'Auth',
-                      value: 'Face Recognition + Geofence',
-                      theme: theme,
-                    ),
-                    const SizedBox(height: 8),
-                    _AboutRow(
-                      icon: Icons.security_rounded,
-                      label: 'Backend',
-                      value: 'Supabase + Next.js',
-                      theme: theme,
-                    ),
-                    const SizedBox(height: 8),
-                    _AboutRow(
-                      icon: Icons.build_rounded,
-                      label: 'Built with',
-                      value: 'Flutter + TensorFlow Lite',
-                      theme: theme,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Smart attendance management for NNRG College. Secure, fast and reliable with AI-powered face verification.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 12,
-                  height: 1.5,
-                  color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
-                ),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: theme.primaryColor,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                  child: const Text(
-                    'Close',
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                const SizedBox(height: 18),
+  
+                Text(
+                  'Factor Attendance',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
                   ),
                 ),
-              ),
-            ],
+                Text(
+                  'Version 1.0.0',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                  ),
+                ),
+  
+                const SizedBox(height: 20),
+  
+                // Premium Info Container
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: theme.primaryColor.withValues(alpha: 0.07),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: theme.primaryColor.withValues(alpha: 0.22),
+                      width: 1.3,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      _AboutRow(
+                        icon: Icons.location_city_rounded,
+                        label: "College",
+                        value: "NNRG College, Hyderabad",
+                        theme: theme,
+                      ),
+                      _AboutRow(
+                        icon: Icons.security_rounded,
+                        label: "Authentication",
+                        value: "Face Recognition + Geofence",
+                        theme: theme,
+                      ),
+                      _AboutRow(
+                        icon: Icons.cloud_outlined,
+                        label: "Backend",
+                        value: "Supabase + Next.js",
+                        theme: theme,
+                      ),
+                      _AboutRow(
+                        icon: Icons.code_rounded,
+                        label: "Built with",
+                        value: "Flutter + TensorFlow Lite",
+                        theme: theme,
+                      ),
+                    ],
+                  ),
+                ),
+  
+                const SizedBox(height: 20),
+  
+                // Description
+                Text(
+                  'Smart attendance management for NNRG College. Secure, fast and reliable with AI-powered face verification.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    height: 1.55,
+                    color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                  ),
+                ),
+  
+                const SizedBox(height: 24),
+  
+                // Close Button
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: theme.primaryColor,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      elevation: 0,
+                    ),
+                    child: const Text(
+                      'Close',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -698,34 +715,46 @@ class _AboutRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(
-          icon,
-          size: 16,
-          color: theme.primaryColor,
-        ),
-        const SizedBox(width: 8),
-        Text(
-          '$label: ',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
-          ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 11),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: theme.primaryColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
             ),
-            overflow: TextOverflow.ellipsis,
+            child: Icon(icon, size: 20, color: theme.primaryColor),
           ),
-        ),
-      ],
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    height: 1.4,
+                    color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

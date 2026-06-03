@@ -319,17 +319,22 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       final geoData = await Supabase.instance.client
           .from('geofence_settings')
           .select('latitude, longitude, radius_meters')
+          .order('updated_at', ascending: false)
           .limit(1)
           .maybeSingle();
 
+      debugPrint('[GEOFENCE] Raw geofence data from Supabase: $geoData');
+
       if (geoData == null) {
-        debugPrint('[GEOFENCE] No geofence settings found in Supabase');
+        debugPrint('[GEOFENCE] No geofence settings found in Supabase — returning off');
         return 'off';
       }
 
       final double campusLat = (geoData['latitude'] as num).toDouble();
       final double campusLng = (geoData['longitude'] as num).toDouble();
       final double campusRadius = (geoData['radius_meters'] as num).toDouble();
+
+      debugPrint('[GEOFENCE] Campus: lat=$campusLat lng=$campusLng radius=${campusRadius}m');
 
       final Position position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(

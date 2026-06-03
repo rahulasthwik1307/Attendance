@@ -180,6 +180,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         final settings = await supabase
             .from('geofence_settings')
             .select('latitude, longitude, radius_meters')
+            .order('updated_at', ascending: false)
             .limit(1)
             .maybeSingle();
         if (settings != null) {

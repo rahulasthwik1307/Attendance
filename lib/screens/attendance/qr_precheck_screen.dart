@@ -73,6 +73,7 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
       final geoData = await Supabase.instance.client
           .from('geofence_settings')
           .select('latitude, longitude, radius_meters')
+          .order('updated_at', ascending: false)
           .limit(1)
           .maybeSingle();
 
@@ -89,6 +90,8 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
       final double campusLat = (geoData['latitude'] as num).toDouble();
       final double campusLng = (geoData['longitude'] as num).toDouble();
       final double campusRadius = (geoData['radius_meters'] as num).toDouble();
+
+      debugPrint('[PRECHECK] Geofence: lat=$campusLat lng=$campusLng radius=$campusRadius');
 
       // Check device location permission
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
