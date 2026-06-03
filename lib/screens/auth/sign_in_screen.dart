@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../utils/app_styles.dart';
 import '../../utils/auth_flow_state.dart';
 import '../../widgets/animated_button.dart';
@@ -49,6 +50,7 @@ class _SignInScreenState extends State<SignInScreen>
       CurvedAnimation(parent: _fpPulseController, curve: Curves.easeInOut),
     );
     _initBiometric();
+    _prefillIfSaved();
   }
 
   Future<void> _initBiometric() async {
@@ -59,6 +61,18 @@ class _SignInScreenState extends State<SignInScreen>
         _biometricAvailable = available;
         _biometricSaved = saved;
       });
+    }
+  }
+
+  Future<void> _prefillIfSaved() async {
+    const storage = FlutterSecureStorage(aOptions: AndroidOptions());
+    final roll = await storage.read(key: 'biometric_roll');
+    final pass = await storage.read(key: 'biometric_pass');
+    if (roll != null && pass != null) {
+      if (mounted) {
+        _rollController.text = roll;
+        _passwordController.text = pass;
+      }
     }
   }
 
