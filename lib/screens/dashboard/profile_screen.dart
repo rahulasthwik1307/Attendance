@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:math' as math;
+import 'package:image_picker/image_picker.dart';
+import 'package:image_cropper/image_cropper.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/supabase_service.dart';
 import '../../utils/app_styles.dart';
 import '../../widgets/custom_bottom_nav.dart';
@@ -29,6 +32,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   int _totalClasses = 0;
   bool _faceApproved = false;
   bool _faceRegistered = false;
+  String? _profilePhotoUrl;
+  bool _isUploadingPhoto = false;
 
   @override
   void initState() {
@@ -55,7 +60,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             .maybeSingle(),
         supabase
             .from('users')
-            .select('full_name')
+            .select('full_name, profile_photo_url')
             .eq('id', user.id)
             .maybeSingle(),
       ]);
@@ -66,6 +71,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       if (studentData == null || userData == null) return;
 
       final fullName = userData['full_name'] as String? ?? '';
+      final String? profilePhotoUrl = userData['profile_photo_url'] as String?;
       final rollNumber = studentData['roll_number'] as String? ?? '';
       final year = studentData['year'] as String? ?? '';
       final faceRegistered = studentData['face_registered'] as bool? ?? false;
@@ -134,6 +140,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           _attendancePct = pct;
           _attendedClasses = attended;
           _totalClasses = total;
+          _profilePhotoUrl = profilePhotoUrl;
           _isLoading = false;
         });
       }
@@ -154,6 +161,198 @@ class _ProfileScreenState extends State<ProfileScreen>
     if (index == 1) Navigator.of(context).pushReplacementNamed('/history');
     if (index == 2) Navigator.of(context).pushReplacementNamed('/settings');
     if (index == 3) return;
+  }
+
+  Future<void> _onAvatarTap() async {
+    final ImagePicker picker = ImagePicker();
+
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Profile Photo',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppStyles.textDark),
+            ),
+            const SizedBox(height: 20),
+
+            // Show current photo preview if exists
+            if (_profilePhotoUrl != null) ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    maxHeight: 300,
+                    minWidth: double.infinity,
+                  ),
+                  child: Image.network(
+                    _profilePhotoUrl!,
+                    width: double.infinity,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => Container(
+                      height: 200,
+                      color: Colors.grey.shade100,
+                      child: const Icon(Icons.person, size: 60, color: Colors.grey),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            Row(
+              children: [
+                Expanded(
+                  child: _PhotoOptionButton(
+                    icon: Icons.camera_alt_rounded,
+                    label: 'Camera',
+                    onTap: () async {
+                      Navigator.pop(ctx);
+                      final XFile? file = await picker.pickImage(
+                        source: ImageSource.camera,
+                        imageQuality: 85,
+                      );
+                      if (file != null) await _cropAndUpload(file.path);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _PhotoOptionButton(
+                    icon: Icons.photo_library_rounded,
+                    label: 'Gallery',
+                    onTap: () async {
+                      Navigator.pop(ctx);
+                      final XFile? file = await picker.pickImage(
+                        source: ImageSource.gallery,
+                        imageQuality: 85,
+                      );
+                      if (file != null) await _cropAndUpload(file.path);
+                    },
+                  ),
+                ),
+                if (_profilePhotoUrl != null) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _PhotoOptionButton(
+                      icon: Icons.delete_outline_rounded,
+                      label: 'Remove',
+                      isDestructive: true,
+                      onTap: () async {
+                        Navigator.pop(ctx);
+                        await _removePhoto();
+                      },
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _cropAndUpload(String imagePath) async {
+    final croppedFile = await ImageCropper().cropImage(
+      sourcePath: imagePath,
+      aspectRatio: const CropAspectRatio(ratioX: 1, ratioY: 1),
+      uiSettings: [
+        AndroidUiSettings(
+          toolbarTitle: 'Adjust Photo',
+          toolbarColor: AppStyles.primaryBlue,
+          toolbarWidgetColor: Colors.white,
+          initAspectRatio: CropAspectRatioPreset.square,
+          lockAspectRatio: true,
+          hideBottomControls: false,
+        ),
+      ],
+    );
+    if (croppedFile == null) return;
+    if (!mounted) return;
+    setState(() => _isUploadingPhoto = true);
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+      final bytes = await croppedFile.readAsBytes();
+      final filePath = '${user.id}/avatar.jpg';
+      await supabase.storage
+          .from('avatars')
+          .uploadBinary(
+            filePath,
+            bytes,
+            fileOptions: const FileOptions(
+              contentType: 'image/jpeg',
+              upsert: true,
+            ),
+          );
+      final publicUrl = supabase.storage.from('avatars').getPublicUrl(filePath);
+      final cacheBustedUrl =
+          '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
+      await supabase
+          .from('users')
+          .update({'profile_photo_url': cacheBustedUrl})
+          .eq('id', user.id);
+      if (!mounted) return;
+      setState(() => _profilePhotoUrl = cacheBustedUrl);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Profile photo updated!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Upload failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isUploadingPhoto = false);
+    }
+  }
+
+  Future<void> _removePhoto() async {
+    setState(() => _isUploadingPhoto = true);
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+      final filePath = '${user.id}/avatar.jpg';
+      await supabase.storage.from('avatars').remove([filePath]);
+      await supabase.from('users').update({'profile_photo_url': null}).eq('id', user.id);
+      if (!mounted) return;
+      setState(() => _profilePhotoUrl = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Profile photo removed.'), backgroundColor: Colors.orange),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove photo: $e'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _isUploadingPhoto = false);
+    }
   }
 
   @override
@@ -293,59 +492,109 @@ class _ProfileScreenState extends State<ProfileScreen>
                     FadeSlideY(
                       delay: const Duration(milliseconds: 100),
                       child: Center(
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            AnimatedBuilder(
-                              animation: _borderRotationController,
-                              builder: (context, child) {
-                                return Transform.rotate(
-                                  angle:
-                                      _borderRotationController.value *
-                                      2 *
-                                      math.pi,
-                                  child: Container(
-                                    width: 130,
-                                    height: 130,
-                                    decoration: const BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      gradient: SweepGradient(
-                                        colors: [
-                                          AppStyles.primaryBlue,
-                                          Colors.transparent,
-                                        ],
-                                        stops: [0.0, 0.5],
+                        child: GestureDetector(
+                          onTap: _onAvatarTap,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              AnimatedBuilder(
+                                animation: _borderRotationController,
+                                builder: (context, child) {
+                                  return Transform.rotate(
+                                    angle:
+                                        _borderRotationController.value *
+                                        2 *
+                                        math.pi,
+                                    child: Container(
+                                      width: 130,
+                                      height: 130,
+                                      decoration: const BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        gradient: SweepGradient(
+                                          colors: [
+                                            AppStyles.primaryBlue,
+                                            Colors.transparent,
+                                          ],
+                                          stops: [0.0, 0.5],
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                );
-                              },
-                            ),
-                            Container(
-                              width: 120,
-                              height: 120,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: theme.primaryColor.withValues(
-                                  alpha: 0.12,
-                                ),
-                                border: Border.all(color: cardColor, width: 4),
+                                  );
+                                },
                               ),
-                              child: ClipOval(
-                                child: Center(
-                                  child: Text(
-                                    _initials,
-                                    style: TextStyle(
-                                      fontSize: 36,
-                                      fontWeight: FontWeight.w800,
-                                      color: theme.primaryColor,
-                                      letterSpacing: -1,
+                              Container(
+                                width: 120,
+                                height: 120,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: theme.primaryColor.withValues(
+                                    alpha: 0.12,
+                                  ),
+                                  border: Border.all(
+                                    color: cardColor,
+                                    width: 4,
+                                  ),
+                                ),
+                                child: ClipOval(
+                                  child: _isUploadingPhoto
+                                      ? const Center(
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2.5,
+                                          ),
+                                        )
+                                      : _profilePhotoUrl != null
+                                      ? Image.network(
+                                          _profilePhotoUrl!,
+                                          fit: BoxFit.cover,
+                                          width: 120,
+                                          height: 120,
+                                          errorBuilder: (_, _, _) => Center(
+                                            child: Text(
+                                              _initials,
+                                              style: TextStyle(
+                                                fontSize: 36,
+                                                fontWeight: FontWeight.w800,
+                                                color: theme.primaryColor,
+                                                letterSpacing: -1,
+                                              ),
+                                            ),
+                                          ),
+                                        )
+                                      : Center(
+                                          child: Text(
+                                            _initials,
+                                            style: TextStyle(
+                                              fontSize: 36,
+                                              fontWeight: FontWeight.w800,
+                                              color: theme.primaryColor,
+                                              letterSpacing: -1,
+                                            ),
+                                          ),
+                                        ),
+                                ),
+                              ),
+                              Positioned(
+                                bottom: 4,
+                                right: 4,
+                                child: Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: AppStyles.primaryBlue,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white,
+                                      width: 2,
                                     ),
                                   ),
+                                  child: const Icon(
+                                    Icons.camera_alt_rounded,
+                                    size: 14,
+                                    color: Colors.white,
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -689,6 +938,53 @@ class _ProfileScreenState extends State<ProfileScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _PhotoOptionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool isDestructive;
+  
+  const _PhotoOptionButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.isDestructive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isDestructive ? Colors.red.shade600 : AppStyles.primaryBlue;
+    
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.07),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: color.withValues(alpha: 0.2),
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 28),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
