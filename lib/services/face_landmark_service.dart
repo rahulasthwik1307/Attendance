@@ -153,7 +153,7 @@ class FaceLandmarkService {
         }
       }
       final double colorVariance = colorVarianceSum / totalPixels;
-      if (colorVariance < 150.0) {
+      if (colorVariance < 80.0) {
         debugPrint(
           '[FACE_LANDMARK] Anti-spoof rejected: low color variance=${colorVariance.toStringAsFixed(1)}',
         );
@@ -191,7 +191,7 @@ class FaceLandmarkService {
         }
       }
       final int lbpUniqueCodes = lbpCodes.length;
-      if (lbpUniqueCodes < 100) {
+      if (lbpUniqueCodes < 70) {
         debugPrint(
           '[FACE_LANDMARK] Anti-spoof rejected: low LBP diversity=$lbpUniqueCodes',
         );
@@ -377,14 +377,13 @@ class FaceLandmarkService {
     return dot;
   }
 
-  // VERIFY FACE — compare live embeddings against storedEmbeddingA only
-  // using cosine similarity, take the median score, compare against threshold.
+  // VERIFY FACE — true median of per-frame mean scores + majority gate.
   VerificationResult verifyFace({
     required List<List<double>> liveEmbeddings,
     required List<double> storedEmbeddingA,
     required List<double> storedEmbeddingB,
     required List<double> storedEmbeddingC,
-    double threshold = 0.75,
+    double threshold = 0.82,
   }) {
     if (liveEmbeddings.isEmpty) {
       return VerificationResult(
@@ -394,45 +393,63 @@ class FaceLandmarkService {
       );
     }
 
-    debugPrint('[FACE_VER] ═══ VERIFICATION DEBUG (MobileFaceNet) ═══');
+    debugPrint('[FACE_VER] ═══ VERIFICATION DEBUG ═══');
     debugPrint('[FACE_VER] Live frames: ${liveEmbeddings.length}');
-    debugPrint('[FACE_VER] StoredA (front) length: ${storedEmbeddingA.length}');
-    debugPrint(
-      '[FACE_VER] StoredA first 5: ${storedEmbeddingA.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
+
+    // Build a single stable reference by averaging and re-normalising all 3
+    // stored embeddings. This gives one reliable anchor point.
+    final int dim = storedEmbeddingA.length;
+    final List<double> avgStored = _l2Normalize(
+      List.generate(
+        dim,
+        (i) => (storedEmbeddingA[i] + storedEmbeddingB[i] + storedEmbeddingC[i]) / 3.0,
+      ),
     );
 
-    // Compare each live embedding against all three stored embeddings, take best
-    final List<double> frontScores = [];
+    // For each live frame, compute the MEAN similarity across all 4 references
+    // (A, B, C individually + the averaged template).
+    // Mean prevents any single embedding variant from inflating the score.
+    final List<double> frameScores = [];
     for (int i = 0; i < liveEmbeddings.length; i++) {
-      final double scoreA = cosineSimilarity(
-        liveEmbeddings[i],
-        storedEmbeddingA,
-      );
-      final double scoreB = cosineSimilarity(
-        liveEmbeddings[i],
-        storedEmbeddingB,
-      );
-      final double scoreC = cosineSimilarity(
-        liveEmbeddings[i],
-        storedEmbeddingC,
-      );
-      final double best = [scoreA, scoreB, scoreC].reduce(math.max);
-      frontScores.add(best);
+      final double sA   = cosineSimilarity(liveEmbeddings[i], storedEmbeddingA);
+      final double sB   = cosineSimilarity(liveEmbeddings[i], storedEmbeddingB);
+      final double sC   = cosineSimilarity(liveEmbeddings[i], storedEmbeddingC);
+      final double sAvg = cosineSimilarity(liveEmbeddings[i], avgStored);
+      final double frameMean = (sA + sB + sC + sAvg) / 4.0;
+      frameScores.add(frameMean);
       debugPrint(
-        '[FACE_VER] Frame $i → scoreA=${scoreA.toStringAsFixed(4)} scoreB=${scoreB.toStringAsFixed(4)} scoreC=${scoreC.toStringAsFixed(4)} best=${best.toStringAsFixed(4)}',
+        '[FACE_VER] Frame $i → sA=${sA.toStringAsFixed(4)} '
+        'sB=${sB.toStringAsFixed(4)} sC=${sC.toStringAsFixed(4)} '
+        'sAvg=${sAvg.toStringAsFixed(4)} mean=${frameMean.toStringAsFixed(4)}',
       );
     }
 
-    // Take max score
-    final double medianScore = frontScores.reduce(math.max);
+    // Take the TRUE MEDIAN of frame scores.
+    // Median is robust: one unusually good or bad frame cannot decide the result.
+    final List<double> sorted = List<double>.from(frameScores)..sort();
+    final double medianScore = sorted.length.isOdd
+        ? sorted[sorted.length ~/ 2]
+        : (sorted[sorted.length ~/ 2 - 1] + sorted[sorted.length ~/ 2]) / 2.0;
 
-    // NEW: Hybrid threshold with hard floor at 0.72
-    double effectiveThreshold = math.max(threshold, 0.72); // HARD FLOOR
+    // Hard floor: never accept below 0.82 regardless of personal threshold.
+    final double effectiveThreshold = math.max(threshold, 0.82);
+
+    // Majority gate: more than half of frames must individually pass.
+    // This blocks impostors who get lucky on one or two frames.
+    final int requiredPassing = (liveEmbeddings.length / 2).ceil();
+    final int passingFrames = frameScores
+        .where((s) => s >= effectiveThreshold)
+        .length;
+    final bool majorityPass = passingFrames >= requiredPassing;
+
     debugPrint(
-      '[FACE_VER] threshold=$threshold, floor=0.72, effective=$effectiveThreshold',
+      '[FACE_VER] medianScore=${medianScore.toStringAsFixed(4)} '
+      'effectiveThreshold=${effectiveThreshold.toStringAsFixed(4)} '
+      'passingFrames=$passingFrames required=$requiredPassing '
+      'majorityPass=$majorityPass',
     );
 
-    if (medianScore >= effectiveThreshold) {
+    if (medianScore >= effectiveThreshold && majorityPass) {
       return VerificationResult(
         isMatch: true,
         score: medianScore,
@@ -440,7 +457,7 @@ class FaceLandmarkService {
       );
     }
 
-    String message = medianScore > 0.15
+    final String message = medianScore > 0.20
         ? 'Try in better lighting'
         : 'Face not recognized';
     return VerificationResult(
