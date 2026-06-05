@@ -42,6 +42,7 @@ import 'services/face_landmark_service.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -80,10 +81,17 @@ void main() async {
       InitializationSettings(android: androidInit);
   await flutterLocalNotificationsPlugin.initialize(settings: initSettings);
 
-  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
     final notification = message.notification;
     final android = message.notification?.android;
     if (notification != null && android != null) {
+      // Check user preference before showing foreground notification
+      final prefs = await SharedPreferences.getInstance();
+      final bool enabled = prefs.getBool('notifications_enabled') ?? true;
+      if (!enabled) {
+        debugPrint('[FCM] Notification blocked because notifications are disabled');
+        return;
+      }
       flutterLocalNotificationsPlugin.show(
         id: notification.hashCode,
         title: notification.title,
@@ -101,6 +109,7 @@ void main() async {
           ),
         ),
       );
+      debugPrint('[FCM] Notification displayed');
     }
   });
 

@@ -22,7 +22,8 @@ class FaceCalibrationPreviewScreen extends StatefulWidget {
       _FaceCalibrationPreviewScreenState();
 }
 
-class _FaceCalibrationPreviewScreenState extends State<FaceCalibrationPreviewScreen>
+class _FaceCalibrationPreviewScreenState
+    extends State<FaceCalibrationPreviewScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _scaleAnimation;
@@ -244,7 +245,9 @@ class _FaceCalibrationPreviewScreenState extends State<FaceCalibrationPreviewScr
                     ),
                     child: AnimatedButton(
                       onPressed: () {
-                        Navigator.of(context).pushReplacementNamed('/face_calibration_verify');
+                        Navigator.of(
+                          context,
+                        ).pushReplacementNamed('/face_calibration_verify');
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.transparent,
@@ -287,23 +290,38 @@ class _FaceCalibrationPreviewScreenState extends State<FaceCalibrationPreviewScr
 
                         setState(() => _isLoading = true);
                         try {
-                          final double personalThreshold = math.max(0.82, _score - 0.06);
-                          debugPrint('[FACE_CAL_PREVIEW] Saving personal threshold: $personalThreshold (from score: ${_score.toStringAsFixed(4)})');
+                          final double personalThreshold = math.max(
+                            0.78,
+                            _score - 0.10,
+                          );
+                          debugPrint(
+                            '[FACE_CAL_PREVIEW] Saving personal threshold: $personalThreshold (from score: ${_score.toStringAsFixed(4)})',
+                          );
 
-                          final user = Supabase.instance.client.auth.currentUser;
+                          final user =
+                              Supabase.instance.client.auth.currentUser;
                           if (user == null) throw Exception('Not logged in');
 
                           await Supabase.instance.client
                               .from('students')
-                              .update({'verification_threshold': personalThreshold})
+                              .update({
+                                'verification_threshold': personalThreshold,
+                              })
                               .eq('id', user.id);
 
                           // Also cache it immediately so next verification uses it without Supabase call
                           final prefs = await SharedPreferences.getInstance();
-                          await prefs.setString('emb_threshold_${user.id}', personalThreshold.toString());
-                          debugPrint('[FACE_CAL_PREVIEW] Threshold cached: $personalThreshold for user ${user.id}');
+                          await prefs.setString(
+                            'emb_threshold_${user.id}',
+                            personalThreshold.toString(),
+                          );
+                          debugPrint(
+                            '[FACE_CAL_PREVIEW] Threshold cached: $personalThreshold for user ${user.id}',
+                          );
 
-                          debugPrint('[FACE_CAL_PREVIEW] Personal threshold saved to Supabase successfully');
+                          debugPrint(
+                            '[FACE_CAL_PREVIEW] Personal threshold saved to Supabase successfully',
+                          );
 
                           // Clear embeddings cache so verification loads fresh
                           await prefs.remove('emb_a');
@@ -311,22 +329,37 @@ class _FaceCalibrationPreviewScreenState extends State<FaceCalibrationPreviewScr
                           await prefs.remove('emb_c');
                           await prefs.remove('emb_student_id');
                           await prefs.remove('emb_cached_at');
-                          debugPrint('[FACE_CAL_PREVIEW] Embeddings cache cleared');
+                          debugPrint(
+                            '[FACE_CAL_PREVIEW] Embeddings cache cleared',
+                          );
 
                           if (!context.mounted) return;
-                          setState(() { _isLoading = false; _isSuccess = true; });
-                          await Future.delayed(const Duration(milliseconds: 600));
+                          setState(() {
+                            _isLoading = false;
+                            _isSuccess = true;
+                          });
+                          await Future.delayed(
+                            const Duration(milliseconds: 600),
+                          );
                           if (!context.mounted) return;
 
                           AuthFlowState.instance.passwordSet = true;
                           AuthFlowState.instance.faceRegistered = true;
-                          Navigator.of(context).pushNamedAndRemoveUntil('/dashboard', (route) => false);
+                          Navigator.of(context).pushNamedAndRemoveUntil(
+                            '/dashboard',
+                            (route) => false,
+                          );
                         } catch (e) {
-                          debugPrint('[FACE_CAL_PREVIEW] Error saving threshold: $e');
+                          debugPrint(
+                            '[FACE_CAL_PREVIEW] Error saving threshold: $e',
+                          );
                           if (!context.mounted) return;
                           setState(() => _isLoading = false);
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Failed to save: $e'), backgroundColor: Colors.red),
+                            SnackBar(
+                              content: Text('Failed to save: $e'),
+                              backgroundColor: Colors.red,
+                            ),
                           );
                         }
                       },

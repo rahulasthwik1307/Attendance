@@ -212,7 +212,11 @@ class FaceLandmarkService {
 
       // Step 3.5 — CLAHE (Contrast Limited Adaptive Histogram Equalization)
       // Replaces gamma correction - makes embeddings robust to position changes
-      final img.Image gammaCorrected = _applyCLAHE(resized, clipLimit: 2.0, tileSize: 8);
+      final img.Image gammaCorrected = _applyCLAHE(
+        resized,
+        clipLimit: 2.0,
+        tileSize: 8,
+      );
       debugPrint('[FACE_LANDMARK] CLAHE applied: clipLimit=2.0');
 
       // Step 3.7 — Laplace sharpening
@@ -402,7 +406,9 @@ class FaceLandmarkService {
     final List<double> avgStored = _l2Normalize(
       List.generate(
         dim,
-        (i) => (storedEmbeddingA[i] + storedEmbeddingB[i] + storedEmbeddingC[i]) / 3.0,
+        (i) =>
+            (storedEmbeddingA[i] + storedEmbeddingB[i] + storedEmbeddingC[i]) /
+            3.0,
       ),
     );
 
@@ -411,9 +417,9 @@ class FaceLandmarkService {
     // Mean prevents any single embedding variant from inflating the score.
     final List<double> frameScores = [];
     for (int i = 0; i < liveEmbeddings.length; i++) {
-      final double sA   = cosineSimilarity(liveEmbeddings[i], storedEmbeddingA);
-      final double sB   = cosineSimilarity(liveEmbeddings[i], storedEmbeddingB);
-      final double sC   = cosineSimilarity(liveEmbeddings[i], storedEmbeddingC);
+      final double sA = cosineSimilarity(liveEmbeddings[i], storedEmbeddingA);
+      final double sB = cosineSimilarity(liveEmbeddings[i], storedEmbeddingB);
+      final double sC = cosineSimilarity(liveEmbeddings[i], storedEmbeddingC);
       final double sAvg = cosineSimilarity(liveEmbeddings[i], avgStored);
       final double frameMean = (sA + sB + sC + sAvg) / 4.0;
       frameScores.add(frameMean);
@@ -432,7 +438,7 @@ class FaceLandmarkService {
         : (sorted[sorted.length ~/ 2 - 1] + sorted[sorted.length ~/ 2]) / 2.0;
 
     // Hard floor: never accept below 0.82 regardless of personal threshold.
-    final double effectiveThreshold = math.max(threshold, 0.82);
+    final double effectiveThreshold = math.max(threshold, 0.78);
 
     // Majority gate: more than half of frames must individually pass.
     // This blocks impostors who get lucky on one or two frames.
@@ -467,7 +473,6 @@ class FaceLandmarkService {
     );
   }
 
-
   // CLEAR EMBEDDINGS CACHE
   Future<void> clearEmbeddingsCache() async {
     final prefs = await SharedPreferences.getInstance();
@@ -488,7 +493,11 @@ class FaceLandmarkService {
 
   /// CLAHE: Contrast Limited Adaptive Histogram Equalization
   /// Normalizes local contrast to make face recognition robust to lighting/position changes
-  img.Image _applyCLAHE(img.Image src, {double clipLimit = 2.0, int tileSize = 8}) {
+  img.Image _applyCLAHE(
+    img.Image src, {
+    double clipLimit = 2.0,
+    int tileSize = 8,
+  }) {
     final int width = src.width;
     final int height = src.height;
     final int tilesX = (width / tileSize).ceil();
@@ -497,65 +506,59 @@ class FaceLandmarkService {
     // Convert to grayscale for analysis
     final List<List<double>> gray = List.generate(
       height,
-      (y) => List.generate(
-        width,
-        (x) {
-          final p = src.getPixel(x, y);
-          return 0.299 * p.r + 0.587 * p.g + 0.114 * p.b;
-        },
-      ),
+      (y) => List.generate(width, (x) {
+        final p = src.getPixel(x, y);
+        return 0.299 * p.r + 0.587 * p.g + 0.114 * p.b;
+      }),
     );
 
     // Build tile histograms with clipping
     final List<List<List<int>>> tileCDFs = List.generate(
       tilesY,
-      (ty) => List.generate(
-        tilesX,
-        (tx) {
-          final List<int> hist = List.filled(256, 0);
-          final int startY = ty * tileSize;
-          final int startX = tx * tileSize;
-          final int endY = math.min(startY + tileSize, height);
-          final int endX = math.min(startX + tileSize, width);
+      (ty) => List.generate(tilesX, (tx) {
+        final List<int> hist = List.filled(256, 0);
+        final int startY = ty * tileSize;
+        final int startX = tx * tileSize;
+        final int endY = math.min(startY + tileSize, height);
+        final int endX = math.min(startX + tileSize, width);
 
-          // Build histogram
-          for (int y = startY; y < endY; y++) {
-            for (int x = startX; x < endX; x++) {
-              final int bin = gray[y][x].round().clamp(0, 255);
-              hist[bin]++;
-            }
+        // Build histogram
+        for (int y = startY; y < endY; y++) {
+          for (int x = startX; x < endX; x++) {
+            final int bin = gray[y][x].round().clamp(0, 255);
+            hist[bin]++;
           }
+        }
 
-          // Clip histogram
-          final int totalPixels = (endY - startY) * (endX - startX);
-          final int clipLimitPixels = ((clipLimit * totalPixels) / 256).round();
-          int excess = 0;
+        // Clip histogram
+        final int totalPixels = (endY - startY) * (endX - startX);
+        final int clipLimitPixels = ((clipLimit * totalPixels) / 256).round();
+        int excess = 0;
+        for (int i = 0; i < 256; i++) {
+          if (hist[i] > clipLimitPixels) {
+            excess += hist[i] - clipLimitPixels;
+            hist[i] = clipLimitPixels;
+          }
+        }
+        final int redistribution = excess ~/ 256;
+        for (int i = 0; i < 256; i++) {
+          hist[i] += redistribution;
+        }
+
+        // Build CDF
+        final List<int> cdf = List.filled(256, 0);
+        cdf[0] = hist[0];
+        for (int i = 1; i < 256; i++) {
+          cdf[i] = cdf[i - 1] + hist[i];
+        }
+        final int total = cdf[255];
+        if (total > 0) {
           for (int i = 0; i < 256; i++) {
-            if (hist[i] > clipLimitPixels) {
-              excess += hist[i] - clipLimitPixels;
-              hist[i] = clipLimitPixels;
-            }
+            cdf[i] = ((cdf[i] * 255) ~/ total).clamp(0, 255);
           }
-          final int redistribution = excess ~/ 256;
-          for (int i = 0; i < 256; i++) {
-            hist[i] += redistribution;
-          }
-
-          // Build CDF
-          final List<int> cdf = List.filled(256, 0);
-          cdf[0] = hist[0];
-          for (int i = 1; i < 256; i++) {
-            cdf[i] = cdf[i - 1] + hist[i];
-          }
-          final int total = cdf[255];
-          if (total > 0) {
-            for (int i = 0; i < 256; i++) {
-              cdf[i] = ((cdf[i] * 255) ~/ total).clamp(0, 255);
-            }
-          }
-          return cdf;
-        },
-      ),
+        }
+        return cdf;
+      }),
     );
 
     // Apply with bilinear interpolation
@@ -584,7 +587,8 @@ class FaceLandmarkService {
         final p = src.getPixel(x, y);
         final double factor = newGray / (gray[y][x] + 1e-6);
         result.setPixelRgb(
-          x, y,
+          x,
+          y,
           (p.r * factor).round().clamp(0, 255),
           (p.g * factor).round().clamp(0, 255),
           (p.b * factor).round().clamp(0, 255),
