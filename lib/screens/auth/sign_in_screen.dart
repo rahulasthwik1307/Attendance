@@ -156,10 +156,10 @@ class _SignInScreenState extends State<SignInScreen>
         if (!mounted) return;
 
         if (mustChangePassword) {
-          // Sign in succeeded but teacher forced a password reset
-          // Go directly to set new password — no face needed
+          // Check if face is still registered — admin may have deleted it
+          final bool faceStillExists = data['embedding_a'] != null;
           AuthFlowState.instance.passwordSet = true;
-          AuthFlowState.instance.faceRegistered = true;
+          AuthFlowState.instance.faceRegistered = faceStillExists;
           AuthFlowState.instance.isFirstTimeUser = false;
           if (!mounted) return;
           Navigator.pushReplacementNamed(context, '/set_new_password');
@@ -300,10 +300,10 @@ class _SignInScreenState extends State<SignInScreen>
         if (!mounted) return;
 
         if (mustChangePassword) {
-          // Sign in succeeded but teacher forced a password reset
-          // Go directly to set new password — no face needed
+          // Check if face is still registered — admin may have deleted it
+          final bool faceStillExists = data['embedding_a'] != null;
           AuthFlowState.instance.passwordSet = true;
-          AuthFlowState.instance.faceRegistered = true;
+          AuthFlowState.instance.faceRegistered = faceStillExists;
           AuthFlowState.instance.isFirstTimeUser = false;
           if (!mounted) return;
           Navigator.pushReplacementNamed(context, '/set_new_password');

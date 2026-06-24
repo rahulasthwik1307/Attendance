@@ -166,13 +166,20 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
       } else if (AuthFlowState.instance.passwordSet &&
                  AuthFlowState.instance.faceRegistered &&
                  !AuthFlowState.instance.isFaceReset) {
-        // Teacher reset password — student already approved, go to dashboard
+        // Teacher reset password — student approved and face exists — go to dashboard
         await Future.delayed(const Duration(seconds: 2));
         if (!mounted) return;
         Navigator.of(context).pushNamedAndRemoveUntil(
           '/dashboard',
           (route) => false,
         );
+      } else if (AuthFlowState.instance.passwordSet &&
+                 !AuthFlowState.instance.faceRegistered &&
+                 !AuthFlowState.instance.isFirstTimeUser) {
+        // Teacher reset password but admin deleted face — need re-registration
+        await Future.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+        Navigator.of(context).pushReplacementNamed('/register');
       } else {
         Navigator.of(
           context,

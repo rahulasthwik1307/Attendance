@@ -291,8 +291,8 @@ class _FaceCalibrationPreviewScreenState
                         setState(() => _isLoading = true);
                         try {
                           final double personalThreshold = math.max(
-                            0.78,
-                            _score - 0.10,
+                            0.68,
+                            _score - 0.16,
                           );
                           debugPrint(
                             '[FACE_CAL_PREVIEW] Saving personal threshold: $personalThreshold (from score: ${_score.toStringAsFixed(4)})',

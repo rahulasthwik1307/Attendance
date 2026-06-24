@@ -91,6 +91,14 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
 
+      if (response.statusCode == 429) {
+        setState(() {
+          _errorMessage = data['error'] as String? ?? 'Too many attempts. Please wait before trying again.';
+          _isLoading = false;
+        });
+        return;
+      }
+
       if (response.statusCode != 200) {
         setState(() {
           _errorMessage = data['error'] as String? ?? 'Something went wrong.';

@@ -78,11 +78,14 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   _Phase _phase = _Phase.initializing;
 
   final List<List<double>> _liveEmbeddings = [];
+  // Stores raw JPEG bytes during capture phase for batch processing
+  final List<Uint8List> _capturedVerificationFrames = [];
   static const int _framesPerPhase = 5;
 
   List<double>? _embeddingA;
   List<double>? _embeddingB;
   List<double>? _embeddingC;
+  List<double>? _masterEmbedding;
   Uint8List? _lastCaptureJpegBytes;
   double _verificationThreshold = 0.75;
   dynamic _lastCaptureFace;
@@ -322,7 +325,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
 
       final data = await Supabase.instance.client
           .from('students')
-          .select('embedding_a, embedding_b, embedding_c, verification_threshold')
+          .select('embedding_a, embedding_b, embedding_c, face_embedding, verification_threshold')
           .eq('id', user.id)
           .maybeSingle();
 
@@ -343,9 +346,15 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       _embeddingC = (data['embedding_c'] as List)
           .map((e) => (e as num).toDouble())
           .toList();
+      if (data['face_embedding'] != null) {
+        _masterEmbedding = (data['face_embedding'] as List)
+            .map((e) => (e as num).toDouble())
+            .toList();
+      }
       
       _verificationThreshold = (data['verification_threshold'] as num?)?.toDouble() ?? 0.75;
       debugPrint('[FACE_CAL] Personal threshold loaded: $_verificationThreshold');
+      debugPrint('[FACE_CAL] Master embedding loaded: ${_masterEmbedding != null}');
 
     } catch (e) {
       _setError('Could not load face profile. Please try again.');
@@ -623,7 +632,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     if (_liveEmbeddings.length >= _framesPerPhase) return;
 
     final now = DateTime.now();
-    if (now.difference(_lastCaptureTime).inMilliseconds < 600) return;
+    if (now.difference(_lastCaptureTime).inMilliseconds < 300) return;
 
     // Check yaw for front pose (±15°)
     final double? yawRaw = face.headEulerAngleY;
@@ -643,44 +652,34 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     final Uint8List? jpegBytes = await _captureCurrentFrame();
     if (jpegBytes == null) return;
 
-    if (_liveEmbeddings.isEmpty) {
+    // Save first frame for preview screen
+    if (_capturedVerificationFrames.isEmpty) {
       _lastCaptureJpegBytes = jpegBytes;
       _lastCaptureFace = face;
       debugPrint('[FACE_CAL] Saved first capture frame and face bbox for preview');
     }
 
-    // Generate embedding
-    final emb = await _landmarkService.generateEmbedding(
-      jpegBytes: jpegBytes,
-      face: face,
-    );
-    if (emb != null) {
-      _liveEmbeddings.add(emb);
+    // Store JPEG bytes — batch all 5 frames, then send in one request.
+    _capturedVerificationFrames.add(jpegBytes);
 
-      // Update progress only when embedding succeeded
-      setState(() {
-        _captureProgress++;
-        _borderColor = AppStyles.successGreen;
-      });
-      HapticFeedback.lightImpact();
+    setState(() {
+      _captureProgress++;
+      _borderColor = AppStyles.successGreen;
+    });
+    HapticFeedback.lightImpact();
 
-      Future.delayed(const Duration(milliseconds: 150), () {
-        if (mounted && _phase == _Phase.capturing) {
-          setState(() => _borderColor = AppStyles.primaryBlue);
-        }
-      });
-    } else {
-      _updateInstruction(
-        'Improve lighting',
-        subtitle: 'Move away from bright windows or dark areas',
-        animate: false,
-      );
-    }
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (mounted && _phase == _Phase.capturing) {
+        setState(() => _borderColor = AppStyles.primaryBlue);
+      }
+    });
+
+    debugPrint('[FACE_CAL] Frame ${_capturedVerificationFrames.length} captured (JPEG only, embedding deferred)');
 
     _lastCaptureTime = DateTime.now();
 
     // Check if done
-    if (_liveEmbeddings.length >= _framesPerPhase) {
+    if (_capturedVerificationFrames.length >= _framesPerPhase) {
       try {
         await _cameraController?.stopImageStream();
       } catch (_) {}
@@ -700,6 +699,24 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     _updateInstruction('Processing…', subtitle: 'Comparing your face');
 
     try {
+      // Send all 5 captured frames as a single batch request.
+      debugPrint('[FACE_CAL] Sending ${_capturedVerificationFrames.length} calibration frames as batch');
+      final List<List<double>?> batchResults = await _landmarkService.generateEmbeddingBatch(
+        jpegBytesList: _capturedVerificationFrames,
+      );
+
+      _liveEmbeddings.clear();
+      for (final emb in batchResults) {
+        if (emb != null) _liveEmbeddings.add(emb);
+      }
+
+      debugPrint('[FACE_CAL] Batch calibration: ${_liveEmbeddings.length}/${_capturedVerificationFrames.length} valid embeddings');
+
+      if (_liveEmbeddings.isEmpty) {
+        _setError('No face detected. Please try again in better lighting.');
+        return;
+      }
+
       // Calculate dynamic threshold based on front scores
       final List<double> frontScores = _liveEmbeddings
           .map((e) => _landmarkService.cosineSimilarity(e, _embeddingA!))
@@ -711,6 +728,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         storedEmbeddingA: _embeddingA!,
         storedEmbeddingB: _embeddingB!,
         storedEmbeddingC: _embeddingC!,
+        masterEmbedding: _masterEmbedding,
         threshold: _verificationThreshold,
       );
 
@@ -720,6 +738,32 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       debugPrint('[FACE_CAL] Running calibration verification with threshold: $_verificationThreshold');
 
       if (result.isMatch) {
+        // ── Update master embedding with calibration data ──
+        try {
+          final calibrationEmbedding = _landmarkService.averageEmbeddings(_liveEmbeddings);
+          List<double> updatedMaster;
+          if (_masterEmbedding != null && _masterEmbedding!.isNotEmpty) {
+            updatedMaster = _landmarkService.averageEmbeddings([
+              _masterEmbedding!,
+              calibrationEmbedding,
+            ]);
+          } else {
+            updatedMaster = calibrationEmbedding;
+          }
+          updatedMaster = _landmarkService.l2Normalize(updatedMaster);
+
+          final user = Supabase.instance.client.auth.currentUser;
+          if (user != null) {
+            await Supabase.instance.client
+                .from('students')
+                .update({'face_embedding': updatedMaster})
+                .eq('id', user.id);
+            debugPrint('[FACE_CAL] Master embedding updated after calibration success');
+          }
+        } catch (e) {
+          debugPrint('[FACE_CAL] Master update after calibration failed: $e');
+        }
+
         // ── Success ──
         setState(() => _borderColor = AppStyles.successGreen);
 
@@ -760,6 +804,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
 
           _attemptCount++;
           _liveEmbeddings.clear();
+          _capturedVerificationFrames.clear();
           _livenessService.resetCalibration();
           _clearSmoothing();
           _challengeVerified = false;
@@ -2031,6 +2076,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   void _onRetry() {
     _livenessService.resetCalibration();
     _liveEmbeddings.clear();
+    _capturedVerificationFrames.clear();
     _captureProgress = 0;
     _challengeVerified = false;
     _challengeStartTime = null;

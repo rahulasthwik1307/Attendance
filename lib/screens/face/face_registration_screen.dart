@@ -51,7 +51,7 @@ import '../../utils/auth_flow_state.dart';
 enum _Phase {
   initializing, // Camera starting up
   liveness, // Blink verification (looking straight) — first gate
-  front, // Capture 9 front frames
+  front, // Capture 15 front frames
   processing, // Running embeddings + uploading to Supabase
   done, // Complete — navigating away
   error, // Something went wrong
@@ -98,7 +98,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   final List<List<double>> _frontEmbeddings = [];
 
   // How many quality frames to capture (all front)
-  static const int _framesPerPhase = 9;
+  static const int _framesPerPhase = 15;
+
+  // ─── Camera freeze & processing state ─────────────────────────────────────
+  bool _cameraFrozen = false; // True once enough frames collected
+  bool _isSubmitting = false; // Guard against double-tap / re-entry
 
   // Instruction / UI state
   String _instructionTitle = 'Setting up camera…';
@@ -113,7 +117,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   int _lastKnownBlinkCount = 0;
 
   // Progress: which step out of total (for display)
-  int _captureProgress = 0; // 0-9 total frames
+  int _captureProgress = 0; // 0-15 total captured frames
   String _progressLabel = '';
 
   // ignore: unused_field
@@ -260,6 +264,10 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       // Initialize ML services
       await _landmarkService.initialize();
 
+      // Warm up backend — prevents Hugging Face cold start during registration.
+      // Fire-and-forget: ignore failures, backend may still respond.
+      _landmarkService.pingBackend().catchError((_) {});
+
       // Start camera stream for face detection
       await _cameraController!.startImageStream(_onCameraFrame);
       debugPrint('[FACE_REG] Camera initialized successfully');
@@ -273,7 +281,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // ─────────────────────────────────────────────────────────────────────────
   // CAMERA FRAME PROCESSING — rate-limited to 10fps
   // ─────────────────────────────────────────────────────────────────────────
-  Future<void> _onCameraFrame(CameraImage cameraImage) async {
+  void _onCameraFrame(CameraImage cameraImage) {
+    // Skip if we're already processing a frame or camera shouldn't be running
+    if (_isProcessingFrame) return;
+    if (_cameraFrozen) return; // Camera frozen — ignore all future frames
+    if (_phase == _Phase.processing || _phase == _Phase.done) return;
+
     // Always store latest frame for capture use
     _lastCameraImage = cameraImage;
 
@@ -289,27 +302,20 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           : 100;
       if (now.difference(_lastFrameTime).inMilliseconds < limit) return;
     }
-    if (_isProcessingFrame) return;
-    if (!mounted) return;
-
-    // Skip processing during these phases
-    if (_phase == _Phase.initializing ||
-        _phase == _Phase.processing ||
-        _phase == _Phase.done ||
-        _phase == _Phase.error) {
-      return;
-    }
-
+    
     _lastFrameTime = now;
     _isProcessingFrame = true;
+
+    _processFrameAsync(cameraImage);
+  }
+
+  Future<void> _processFrameAsync(CameraImage cameraImage) async {
+    if (!mounted) return;
 
     try {
       // Convert CameraImage to InputImage for ML Kit
       final InputImage? inputImage = _convertToInputImage(cameraImage);
       if (inputImage == null) {
-        debugPrint(
-          'Face: inputImage conversion FAILED, format.raw=${cameraImage.format.raw}, planes=${cameraImage.planes.length}',
-        );
         _isProcessingFrame = false;
         return;
       }
@@ -324,16 +330,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         return;
       }
 
-      debugPrint(
-        'Face: detected ${faces.length} face(s), camSize=${cameraImage.width}x${cameraImage.height}, sensorOrient=${_cameraController!.description.sensorOrientation}',
-      );
-
       if (faces.isEmpty) {
-        // During capture sub-phases, don't reset instruction on momentary
-        // face loss — blinks/turns can cause ML Kit to lose the face briefly.
-        // Only show "Fit your face" during liveness phase (before blink verified).
         if (_phase == _Phase.liveness && !_challengeVerified) {
-          // Reset positioning steady state and smoothing buffer on face loss
           _clearSmoothing();
           _steadyStartTime = null;
           if (_isFaceReady) {
@@ -342,9 +340,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
             _challengeStartTime = null;
             _blinkCountdownController.stop();
             _blinkCountdownController.reset();
-            debugPrint(
-              '[FACE_REG] Face lost — resetting calibration & challenge',
-            );
           }
           _updateInstruction('Fit your face in the circle', animate: false);
         }
@@ -352,7 +347,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         return;
       }
 
-      // Pick the biggest face (filters background students in classroom)
+      // Pick the biggest face
       final Face? face = _selectBiggestCenteredFace(faces, cameraImage);
       if (face == null) {
         _updateInstruction('Fit your face in the circle', animate: false);
@@ -360,14 +355,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         return;
       }
 
-      // Push raw face metrics into smoothing buffer for moving average
+      // Push raw face metrics into smoothing buffer
       _pushSmoothing(face);
 
       // ── Pre-liveness positioning gate ──────────────────────────────────
-      // Only applies during liveness phase (before initial blink).
-      // Once _challengeVerified is true, capture phases skip this entirely.
       if (_phase == _Phase.liveness && !_challengeVerified) {
-        // Choose strictness: strict before liveness starts, relaxed during
         final bool strict = !_isFaceReady;
         final String? posInstruction = _getPositioningInstruction(
           face,
@@ -376,17 +368,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         );
 
         if (posInstruction != null) {
-          // Not positioned — reset steady timer and ready state
           if (_isFaceReady) {
-            // Was in liveness challenge, now lost position — reset
             _isFaceReady = false;
             _livenessService.resetCalibration();
             _challengeStartTime = null;
             _blinkCountdownController.stop();
             _blinkCountdownController.reset();
-            debugPrint(
-              '[FACE_REG] Face lost position — resetting calibration & challenge',
-            );
           }
           _steadyStartTime = null;
           _updateInstruction(posInstruction, animate: false);
@@ -394,7 +381,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           return;
         }
 
-        // Face is centered and at correct distance — track steadiness
         _steadyStartTime ??= DateTime.now();
         final int steadyMs = DateTime.now()
             .difference(_steadyStartTime!)
@@ -410,14 +396,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
             _isProcessingFrame = false;
             return;
           }
-          // Steady for 800ms — mark ready
           _isFaceReady = true;
           _livenessService.reset();
-          debugPrint(
-            '[FACE_REG] Face positioned & steady 800ms — starting blink calibration',
-          );
-
-          // Show calibrating instruction while we collect baseline
           _updateInstruction(
             'Calibrating…',
             subtitle: 'Look straight at the camera and hold still',
@@ -432,8 +412,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           if (!_challengeVerified) {
             await _handleLivenessChallenge(face, ChallengeType.blink);
           } else {
-            // Blink verified — transition to front capture phase
-            debugPrint('[FACE_REG] Liveness verified — moving directly to front capture phase');
             await Future.delayed(const Duration(milliseconds: 500));
             if (mounted) _setPhase(_Phase.front);
           }
@@ -445,16 +423,14 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           break;
       }
     } catch (e) {
-      // Swallow frame errors silently — bad frames are common
+      // Swallow frame errors
     } finally {
-      _isProcessingFrame = false;
+      if (mounted) _isProcessingFrame = false;
     }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   // LIVENESS CHALLENGE HANDLER
-  // Uses ChallengeValidator from facial_liveness_verification package.
-  // Handles blink (front), turnLeft (left), turnRight (right).
   // ─────────────────────────────────────────────────────────────────────────
 
   Future<void> _handleLivenessChallenge(
@@ -467,13 +443,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         .difference(_challengeStartTime!)
         .inMilliseconds;
 
-    // Timeout: 3s for initial blink liveness check
     final int timeout = 3000;
 
     if (elapsed > timeout) {
-      debugPrint(
-        '[FACE_REG] Challenge ${challenge.name} timed out (${elapsed}ms)',
-      );
       _livenessService.reset();
       _challengeStartTime = DateTime.now();
 
@@ -487,11 +459,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         animate: false,
       );
 
-      // Brief pause so user sees the retry message
       await Future.delayed(const Duration(milliseconds: 800));
       if (!mounted) return;
 
-      // Restart challenge countdown
       if (challenge == ChallengeType.blink) {
         _blinkCountdownController.reset();
         _blinkCountdownController.forward(from: 0.0);
@@ -504,16 +474,10 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       return;
     }
 
-    // ── Blink phase: run inline calibration before detecting ───────────────
-    // Collects 10 baseline eye-probability samples after face is steady.
-    // Only then shows the blink prompt and starts countdown.
     if (challenge == ChallengeType.blink &&
         !_livenessService.isBlinkCalibrated) {
       final bool calibDone = _livenessService.calibrateBlink(face);
-      if (!calibDone) {
-        return; // Still collecting — keep showing "Calibrating…"
-      }
-      // Calibration just finished — start countdown and show prompt
+      if (!calibDone) return;
       _challengeStartTime = DateTime.now();
       _lastKnownBlinkCount = 0;
       _blinkCountdownController.reset();
@@ -523,16 +487,13 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         subtitle: 'Blink naturally 2 to 3 times to confirm you are present',
         animate: false,
       );
-      return; // Start detecting on the very next frame
+      return;
     }
 
-    // ── Try to detect the challenge ──────────────────────────────────────
     bool detected = false;
     switch (challenge) {
       case ChallengeType.blink:
         detected = _livenessService.detectBlink(face);
-        // ─ Per-blink green flash (intermediate progress feedback) ──────────
-        // Flash green every time a new blink is registered but not yet done.
         final int currentBlinkCount = _livenessService.blinkCount;
         if (!detected && currentBlinkCount > _lastKnownBlinkCount) {
           _lastKnownBlinkCount = currentBlinkCount;
@@ -556,7 +517,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     }
 
     if (detected) {
-      debugPrint('[FACE_REG] Blink challenge VERIFIED ✓');
       _challengeVerified = true;
       _livenessService.reset();
       _challengeStartTime = null;
@@ -573,7 +533,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         subtitle: 'Preparing next step…',
         animate: false,
       );
-      // Transition happens in the phase switch (liveness → left)
     }
   }
 
@@ -595,17 +554,15 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     CameraImage cameraImage,
     _Phase currentPhase,
   ) async {
-    // Minimum delay between captures to avoid overwhelming the camera
     final now = DateTime.now();
-    if (now.difference(_lastCaptureTime).inMilliseconds < 800) return;
+    if (now.difference(_lastCaptureTime).inMilliseconds < 280) return;
+    if (_cameraFrozen) return;
 
-    // Validate pose for current phase
     if (!_isPoseCorrect(face, currentPhase)) {
       _updateInstruction(_getPoseInstruction(currentPhase), animate: false);
       return;
     }
 
-    // Quality + centering check (phase-aware: relaxed offset for side turns)
     if (!_isFaceAcceptable(face, cameraImage, currentPhase)) {
       _updateInstruction(
         _getFacingInstruction(face, cameraImage),
@@ -616,26 +573,16 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     _updateInstruction('Hold still…', subtitle: 'Almost done, stay steady');
 
-    // Grab the current frame as JPEG
     final Uint8List? jpegBytes = await _captureCurrentFrame();
     if (jpegBytes == null) return;
-    debugPrint(
-      '[FACE_REG] CAPTURE frame accepted | phase=${currentPhase.name} size=${jpegBytes.length}b',
-    );
 
-    // Save first front frame as registration photo
     if (currentPhase == _Phase.front && _registrationPhotoBytes == null) {
       _registrationPhotoBytes = jpegBytes;
       _registrationPhotoBbox = face.boundingBox;
-      debugPrint(
-        '[FACE_REG] ✓ FRONT photo saved — bbox=${face.boundingBox} yaw=${face.headEulerAngleY?.toStringAsFixed(1)}',
-      );
     }
 
-    // Allow UI to render the green flash smoothly
     await Future.delayed(const Duration(milliseconds: 40));
 
-    // 5. Briefly trigger the flash effect
     setState(() {
       _showFlash = true;
     });
@@ -647,7 +594,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       }
     });
 
-    // 6. Restore border color slightly after
     Future.delayed(const Duration(milliseconds: 150), () {
       if (mounted && _phase == currentPhase) {
         setState(() {
@@ -656,41 +602,15 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       }
     });
 
-    // Generate embedding immediately on main thread.
-    // SKILL.md compliant for registration (only 9 frames).
-    final emb = await _landmarkService.generateEmbedding(
-      jpegBytes: jpegBytes,
-      face: face,
-    );
-
-    // ADD THIS DEBUG LOG
-    debugPrint(
-      '[FACE_REG] Generated embedding for phase ${currentPhase.name} - emb is ${emb == null ? "null" : "valid"}',
-    );
-
-    // Store in correct list
     switch (currentPhase) {
       case _Phase.front:
         _frontFrames.add(jpegBytes);
-        if (emb != null) {
-          _frontEmbeddings.add(emb);
-          setState(() {
-            _captureProgress++;
-            _progressLabel = '$_captureProgress / $_framesPerPhase';
-            _borderColor = AppStyles.successGreen;
-          });
-          HapticFeedback.lightImpact();
-        } else {
-          debugPrint(
-            '[FACE_REG] Failed to generate embedding for phase front (frame ${_frontFrames.length})',
-          );
-          _updateInstruction(
-            'Improve lighting',
-            subtitle:
-                'Move to a well-lit area and avoid bright windows behind you',
-            animate: false,
-          );
-        }
+        setState(() {
+          _captureProgress++;
+          _progressLabel = '$_captureProgress / $_framesPerPhase';
+          _borderColor = AppStyles.successGreen;
+        });
+        HapticFeedback.lightImpact();
         break;
       default:
         break;
@@ -698,24 +618,19 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     _lastCaptureTime = DateTime.now();
 
-    // Check if all 9 front frames collected
     if (currentPhase == _Phase.front &&
         _frontFrames.length >= _framesPerPhase) {
-      debugPrint(
-        '[FACE_REG] All ${_frontFrames.length} front frames collected — processing',
-      );
-      // Stop camera FIRST
+      _cameraFrozen = true;
       try {
         await _cameraController?.stopImageStream();
       } catch (_) {}
 
-      _updateInstruction(
-        'All done!',
-        subtitle: 'Preparing face data',
-        animate: false,
-      );
+      if (!mounted) return;
+      setState(() {
+        _borderColor = AppStyles.successGreen;
+      });
+
       HapticFeedback.mediumImpact();
-      await Future.delayed(const Duration(milliseconds: 500));
       _setPhase(_Phase.processing);
 
       Future.delayed(const Duration(milliseconds: 800), () {
@@ -727,7 +642,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         }
       });
 
-      // Delay to let processing UI show up before heavy synchronous math
       await Future.delayed(const Duration(milliseconds: 50));
       await _processAndUpload();
     }
@@ -735,127 +649,109 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
   // ─────────────────────────────────────────────────────────────────────────
   // PROCESS + UPLOAD
-  // Build both embeddings from captured frames and save to Supabase
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _processAndUpload() async {
     if (!mounted) return;
-
-    // ── Final frame count check ──────────────────────────────────────────
-    debugPrint(
-      '[FACE_REG] Final Frame Check: Front: ${_frontFrames.length}',
-    );
+    if (_isSubmitting) return;
+    _isSubmitting = true;
 
     if (_frontFrames.length < _framesPerPhase) {
-      _setError(
-        'Capture incomplete. Please stay inside the circle.',
-      );
+      _isSubmitting = false;
+      _setError('Not enough photos captured. Please try again.');
       return;
     }
 
-    _updateInstruction('Processing…', subtitle: 'Generating your face profile');
+    _updateInstruction('Face Captured ✓', subtitle: 'Processing…');
 
     try {
-      // Split 9 front embeddings into 3 groups of 3
-      final List<List<double>> group1 = _frontEmbeddings.sublist(0, 3);
-      final List<List<double>> group2 = _frontEmbeddings.sublist(3, 6);
-      final List<List<double>> group3 = _frontEmbeddings.sublist(6, 9);
-
-      // Debug: verify source list lengths
-      debugPrint('[FACE_REG] group1 length: ${group1.length}');
-      debugPrint('[FACE_REG] group2 length: ${group2.length}');
-      debugPrint('[FACE_REG] group3 length: ${group3.length}');
-
-      if (group1.isEmpty || group2.isEmpty || group3.isEmpty) {
-        debugPrint(
-          '[FACE_REG] ERROR: Missing embeddings',
-        );
-        _setError('Failed to capture face. Please try again.');
-        return;
-      }
-
-      debugPrint(
-        '[FACE_REG] Processing embeddings: total=${_frontEmbeddings.length}',
+      final List<BatchEmbeddingResult> batchResults =
+          await _landmarkService.generateEmbeddingBatchWithQuality(
+        jpegBytesList: _frontFrames,
       );
 
-      final List<double> embeddingA = _landmarkService.averageEmbeddings(
-        group1,
-      );
-      final List<double> embeddingB = _landmarkService.averageEmbeddings(
-        group2,
-      );
-      final List<double> embeddingC = _landmarkService.averageEmbeddings(
-        group3,
-      );
+      final List<BatchEmbeddingResult> validResults = batchResults
+          .where((r) => r.embedding != null && r.qualityPassed)
+          .toList();
 
-      if (embeddingA.isEmpty || embeddingB.isEmpty || embeddingC.isEmpty) {
-        _setError('Could not generate face embeddings. Please try again.');
-        return;
-      }
+      if (validResults.length < _framesPerPhase) {
+        final int deficit = _framesPerPhase - validResults.length;
 
-      // Verify the three embeddings are different
-      debugPrint(
-        '[FACE_REG] embeddingA first 5: ${embeddingA.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
-      );
-      debugPrint(
-        '[FACE_REG] embeddingB first 5: ${embeddingB.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
-      );
-      debugPrint(
-        '[FACE_REG] embeddingC first 5: ${embeddingC.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
-      );
-
-      // Quick sanity check - if they're identical, something's wrong
-      bool allIdentical = true;
-      for (int i = 0; i < 5; i++) {
-        if ((embeddingA[i] - embeddingB[i]).abs() > 0.001 ||
-            (embeddingA[i] - embeddingC[i]).abs() > 0.001) {
-          allIdentical = false;
-          break;
+        _frontEmbeddings.clear();
+        for (final r in validResults) {
+          _frontEmbeddings.add(r.embedding!);
         }
-      }
-      if (allIdentical) {
-        debugPrint(
-          '[FACE_REG] WARNING: All three embeddings appear identical!',
+
+        _cameraFrozen = false;
+        _isSubmitting = false;
+        _frontFrames.clear();
+
+        if (!mounted) return;
+        setState(() {
+          _captureProgress = validResults.length;
+          _progressLabel = '$_captureProgress / $_framesPerPhase';
+          _borderColor = AppStyles.primaryBlue;
+        });
+
+        _updateInstruction(
+          'Need more photos',
+          subtitle: 'Hold still, capturing $deficit more…',
         );
+
+        try {
+          _setPhase(_Phase.front);
+          await _cameraController?.startImageStream(_onCameraFrame);
+        } catch (_) {}
+        return;
       }
+
+      validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
+      final List<BatchEmbeddingResult> topFrames = validResults.length > _framesPerPhase
+          ? validResults.sublist(0, _framesPerPhase)
+          : validResults;
+
+      final List<List<double>> validEmbeddings = topFrames
+          .map((r) => r.embedding!)
+          .toList();
+
+      if (validEmbeddings.length < 6) {
+        _isSubmitting = false;
+        _setError('Could not capture enough clear photos. Please try in better lighting.');
+        return;
+      }
+
+      final int third = validEmbeddings.length ~/ 3;
+      final List<List<double>> group1 = validEmbeddings.sublist(0, third);
+      final List<List<double>> group2 = validEmbeddings.sublist(third, third * 2);
+      final List<List<double>> group3 = validEmbeddings.sublist(third * 2);
+
+      final List<double> embeddingA = _landmarkService.averageEmbeddings(group1);
+      final List<double> embeddingB = _landmarkService.averageEmbeddings(group2);
+      final List<double> embeddingC = _landmarkService.averageEmbeddings(group3);
+
+      final List<double> masterEmbedding = _landmarkService.averageEmbeddings(
+        [embeddingA, embeddingB, embeddingC],
+      );
 
       _updateInstruction('Almost done!', subtitle: 'Saving your registration');
-
-      // ── Upload registration photo to Supabase Storage
       final String? photoUrl = await _uploadRegistrationPhoto();
 
-      // ── Save to students table in Supabase
       final user = Supabase.instance.client.auth.currentUser;
       if (user == null) throw Exception('User not logged in');
       final userId = user.id;
 
-      try {
-        await Supabase.instance.client
-            .from('students')
-            .update({
-              'embedding_a': embeddingA,
-              'embedding_b': embeddingB,
-              'embedding_c': embeddingC,
-              'registration_photo_url': photoUrl,
-              'face_registered': true,
-            })
-            .eq('id', userId);
+      await Supabase.instance.client
+          .from('students')
+          .update({
+            'embedding_a': embeddingA,
+            'embedding_b': embeddingB,
+            'embedding_c': embeddingC,
+            'face_embedding': masterEmbedding,
+            'registration_photo_url': photoUrl,
+            'face_registered': true,
+          })
+          .eq('id', userId);
 
-        debugPrint(
-          '[FACE_REG] Supabase update SUCCESS: saved for user $userId',
-        );
-        debugPrint(
-          '[FACE_REG] Saved embedding_a first 5: ${embeddingA.sublist(0, 5).map((v) => v.toStringAsFixed(4)).join(', ')}',
-        );
-      } catch (e) {
-        debugPrint('[FACE_REG] Save failed: $e');
-        // Optionally show error to user
-        setState(() => _phase = _Phase.error);
-        return;
-      }
-
-      // After success, clear any local cache if you have one (optional but good)
-      await _landmarkService
-          .clearEmbeddingsCache(); // add this method in FaceMlService if not exist
+      await _landmarkService.clearEmbeddingsCache();
 
       if (mounted) {
         Navigator.pushReplacementNamed(
@@ -868,52 +764,45 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         );
       }
     } catch (e) {
-      _setError('Registration failed: ${e.toString()}');
+      _isSubmitting = false;
+      _setError(_userFriendlyError(e.toString()));
     }
   }
 
-  Future<String?> _uploadRegistrationPhoto() async {
-    // Preview screen handles the photo upload with better quality
-    return null;
+  String _userFriendlyError(String technicalError) {
+    final lower = technicalError.toLowerCase();
+    if (lower.contains('camera')) return 'Camera could not start. Please try again.';
+    if (lower.contains('timeout')) return 'Processing timed out. Please try again.';
+    if (lower.contains('network') || lower.contains('socket') || lower.contains('connection'))
+      return 'Network issue. Please check your connection and try again.';
+    if (lower.contains('not logged in') || lower.contains('user'))
+      return 'Session expired. Please sign in again.';
+    return 'Something went wrong. Please try again.';
   }
 
-  // _saveToSupabase — removed; Supabase save logic is now inline in _processAndUpload
+  Future<String?> _uploadRegistrationPhoto() async {
+    return null;
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // HELPERS
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Convert CameraImage to ML Kit InputImage
-  int _consecutiveImageErrors = 0;
-
   InputImage? _convertToInputImage(CameraImage image) {
     try {
       final camera = _cameraController!.description;
-
-      // Use sensorOrientation directly for ML Kit rotation.
-      // This is the standard approach from Google's ML Kit documentation.
-      // The previous code incorrectly flipped front camera rotation
-      // (90→270, 270→90), causing ML Kit to see images sideways
-      // and detect zero faces.
       final int sensorDegrees = camera.sensorOrientation;
       final InputImageRotation? rotation = InputImageRotationValue.fromRawValue(
         sensorDegrees,
       );
       if (rotation == null) return null;
 
-      // Validate format
       final format = InputImageFormatValue.fromRawValue(image.format.raw);
       if (format == null) return null;
       if (image.planes.isEmpty) return null;
 
-      // ── Build NV21 byte buffer from YUV_420_888 ────────────────────────
-      // NV21 = Y plane (w*h bytes) + interleaved VU plane (w*h/2 bytes)
-      // This format is much more reliable with ML Kit on Android than
-      // raw YUV_420_888 plane concatenation, which breaks on devices
-      // where planes have row-stride padding.
       final Uint8List bytes;
       if (image.planes.length >= 3) {
-        // YUV_420_888 → build NV21
         final int w = image.width;
         final int h = image.height;
         final yPlane = image.planes[0];
@@ -927,7 +816,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         final nv21 = Uint8List(w * h + (w * (h ~/ 2)));
         int pos = 0;
 
-        // Copy Y plane row by row (handles row-stride padding)
         for (int row = 0; row < h; row++) {
           final int srcOffset = row * yRowStride;
           for (int col = 0; col < w; col++) {
@@ -935,25 +823,20 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           }
         }
 
-        // Interleave V and U (NV21 = VU interleaved)
         final int uvHeight = h ~/ 2;
         final int uvWidth = w ~/ 2;
         for (int row = 0; row < uvHeight; row++) {
           final int srcOffset = row * uvRowStride;
           for (int col = 0; col < uvWidth; col++) {
             final int pixelOffset = srcOffset + col * uvPixelStride;
-            nv21[pos++] = vPlane.bytes[pixelOffset]; // V first (NV21)
-            nv21[pos++] = uPlane.bytes[pixelOffset]; // then U
+            nv21[pos++] = vPlane.bytes[pixelOffset];
+            nv21[pos++] = uPlane.bytes[pixelOffset];
           }
         }
-
         bytes = nv21;
       } else {
-        // Single plane (JPEG/BGRA) — use directly
         bytes = image.planes[0].bytes;
       }
-
-      _consecutiveImageErrors = 0; // reset on success
 
       return InputImage.fromBytes(
         bytes: bytes,
@@ -961,64 +844,31 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           size: Size(image.width.toDouble(), image.height.toDouble()),
           rotation: rotation,
           format: InputImageFormat.nv21,
-          bytesPerRow: image.width, // NV21: bytesPerRow = width
+          bytesPerRow: image.width,
         ),
       );
     } catch (_) {
-      _consecutiveImageErrors++;
-      // If too many consecutive errors, stop the stream to prevent crash
-      if (_consecutiveImageErrors > 20) {
-        _cameraController?.stopImageStream();
-      }
       return null;
     }
   }
 
-  // Select the biggest face by area and verify it's centered in the UI circle.
-  // Essential for classroom environments where background students may be detected.
   Face? _selectBiggestCenteredFace(List<Face> faces, CameraImage image) {
     if (faces.isEmpty) return null;
-
-    // Sort by bounding box area descending (largest face first)
     final sorted = List<Face>.from(faces)
       ..sort((a, b) {
         final double areaA = a.boundingBox.width * a.boundingBox.height;
         final double areaB = b.boundingBox.width * b.boundingBox.height;
         return areaB.compareTo(areaA);
       });
-
     final Face biggest = sorted.first;
-
-    // Verify the biggest face is reasonably centered horizontally
     final double centerX =
         biggest.boundingBox.left + biggest.boundingBox.width / 2;
     final double imageCenterX = image.width / 2.0;
     final double offsetX = (centerX - imageCenterX).abs() / image.width;
-
-    if (offsetX > 0.30) {
-      // Biggest face is not centered enough — likely a background person
-      debugPrint(
-        '[FACE_REG] Biggest face rejected: offsetX=${offsetX.toStringAsFixed(3)} > 0.30',
-      );
-      return null;
-    }
-
-    if (faces.length > 1) {
-      debugPrint(
-        '[FACE_REG] Biggest face filter: ${faces.length} faces detected, '
-        'selected largest (area=${(biggest.boundingBox.width * biggest.boundingBox.height).toStringAsFixed(0)}), '
-        'ignored ${faces.length - 1} background face(s)',
-      );
-    }
-
+    if (offsetX > 0.30) return null;
     return biggest;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // FACE POSITIONING — smoothed centering + distance + hysteresis
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /// Push one frame of raw face data into the smoothing ring buffer.
   void _pushSmoothing(Face face) {
     _bufFaceWidth.add(face.boundingBox.width);
     _bufFaceHeight.add(face.boundingBox.height);
@@ -1036,13 +886,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     }
   }
 
-  /// Arithmetic mean of a buffer list.
   double _bufAvg(List<double> buf) {
     if (buf.isEmpty) return 0;
     return buf.reduce((a, b) => a + b) / buf.length;
   }
 
-  /// Reset smoothing buffer and hysteresis state.
   void _clearSmoothing() {
     _bufFaceWidth.clear();
     _bufFaceHeight.clear();
@@ -1053,32 +901,19 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _lastPosInstruction = null;
   }
 
-  /// Log hysteresis-triggered instruction changes with [FACE_REG] prefix.
   void _logInstructionChange(String newInstruction) {
     if (_lastPosInstruction != newInstruction) {
-      debugPrint(
-        '[FACE_REG] Instruction Change: '
-        '${_lastPosInstruction ?? "Accepted"} -> $newInstruction (Hysteresis Triggered)',
-      );
+      debugPrint('[FACE_REG] Instruction: $_lastPosInstruction -> $newInstruction');
     }
   }
 
-  /// Checks if the largest detected face is centered within the UI circle and
-  /// at the correct distance, using **smoothed** (5-frame moving average) face
-  /// metrics and **hysteresis** (safety gaps) to prevent flickering.
-  ///
-  /// Returns `null` when the face is properly positioned, or a user-facing
-  /// instruction string explaining what to adjust.
-  ///
-  /// Grace zone: 25% of circle size (strict) / 40% (relaxed during liveness).
   String? _getPositioningInstruction(
     Face face,
     CameraImage image, {
     bool strict = true,
   }) {
-    if (_uiCircleSize == 0 || _uiAvailW == 0) return null; // layout not ready
+    if (_uiCircleSize == 0 || _uiAvailW == 0) return null;
 
-    // ── Rotated camera dimensions (portrait) ──────────────────────────────
     final int sensorOrientation =
         _cameraController!.description.sensorOrientation;
     final bool isRotated = sensorOrientation == 90 || sensorOrientation == 270;
@@ -1089,143 +924,58 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         ? image.width.toDouble()
         : image.height.toDouble();
 
-    // Scale from camera image pixels → screen (logical) pixels
     final double scale = _uiAvailW / rotW;
-
-    // Circle center in camera coordinates
-    final double circleCameraCX = rotW / 2;
     final double circleTop = _uiAvailH * 0.40 - _uiCircleSize / 2;
     final double circleCameraCY = rotH / 2 + circleTop / scale;
-
-    // Circle diameter in camera pixels
     final double circleCameraSize = _uiCircleSize / scale;
 
-    // ── Use smoothed (5-frame averaged) face metrics ────────────────────
     final double smoothW = _bufAvg(_bufFaceWidth);
     final double smoothH = _bufAvg(_bufFaceHeight);
     final double smoothCX = _bufAvg(_bufFaceCX);
     final double smoothCY = _bufAvg(_bufFaceCY);
 
-    // Smoothed bounding-box edges
-    final double smoothLeft = smoothCX - smoothW / 2;
-    final double smoothRight = smoothCX + smoothW / 2;
     final double smoothTop = smoothCY - smoothH / 2;
     final double smoothBottom = smoothCY + smoothH / 2;
-
+    final double smoothLeft = smoothCX - smoothW / 2;
+    final double smoothRight = smoothCX + smoothW / 2;
     final double circleRadius = circleCameraSize / 2;
-
-    // ── 1. PRIORITY: Virtual Crown (Hairline) + Strict Boundary ──────────
-    // ML Kit bounding box top is at the eyebrow, not the hairline.
-    // Extend upward by 30% of face height to approximate the real crown/hair.
     final double virtualCrownTop = smoothTop - (smoothH * 0.30);
 
-    // Absolute circle edge coordinates
     final double circleTopBound = circleCameraCY - circleRadius;
     final double circleBottomBound = circleCameraCY + circleRadius;
-    final double circleLeftBound = circleCameraCX - circleRadius;
-    final double circleRightBound = circleCameraCX + circleRadius;
+    final double circleLeftBound = (rotW / 2) - circleRadius;
+    final double circleRightBound = (rotW / 2) + circleRadius;
 
-    debugPrint(
-      '[BOUNDARY_DEBUG] Crown: ${virtualCrownTop.toStringAsFixed(1)} | CircleTop: ${circleTopBound.toStringAsFixed(1)}',
-    );
-
-    // Hair/Crown touching or crossing the top of the circle
-    if (virtualCrownTop < circleTopBound) {
-      _logInstructionChange('Move slightly backward');
-      _lastPosInstruction = 'Move slightly backward';
-      return 'Move slightly backward';
-    }
-    // Chin touching or crossing the bottom
-    if (smoothBottom > circleBottomBound) {
-      _logInstructionChange('Move slightly backward');
-      _lastPosInstruction = 'Move slightly backward';
-      return 'Move slightly backward';
-    }
-    // Cheeks touching or crossing the sides
-    if (smoothLeft < circleLeftBound || smoothRight > circleRightBound) {
-      _logInstructionChange('Move slightly backward');
+    if (virtualCrownTop < circleTopBound ||
+        smoothBottom > circleBottomBound ||
+        smoothLeft < circleLeftBound ||
+        smoothRight > circleRightBound) {
       _lastPosInstruction = 'Move slightly backward';
       return 'Move slightly backward';
     }
 
-    // ── 2. Distance check with hysteresis ───────────────────────────────
     final double faceWidthRatio = smoothW / circleCameraSize;
-    final bool wasTooFar = _lastPosInstruction == 'Move closer to the camera';
-    final bool wasTooClose = _lastPosInstruction == 'Move slightly backward';
-
-    // Enter "closer": ratio < 0.40
-    // Stay in "closer" until ratio >= 0.45 (safety gap prevents flicker)
-    if (faceWidthRatio < 0.40 || (wasTooFar && faceWidthRatio < 0.45)) {
-      _logInstructionChange('Move closer to the camera');
+    if (faceWidthRatio < 0.40) {
       _lastPosInstruction = 'Move closer to the camera';
       return 'Move closer to the camera';
     }
 
-    // Enter "backward": ratio > 0.90 (comfortable close distance)
-    // Stay "backward" until ratio <= 0.75
-    final double backwardEnter = (_lastPosInstruction == null) ? 0.95 : 0.80;
-    if (faceWidthRatio > backwardEnter ||
-        (wasTooClose && faceWidthRatio > 0.75)) {
-      _logInstructionChange('Move slightly backward');
+    if (faceWidthRatio > 0.95) {
       _lastPosInstruction = 'Move slightly backward';
       return 'Move slightly backward';
     }
 
-    // ── 3. Relaxed Visual centering — 20/25% grace zone ────────────
-    // Only checked AFTER virtual crown and all edges are safely inside.
-    final double graceZoneX =
-        circleRadius * 0.20; // Expanded horizontal tolerance
-    final double graceZoneY =
-        circleRadius * 0.25; // Expanded vertical tolerance
-
-    // Horizontal (front camera is mirrored)
-    final double offX = (smoothCX - circleCameraCX).abs();
-    if (offX > graceZoneX) {
-      _logInstructionChange('Move to the center of the circle');
+    final double offX = (smoothCX - (rotW / 2)).abs();
+    if (offX > (circleRadius * 0.20)) {
       _lastPosInstruction = 'Move to the center of the circle';
       return 'Move to the center of the circle';
     }
 
-    // Vertical (not mirrored)
-    final double offY = (smoothCY - circleCameraCY).abs();
-    if (offY > graceZoneY) {
-      _logInstructionChange('Move to the center of the circle');
-      _lastPosInstruction = 'Move to the center of the circle';
-      return 'Move to the center of the circle';
-    }
-
-    // ── All checks passed — face is well-positioned ─────────────────────
-    if (_lastPosInstruction != null) {
-      debugPrint(
-        '[FACE_REG] Instruction Change: $_lastPosInstruction -> Accepted (Centered)',
-      );
-    }
     _lastPosInstruction = null;
-
-    final int stableMs = _steadyStartTime != null
-        ? DateTime.now().difference(_steadyStartTime!).inMilliseconds
-        : 0;
-    debugPrint(
-      '[FACE_REG] Status: Centered | AvgWidth: ${faceWidthRatio.toStringAsFixed(2)} '
-      '| CrownTop: ${virtualCrownTop.toStringAsFixed(1)} | CircleTop: ${circleTopBound.toStringAsFixed(1)} '
-      '| OffX: ${offX.toStringAsFixed(1)} | OffY: ${offY.toStringAsFixed(1)} '
-      '| StableTime: ${stableMs}ms',
-    );
-
-    return null; // Face is well-positioned
+    return null;
   }
 
-  // Check face is acceptably centered and sized
-  // Phase-aware face acceptability check.
-  //
-  // FRONT phase: strict 0.25 centerOffset — ensures a clean anchor image.
-  // LEFT / RIGHT phases: relaxed 0.45 centerOffset — head turns naturally
-  // shift the face bounding box toward one side of the frame.
   bool _isFaceAcceptable(Face face, CameraImage image, _Phase phase) {
-    // ── PRIORITY: Virtual Crown Extended-Box boundary check ──────────────
-    // If any edge of the extended bounding box (with 30% crown/hair padding
-    // on top) is touching or outside the circle, reject immediately —
-    // liveness challenges must NOT start.
     if (_uiCircleSize > 0 && _uiAvailW > 0 && _bufFaceWidth.isNotEmpty) {
       final int sensorOrientation =
           _cameraController!.description.sensorOrientation;
@@ -1234,211 +984,68 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       final double rotW = isRotated
           ? image.height.toDouble()
           : image.width.toDouble();
-      final double rotH = isRotated
-          ? image.width.toDouble()
-          : image.height.toDouble();
       final double scale = _uiAvailW / rotW;
 
-      final double circleCameraCX = rotW / 2;
       final double circleTopUI = _uiAvailH * 0.40 - _uiCircleSize / 2;
-      final double circleCameraCY = rotH / 2 + circleTopUI / scale;
+      final double circleCameraCY = (isRotated ? rotW : rotH) / 2 + circleTopUI / scale;
       final double circleCameraSize = _uiCircleSize / scale;
       final double circleRadius = circleCameraSize / 2;
 
       final double circleTopBound = circleCameraCY - circleRadius;
       final double circleBottomBound = circleCameraCY + circleRadius;
-      final double circleLeftBound = circleCameraCX - circleRadius;
-      final double circleRightBound = circleCameraCX + circleRadius;
+      final double circleLeftBound = (rotW / 2) - circleRadius;
+      final double circleRightBound = (rotW / 2) + circleRadius;
 
-      final double smoothW = _bufAvg(_bufFaceWidth);
       final double smoothH = _bufAvg(_bufFaceHeight);
-      final double smoothCX = _bufAvg(_bufFaceCX);
-      final double smoothCY = _bufAvg(_bufFaceCY);
-      final double smoothTop = smoothCY - smoothH / 2;
-      final double smoothBottom = smoothCY + smoothH / 2;
-      final double smoothLeft = smoothCX - smoothW / 2;
-      final double smoothRight = smoothCX + smoothW / 2;
-
-      // Virtual crown — extend top by 30% of face height
+      final double smoothTop = _bufAvg(_bufFaceCY) - smoothH / 2;
+      final double smoothBottom = _bufAvg(_bufFaceCY) + smoothH / 2;
+      final double smoothLeft = _bufAvg(_bufFaceCX) - _bufAvg(_bufFaceWidth) / 2;
+      final double smoothRight = _bufAvg(_bufFaceCX) + _bufAvg(_bufFaceWidth) / 2;
       final double virtualCrownTop = smoothTop - (smoothH * 0.30);
-
-      debugPrint(
-        '[BOUNDARY_DEBUG] isFaceAcceptable Crown: ${virtualCrownTop.toStringAsFixed(1)} | CircleTop: ${circleTopBound.toStringAsFixed(1)}',
-      );
 
       if (virtualCrownTop < circleTopBound ||
           smoothBottom > circleBottomBound ||
           smoothLeft < circleLeftBound ||
-          smoothRight > circleRightBound) {
-        debugPrint(
-          '[FACE_REG] _isFaceAcceptable() returns false (crown/extended box outside circle boundary)',
-        );
-        return false;
-      }
+          smoothRight > circleRightBound) return false;
     }
 
     final double widthRatio = face.boundingBox.width / image.width;
+    if (widthRatio < 0.12 || widthRatio > 0.85) return false;
 
-    // Debug: log widthRatio so we can see what the device actually reports
-    debugPrint('WidthRatio: $widthRatio');
+    final double centerOffset = (face.boundingBox.left + face.boundingBox.width / 2 - image.width / 2).abs() / image.width;
+    if (centerOffset > 0.25) return false;
 
-    // Relaxed thresholds — bounding box scale varies across devices
-    if (widthRatio < 0.12 || widthRatio > 0.85) {
-      debugPrint(
-        '[FACE_REG] _isFaceAcceptable() returns false (widthRatio: ${widthRatio.toStringAsFixed(3)} outside 0.12-0.85)',
-      );
-      return false;
-    }
-
-    // Phase-dependent centering tolerance
-    final double maxOffset = 0.25;
-
-    final double centerX = face.boundingBox.left + face.boundingBox.width / 2;
-    final double imageCenterX = image.width / 2;
-    final double centerOffset = (centerX - imageCenterX).abs() / image.width;
-
-    if (centerOffset > maxOffset) {
-      debugPrint(
-        '[FACE_REG] _isFaceAcceptable() returns false (centerOffset: ${centerOffset.toStringAsFixed(3)} > $maxOffset for phase=${phase.name})',
-      );
-      return false;
-    }
-
-    // Head pitch check — allow ±35 degrees tolerance (natural downward gaze)
-    final double? pitch = face.headEulerAngleX;
-    if (pitch != null && pitch.abs() > 35) {
-      debugPrint(
-        '[FACE_REG] _isFaceAcceptable() returns false (pitch: ${pitch.toStringAsFixed(1)} > 35)',
-      );
-      return false;
-    }
-
-    // (Edge-touch check already handled at top of method)
-
-    debugPrint('[FACE_REG] _isFaceAcceptable() returns true');
     return true;
   }
 
-  // Check head yaw for current capture phase
   bool _isPoseCorrect(Face face, _Phase phase) {
     final double? yawRaw = face.headEulerAngleY;
     if (yawRaw == null) return false;
-
-    final double yaw = -yawRaw;
-
-    switch (phase) {
-      case _Phase.front:
-        return yaw.abs() <= 15; // ±15° for front
-      default:
-        return true;
-    }
+    return yawRaw.abs() <= 15;
   }
 
-  String _getPoseInstruction(_Phase phase) {
-    switch (phase) {
-      case _Phase.front:
-        return 'Look straight ahead';
-      default:
-        return 'Hold still…';
-    }
-  }
+  String _getPoseInstruction(_Phase phase) => 'Look straight ahead';
 
-  // Get instruction based on face position in frame
-  String _getFacingInstruction(Face face, CameraImage image) {
-    final double imageArea = image.width * image.height.toDouble();
-    final double faceArea = face.boundingBox.width * face.boundingBox.height;
-    final double coverageRatio = faceArea / imageArea;
+  String _getFacingInstruction(Face face, CameraImage image) => 'Fit your face in the circle';
 
-    if (coverageRatio < 0.08) return 'Move closer';
-    if (coverageRatio > 0.75) return 'Move back';
-
-    final double? pitch = face.headEulerAngleX;
-    if (pitch != null && pitch > 15) return 'Fit your face in the circle';
-
-    return 'Fit your face in the circle';
-  }
-
-  // Capture current camera frame as JPEG bytes
   Future<Uint8List?> _captureCurrentFrame() async {
     try {
       if (_lastCameraImage == null) return null;
-      final camImg = _lastCameraImage!;
-
-      // If camera delivers JPEG directly (some Xiaomi devices do this)
-      if (camImg.format.group == ImageFormatGroup.jpeg) {
-        return Uint8List.fromList(camImg.planes[0].bytes);
+      if (_lastCameraImage!.format.group == ImageFormatGroup.jpeg) {
+        return Uint8List.fromList(_lastCameraImage!.planes[0].bytes);
       }
-
-      // For YUV420 — convert synchronously on this thread
-      // This is safe because _onCameraFrame already skips if isProcessingFrame
-      // so we are never doing this on multiple threads at once
-      return _convertYuvToJpegSync(camImg);
+      return null;
     } catch (e) {
       return null;
     }
   }
 
-  Uint8List? _convertYuvToJpegSync(CameraImage camImg) {
-    try {
-      final int width = camImg.width;
-      final int height = camImg.height;
-      final yPlane = camImg.planes[0];
-      final uPlane = camImg.planes[1];
-      final vPlane = camImg.planes[2];
-      final int uvRowStride = uPlane.bytesPerRow;
-      final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
-
-      final image = img.Image(width: width, height: height);
-
-      for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-          final int yIndex = y * yPlane.bytesPerRow + x;
-          final int uvIndex = (y ~/ 2) * uvRowStride + (x ~/ 2) * uvPixelStride;
-
-          if (yIndex >= yPlane.bytes.length) continue;
-          if (uvIndex >= uPlane.bytes.length) continue;
-
-          final int yVal = yPlane.bytes[yIndex];
-          final int uVal = uPlane.bytes[uvIndex];
-          final int vVal = vPlane.bytes[uvIndex];
-
-          final int r = (yVal + 1.402 * (vVal - 128)).round().clamp(0, 255);
-          final int g =
-              (yVal - 0.344136 * (uVal - 128) - 0.714136 * (vVal - 128))
-                  .round()
-                  .clamp(0, 255);
-          final int b = (yVal + 1.772 * (uVal - 128)).round().clamp(0, 255);
-
-          image.setPixelRgb(x, y, r, g, b);
-        }
-      }
-
-      return Uint8List.fromList(img.encodeJpg(image, quality: 80));
-    } catch (e) {
-      return null;
-    }
-  }
-
-  // ─── UI state updates ─────────────────────────────────────────────────────
+  // ─── UI updates ─────────────────────────────────────────────────────
 
   void _setPhase(_Phase newPhase) {
     if (!mounted) return;
-    if (_phase == newPhase) return;
+    setState(() => _phase = newPhase);
 
-    if (newPhase != _Phase.error && newPhase != _Phase.liveness) {
-      HapticFeedback.mediumImpact();
-      _successBounceController.forward(from: 0.0);
-    }
-    if (newPhase == _Phase.done) {
-      _particleController.forward(from: 0.0);
-    }
-
-    setState(() {
-      _phase = newPhase;
-    });
-
-    // Only reset challenge state for the liveness phase.
-    // For capture phases (left/front/right), _challengeVerified stays true.
     if (newPhase == _Phase.liveness) {
       _challengeVerified = false;
       _challengeStartTime = null;
@@ -1447,148 +1054,56 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       _isFaceReady = false;
       _clearSmoothing();
     }
-
-    // Update instruction text for new phase
-    switch (newPhase) {
-      case _Phase.liveness:
-        _blinkCountdownController.reset();
-        _updateInstruction(
-          'Fit your face in the circle',
-          subtitle: 'Centre your face and hold steady to begin',
-        );
-        break;
-      case _Phase.front:
-        _updateInstruction(
-          'Hold still…',
-          subtitle: 'Scanning your face silently',
-        );
-        break;
-      case _Phase.processing:
-        _updateInstruction(
-          'Face registration completed',
-          subtitle: 'Saving your registration securely',
-        );
-        break;
-      case _Phase.done:
-        _updateInstruction(
-          'Registration complete!',
-          subtitle: 'Your face has been registered',
-        );
-        break;
-      case _Phase.error:
-        // handled by _setError
-        break;
-      default:
-        break;
-    }
   }
 
-  void _updateInstruction(
-    String title, {
-    String? subtitle,
-    bool animate = true,
-  }) {
+  void _updateInstruction(String title, {String? subtitle, bool animate = true}) {
     if (!mounted) return;
-
-    if (_instructionTitle == title) {
-      _instructionDebounceTimer?.cancel();
-      return;
-    }
-
     _instructionDebounceTimer?.cancel();
     _instructionDebounceTimer = Timer(const Duration(milliseconds: 120), () {
       if (!mounted) return;
-      if (_instructionTitle == title) return;
-
-      if (animate) {
-        _textFadeController.reverse().then((_) {
-          if (!mounted) return;
-          setState(() {
-            _instructionTitle = title;
-            _instructionSubtitle = subtitle ?? (_subtitles[title] ?? '');
-
-            final lower = title.toLowerCase();
-            if (lower.contains('move closer') ||
-                lower.contains('move left') ||
-                lower.contains('move right') ||
-                lower.contains('move slightly up') ||
-                lower.contains('move slightly down') ||
-                lower.contains('move to the center') ||
-                lower.contains('move slightly backward')) {
-              _borderColor = Colors.orangeAccent;
-            } else if (_phase != _Phase.error &&
-                _borderColor != AppStyles.successGreen) {
-              _borderColor = AppStyles.primaryBlue;
-            }
-          });
-          _textFadeController.forward();
-          // Force blink timer to reset and start
-          if (_phase == _Phase.liveness) {
-            _blinkCountdownController.forward(from: 0.0);
-          }
-        });
-      } else {
-        setState(() {
-          _instructionTitle = title;
-          _instructionSubtitle = subtitle ?? (_subtitles[title] ?? '');
-
-          final lower = title.toLowerCase();
-          if (lower.contains('move closer') ||
-              lower.contains('move left') ||
-              lower.contains('move right') ||
-              lower.contains('move slightly up') ||
-              lower.contains('move slightly down') ||
-              lower.contains('move to the center') ||
-              lower.contains('move slightly backward')) {
-            _borderColor = Colors.orangeAccent;
-          } else if (_phase != _Phase.error &&
-              _borderColor != AppStyles.successGreen) {
-            _borderColor = AppStyles.primaryBlue;
-          }
-        });
-      }
+      setState(() {
+        _instructionTitle = title;
+        _instructionSubtitle = subtitle ?? (_subtitles[title] ?? '');
+      });
     });
   }
 
-  // FIXED: debugPrint full error for logs, show short user-friendly message in UI
   void _setError(String message) {
     if (!mounted) return;
-    debugPrint('[FACE_REG] ERROR: $message');
     setState(() {
       _phase = _Phase.error;
-      _errorMessage = message;
-      _borderColor = AppStyles.errorRed;
       _instructionTitle = 'Something went wrong';
       _instructionSubtitle = 'Registration failed. Please try again.';
     });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // DISPOSE — must stop stream before disposing controller
-  // ─────────────────────────────────────────────────────────────────────────
+  Widget _buildProcessingOverlay() => Container(
+        color: Colors.black54,
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.check_circle, color: Colors.white, size: 64),
+              SizedBox(height: 16),
+              Text('Face Captured ✓', style: TextStyle(color: Colors.white, fontSize: 20)),
+            ],
+          ),
+        ),
+      );
+
   @override
   void dispose() {
+    _instructionDebounceTimer?.cancel();
     _pulseController.dispose();
     _textFadeController.dispose();
     _blinkCountdownController.dispose();
     _successBounceController.dispose();
     _particleController.dispose();
-
-    // Stop image stream FIRST, then dispose
-    if (_cameraController != null && _cameraInitialized) {
-      try {
-        _cameraController!.stopImageStream();
-      } catch (_) {}
-      _cameraController!.dispose();
-    }
-
+    _cameraController?.dispose();
     _mlService.faceDetector.close();
     super.dispose();
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // BUILD — preserved from original UI exactly
-  // ─────────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -1598,69 +1113,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         body: SafeArea(
           child: Column(
             children: [
-              // ── Top App Bar (original) ──────────────────────────────────
-              Theme(
-                data: Theme.of(context).copyWith(
-                  textTheme: Theme.of(context).textTheme.apply(
-                    bodyColor: const Color(0xFF1A202C),
-                    displayColor: const Color(0xFF1A202C),
-                  ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16.0,
-                    vertical: 16.0,
-                  ),
-                  child: Row(
-                    children: [
-                      const SizedBox(width: 48),
-                      const Spacer(),
-                      Column(
-                        children: [
-                          const Text(
-                            'Step 2 of 3',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF4A5568),
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.2,
-                              inherit: false,
-                            ),
-                          ),
-                          const Text(
-                            'Face Registration',
-                            style: TextStyle(
-                              fontSize: 19,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF1A202C),
-                              letterSpacing: -0.3,
-                              inherit: false,
-                            ),
-                          ),
-                          // Progress indicator below title
-                          if (_captureProgress > 0)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: Text(
-                                _progressLabel,
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: AppStyles.primaryBlue,
-                                  fontWeight: FontWeight.w500,
-                                  inherit: false,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                      const Spacer(),
-                      const SizedBox(width: 48),
-                    ],
-                  ),
-                ),
-              ),
-
-              // ── Camera Preview — uses Expanded to fill available space ──
               Expanded(
                 child: LayoutBuilder(
                   builder: (context, constraints) {
@@ -1669,7 +1121,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                     final double circleSize = availW * 0.80;
                     final double circleTop = availH * 0.40 - circleSize / 2;
 
-                    // Store layout info for face positioning calculations
                     _uiCircleSize = circleSize;
                     _uiAvailW = availW;
                     _uiAvailH = availH;
@@ -2245,6 +1696,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _blinkCountdownController.reset();
     _steadyStartTime = null;
     _isFaceReady = false;
+    _cameraFrozen = false;
+    _isSubmitting = false;
     _clearSmoothing();
 
     setState(() {
@@ -2252,7 +1705,64 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       _errorMessage = null;
     });
 
+    // Restart camera stream if it was stopped
+    try {
+      _cameraController?.startImageStream(_onCameraFrame);
+    } catch (_) {}
+
     _setPhase(_Phase.liveness);
+  }
+
+  /// Processing overlay shown when camera is frozen
+  Widget _buildProcessingOverlay() {
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 300),
+      opacity: _cameraFrozen ? 1.0 : 0.0,
+      child: Container(
+        color: Colors.black.withValues(alpha: 0.55),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _phase == _Phase.done ? Icons.check_circle : Icons.check_circle_outline,
+                color: AppStyles.successGreen,
+                size: 48,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Face Captured ✓',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (_phase != _Phase.done) ...[
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Processing…',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.8),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
