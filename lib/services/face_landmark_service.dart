@@ -19,11 +19,30 @@ class FaceLandmarkService {
   factory FaceLandmarkService() => _instance;
   FaceLandmarkService._internal();
 
+  // Feature Flag for Quality-Weighted Fusion
+  static const bool kUseWeightedFusion = true;
+
+  // Private Expando to associate qualities with embedding list references internally
+  final Expando<double> _embeddingQualities = Expando<double>('embeddingQualities');
+
+  // Temporary transaction variables for diagnostics
+  List<double>? _currentMasterEmbedding;
+  double? _currentEffectiveThreshold;
+
   /// Base URL of the FastAPI face service.
   /// Read from .env `FACE_API_URL`, defaults to Android-emulator loopback.
   late final String _apiUrl;
 
   bool _isInitialized = false;
+
+  // Session Counters
+  static int _regCounter = 0;
+  static int _verCounter = 0;
+  static int _calCounter = 0;
+
+  static String newRegSessionId() => 'REG_${(++_regCounter).toString().padLeft(4, '0')}';
+  static String newVerSessionId() => 'VER_${(++_verCounter).toString().padLeft(4, '0')}';
+  static String newCalSessionId() => 'CAL_${(++_calCounter).toString().padLeft(4, '0')}';
 
   // Public API - matches old FaceMlService
   Future<void> initialize() async {
@@ -101,14 +120,14 @@ class FaceLandmarkService {
           .map((e) => (e as num).toDouble())
           .toList();
 
-      debugPrint(
-        '[FACE_LANDMARK] Received ${embedding.length}-dim embedding',
-      );
+      debugPrint('[FACE_LANDMARK] Received ${embedding.length}-dim embedding');
 
       // Log quality diagnostics from backend
+      double rawQualityScore = 0.0;
       final List<dynamic>? qualityList = json['quality'] as List<dynamic>?;
       if (qualityList != null && qualityList.isNotEmpty) {
         final q = qualityList[0] as Map<String, dynamic>;
+        rawQualityScore = (q['quality_score'] as num?)?.toDouble() ?? 0.0;
         debugPrint(
           '[FACE_LANDMARK] QUALITY: passed=${q['passed']} '
           'blur=${q['blur_score']} faceArea=${q['face_area']} '
@@ -117,6 +136,8 @@ class FaceLandmarkService {
         );
       }
 
+      _embeddingQualities[embedding] = rawQualityScore;
+
       return embedding;
     } catch (e) {
       debugPrint('[FACE_LANDMARK] generateEmbedding error: $e');
@@ -124,39 +145,32 @@ class FaceLandmarkService {
     }
   }
 
-  // ─── GENERATE EMBEDDING BATCH ───────────────────────────────────────────
-  //
-  // Sends all JPEG frames in a single multipart POST to /api/embed.
-  // Eliminates N-1 network round trips compared to calling generateEmbedding
-  // individually. Returns a list of nullable embeddings — null for frames
-  // where no face was detected by the backend.
-  // ────────────────────────────────────────────────────────────────────────
-  Future<List<List<double>?>> generateEmbeddingBatch({
+  Future<List<BatchEmbeddingResult>> generateEmbeddingBatch({
     required List<Uint8List> jpegBytesList,
-  }) async {
-    // Delegate to the quality-aware version and strip quality data
-    final results = await generateEmbeddingBatchWithQuality(
-      jpegBytesList: jpegBytesList,
-    );
-    return results.map((r) => r.embedding).toList();
-  }
-
-  // ─── GENERATE EMBEDDING BATCH WITH QUALITY ──────────────────────────────
-  //
-  // Same as generateEmbeddingBatch but returns structured BatchEmbeddingResult
-  // with quality scores for ranking and filtering.
-  // ────────────────────────────────────────────────────────────────────────
-  Future<List<BatchEmbeddingResult>> generateEmbeddingBatchWithQuality({
-    required List<Uint8List> jpegBytesList,
+    String? sessionId,
+    String? prefix,
   }) async {
     if (!_isInitialized) await initialize();
 
-    try {
-      debugPrint(
-        '[FACE_LANDMARK] Batch sending ${jpegBytesList.length} frames to $_apiUrl/api/embed',
-      );
+    final stopwatch = Stopwatch()..start();
+    final String logPrefix = prefix ?? 'FACE_LANDMARK';
+    final String sId = sessionId ?? 'BATCH';
 
-      final Stopwatch sw = Stopwatch()..start();
+    void log(String msg) {
+      if (logPrefix == 'FACE_REG') {
+        FaceLogger.reg(sId, msg);
+      } else if (logPrefix == 'FACE_VER') {
+        FaceLogger.ver(sId, msg);
+      } else if (logPrefix == 'FACE_CAL') {
+        FaceLogger.cal(sId, msg);
+      } else {
+        debugPrint('[$logPrefix][$sId] $msg');
+      }
+    }
+
+    try {
+      log('Batch Started');
+      log('  Frames = ${jpegBytesList.length}');
 
       final uri = Uri.parse('$_apiUrl/api/embed');
       final request = http.MultipartRequest('POST', uri);
@@ -177,20 +191,23 @@ class FaceLandmarkService {
 
       final response = await http.Response.fromStream(streamedResponse);
 
-      sw.stop();
-      debugPrint('[CAPTURE] API Duration: ${sw.elapsedMilliseconds}ms');
+      stopwatch.stop();
+      log('API Duration: ${stopwatch.elapsedMilliseconds}ms');
 
       if (response.statusCode != 200) {
-        debugPrint(
-          '[FACE_LANDMARK] Batch API error ${response.statusCode}: ${response.body.substring(0, response.body.length > 300 ? 300 : response.body.length)}',
-        );
+        log('API Error — HTTP ${response.statusCode}');
         return List.generate(
           jpegBytesList.length,
-          (_) => const BatchEmbeddingResult(
+          (_) => BatchEmbeddingResult(
             embedding: null,
             qualityPassed: false,
-            qualityScore: 0.0,
-            rejectionReason: 'API error',
+            rejectionReason: 'API error ${response.statusCode}',
+            blurScore: 0.0,
+            faceArea: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            rawQualityScore: 0.0,
+            apiFailed: true,
           ),
         );
       }
@@ -201,72 +218,100 @@ class FaceLandmarkService {
 
       final List<BatchEmbeddingResult> result = [];
       for (int i = 0; i < embeddings.length; i++) {
-        final Map<String, dynamic>? q = (qualityList != null && i < qualityList.length)
-            ? qualityList[i] as Map<String, dynamic>
-            : null;
-
-        final bool passed = q?['passed'] as bool? ?? (embeddings[i] != null);
-        final double blurScore = (q?['blur_score'] as num?)?.toDouble() ?? 0.0;
-        final double faceArea = (q?['face_area'] as num?)?.toDouble() ?? 0.0;
-        // Quality score: higher = better. Combine blur (inverted) + face area.
-        // blur_score is typically 0-1 where lower is sharper; invert it.
-        final double qualityScore = passed
-            ? ((1.0 - blurScore.clamp(0.0, 1.0)) * 0.6 + faceArea.clamp(0.0, 1.0) * 0.4)
-            : 0.0;
-
-        if (embeddings[i] == null) {
-          debugPrint('[CAPTURE] Frame Rejected | frame=$i reason=no_face_detected');
-          result.add(BatchEmbeddingResult(
-            embedding: null,
-            qualityPassed: false,
-            qualityScore: 0.0,
-            rejectionReason: 'No face detected',
-          ));
-        } else if (!passed) {
-          final List<dynamic>? reasons = q?['reasons'] as List<dynamic>?;
-          final String reason = reasons?.join(', ') ?? 'Quality check failed';
-          debugPrint('[CAPTURE] Frame Rejected | frame=$i reason=$reason');
-          result.add(BatchEmbeddingResult(
-            embedding: null,
-            qualityPassed: false,
-            qualityScore: 0.0,
-            rejectionReason: reason,
-          ));
-        } else {
-          final emb = (embeddings[i] as List)
+        List<double>? emb;
+        if (embeddings[i] != null) {
+          emb = (embeddings[i] as List)
               .map((e) => (e as num).toDouble())
               .toList();
-          debugPrint('[CAPTURE] Frame Accepted | frame=$i qualityScore=${qualityScore.toStringAsFixed(3)}');
-          result.add(BatchEmbeddingResult(
-            embedding: emb,
-            qualityPassed: true,
-            qualityScore: qualityScore,
-          ));
         }
 
-        if (q != null) {
-          debugPrint(
-            '[FACE_LANDMARK] Batch frame $i QUALITY: passed=${q['passed']} '
-            'blur=${q['blur_score']} faceArea=${q['face_area']} '
-            'yaw=${q['yaw']} pitch=${q['pitch']}',
-          );
+        bool qualityPassed = false;
+        String? rejectionReason;
+        double blurScore = 0.0;
+        double faceArea = 0.0;
+        double yaw = 0.0;
+        double pitch = 0.0;
+        double rawQualityScore = 0.0;
+
+        if (qualityList != null && i < qualityList.length) {
+          final q = qualityList[i] as Map<String, dynamic>;
+          qualityPassed = q['passed'] as bool? ?? false;
+          blurScore = (q['blur_score'] as num?)?.toDouble() ?? 0.0;
+          faceArea = (q['face_area'] as num?)?.toDouble() ?? 0.0;
+          yaw = (q['yaw'] as num?)?.toDouble() ?? 0.0;
+          pitch = (q['pitch'] as num?)?.toDouble() ?? 0.0;
+          rawQualityScore = (q['quality_score'] as num?)?.toDouble() ?? 0.0;
+
+          final List<dynamic>? reasons = q['reasons'] as List<dynamic>?;
+          if (reasons != null && reasons.isNotEmpty) {
+            rejectionReason = reasons.join(', ');
+          }
+        }
+
+        if (emb == null && rejectionReason == null) {
+          rejectionReason = 'no_face_detected';
+        }
+
+        if (emb != null) {
+          _embeddingQualities[emb] = rawQualityScore;
+        }
+
+        result.add(
+          BatchEmbeddingResult(
+            embedding: emb,
+            qualityPassed: qualityPassed,
+            rejectionReason: rejectionReason,
+            blurScore: blurScore,
+            faceArea: faceArea,
+            yaw: yaw,
+            pitch: pitch,
+            rawQualityScore: rawQualityScore,
+          ),
+        );
+
+        final int frameNum = i + 1;
+        final int qScore = rawQualityScore.clamp(0.0, 100.0).toInt();
+        if (emb != null && qualityPassed) {
+          log('Frame $frameNum');
+          log('  Quality = $qScore');
+          log('  Passed  = true');
+        } else {
+          final String reason = rejectionReason ?? 'no_face_detected';
+          log('Frame $frameNum');
+          log('  Passed = false');
+          log('  Reason = $reason');
+          log('  Score  = $qScore');
         }
       }
 
-      final int validCount = result.where((r) => r.embedding != null).length;
-      debugPrint(
-        '[FACE_LANDMARK] Batch complete: $validCount/${jpegBytesList.length} valid embeddings',
-      );
+      final int accepted = result
+          .where((e) => e.embedding != null && e.qualityPassed)
+          .length;
+      final int rejected = jpegBytesList.length - accepted;
+      final double avgQuality = result.isEmpty
+          ? 0.0
+          : result.map((e) => e.rawQualityScore).reduce((a, b) => a + b) /
+                result.length;
+      log('Batch Summary');
+      log('  Accepted        = $accepted');
+      log('  Rejected        = $rejected');
+      log('  Average Quality = ${avgQuality.toStringAsFixed(1)}');
       return result;
     } catch (e) {
-      debugPrint('[FACE_LANDMARK] generateEmbeddingBatch error: $e');
+      stopwatch.stop();
+      log('API Failed — ${e.runtimeType}: $e');
       return List.generate(
         jpegBytesList.length,
         (_) => BatchEmbeddingResult(
           embedding: null,
           qualityPassed: false,
-          qualityScore: 0.0,
           rejectionReason: e.toString(),
+          blurScore: 0.0,
+          faceArea: 0.0,
+          yaw: 0.0,
+          pitch: 0.0,
+          rawQualityScore: 0.0,
+          apiFailed: true,
         ),
       );
     }
@@ -290,11 +335,19 @@ class FaceLandmarkService {
   }
 
   // ─── AVERAGE EMBEDDINGS ─────────────────────────────────────────────────
-  // Pure math — unchanged from old implementation.
   // Works with any embedding dimension (192 or 512).
+  // Dispatches to weightedAverageEmbeddings if kUseWeightedFusion is enabled,
+  // otherwise falls back to simpleAverageEmbeddings.
   // ────────────────────────────────────────────────────────────────────────
   List<double> averageEmbeddings(List<List<double>> embeddings) {
-    debugPrint('[FACE_LANDMARK] Averaging ${embeddings.length} embeddings');
+    if (kUseWeightedFusion) {
+      return weightedAverageEmbeddings(embeddings);
+    }
+    return simpleAverageEmbeddings(embeddings);
+  }
+
+  List<double> simpleAverageEmbeddings(List<List<double>> embeddings) {
+    debugPrint('[FACE_LANDMARK] Averaging ${embeddings.length} embeddings (simple)');
     if (embeddings.isEmpty) {
       debugPrint('[FACE_LANDMARK] No embeddings to average');
       return [];
@@ -324,6 +377,186 @@ class FaceLandmarkService {
     );
 
     return normalized;
+  }
+
+  List<double> weightedAverageEmbeddings(List<List<double>> embeddings) {
+    if (embeddings.isEmpty) {
+      debugPrint('[FACE_LANDMARK] No embeddings to average');
+      return [];
+    }
+    if (embeddings.length == 1) {
+      debugPrint('[FACE_LANDMARK] Only one embedding, returning as is');
+      return embeddings[0];
+    }
+
+    final int n = embeddings.length;
+    final int vecSize = embeddings[0].length;
+
+    // 1. Map to WeightedEmbedding using Expando qualities
+    final List<WeightedEmbedding> weightedInputs = [];
+    final List<double> qualities = [];
+    for (final emb in embeddings) {
+      double? q = _embeddingQualities[emb];
+      if (q == null) {
+        debugPrint('[FACE_LANDMARK] WARNING Missing backend quality Using fallback quality = 80');
+        q = 80.0;
+      }
+      weightedInputs.add(WeightedEmbedding(embedding: emb, quality: q));
+      qualities.add(q);
+    }
+
+    // 2. Compute weights with clamping and redistribution
+    final List<bool> clamped = List.filled(n, false);
+    final List<double> weights = _calculateWeights(qualities, clamped);
+
+    // 3. Compute weighted average
+    final List<double> weightedAveraged = List.filled(vecSize, 0.0);
+    for (int i = 0; i < n; i++) {
+      final emb = weightedInputs[i].embedding;
+      final w = weights[i];
+      for (int j = 0; j < vecSize; j++) {
+        weightedAveraged[j] += emb[j] * w;
+      }
+    }
+
+    // 4. L2 Normalize
+    final double magBefore = _getMagnitude(weightedAveraged);
+    final List<double> normalized = _l2Normalize(weightedAveraged);
+    final double magAfter = _getMagnitude(normalized);
+
+    // 5. Diagnostics calculations
+    final double weightSum = weights.reduce((a, b) => a + b);
+    final double highestWeight = weights.reduce((a, b) => math.max(a, b));
+    final double lowestWeight = weights.reduce((a, b) => math.min(a, b));
+    final double avgQuality = qualities.reduce((a, b) => a + b) / n;
+    final double minQual = qualities.reduce((a, b) => math.min(a, b));
+    final double maxQual = qualities.reduce((a, b) => math.max(a, b));
+    final double qualityStdDev = _calculateStdDev(qualities, avgQuality);
+
+    // 6. Simple average for comparison
+    final List<double> simpleAvg = simpleAverageEmbeddings(embeddings);
+    final double sim = cosineSimilarity(simpleAvg, normalized);
+
+    // 7. Output logs (Ensure ALL log lines start with [FACE_LANDMARK] exactly as requested)
+    debugPrint('[FACE_LANDMARK] QUALITY WEIGHTED FUSION ENABLED');
+    debugPrint('[FACE_LANDMARK] ');
+    for (int i = 0; i < n; i++) {
+      debugPrint('[FACE_LANDMARK] Frame ${i + 1}');
+      debugPrint('[FACE_LANDMARK] Backend Quality : ${qualities[i].toStringAsFixed(1)}');
+      debugPrint('[FACE_LANDMARK] Weight : ${weights[i].toStringAsFixed(4)}');
+      debugPrint('[FACE_LANDMARK] Clamped : ${clamped[i] ? "YES" : "NO"}');
+      debugPrint('[FACE_LANDMARK] ');
+    }
+    debugPrint('[FACE_LANDMARK] Weight Sum : ${weightSum.toStringAsFixed(4)}');
+    debugPrint('[FACE_LANDMARK] Highest Weight : ${highestWeight.toStringAsFixed(4)}');
+    debugPrint('[FACE_LANDMARK] Lowest Weight : ${lowestWeight.toStringAsFixed(4)}');
+    debugPrint('[FACE_LANDMARK] Average Quality : ${avgQuality.toStringAsFixed(1)}');
+    debugPrint('[FACE_LANDMARK] Minimum Quality : ${minQual.toStringAsFixed(1)}');
+    debugPrint('[FACE_LANDMARK] Maximum Quality : ${maxQual.toStringAsFixed(1)}');
+    debugPrint('[FACE_LANDMARK] Quality Std Dev : ${qualityStdDev.toStringAsFixed(1)}');
+    debugPrint('[FACE_LANDMARK] Cosine(Simple vs Weighted): ${sim.toStringAsFixed(4)}');
+    debugPrint('[FACE_LANDMARK] Embedding Length Before Normalize : ${magBefore.toStringAsFixed(4)}');
+    debugPrint('[FACE_LANDMARK] Embedding Length After Normalize : ${magAfter.toStringAsFixed(4)}');
+    debugPrint('[FACE_LANDMARK] Normalization Passed : YES');
+
+    // Matching diagnostics
+    if (_currentMasterEmbedding != null) {
+      final double simpleSim = cosineSimilarity(simpleAvg, _currentMasterEmbedding!);
+      final double weightedSim = cosineSimilarity(normalized, _currentMasterEmbedding!);
+      final double difference = weightedSim - simpleSim;
+      final double thresh = _currentEffectiveThreshold ?? 0.82;
+      final String decision = (weightedSim >= thresh) ? 'PASS' : 'FAIL';
+
+      debugPrint('[FACE_LANDMARK] Simple Similarity to Master : ${simpleSim.toStringAsFixed(4)}');
+      debugPrint('[FACE_LANDMARK] Weighted Similarity to Master : ${weightedSim.toStringAsFixed(4)}');
+      debugPrint('[FACE_LANDMARK] Difference : ${difference.toStringAsFixed(4)}');
+      debugPrint('[FACE_LANDMARK] Decision : $decision');
+    }
+
+    // 8. Associate computed average quality for hierarchical fusion
+    _embeddingQualities[normalized] = avgQuality;
+
+    // 9. Clear temporary transaction variables
+    _currentMasterEmbedding = null;
+    _currentEffectiveThreshold = null;
+
+    return normalized;
+  }
+
+  List<double> _calculateWeights(List<double> qualities, List<bool> clamped, {double minWeightVal = 0.05}) {
+    final int n = qualities.length;
+    if (n == 0) return [];
+    if (n == 1) return [1.0];
+
+    double minWeight = minWeightVal;
+    if (minWeight * n >= 1.0) {
+      minWeight = 0.9 / n;
+    }
+
+    double totalQuality = qualities.reduce((a, b) => a + b);
+    if (totalQuality == 0.0) {
+      return List.filled(n, 1.0 / n);
+    }
+
+    final List<double> weights = List.filled(n, 0.0);
+    bool checkNeeded = true;
+
+    while (checkNeeded) {
+      checkNeeded = false;
+      double sumClamped = 0.0;
+      double sumNonClampedQuality = 0.0;
+
+      for (int i = 0; i < n; i++) {
+        if (clamped[i]) {
+          sumClamped += minWeight;
+        } else {
+          sumNonClampedQuality += qualities[i];
+        }
+      }
+
+      final double remainingWeight = 1.0 - sumClamped;
+
+      for (int i = 0; i < n; i++) {
+        if (!clamped[i]) {
+          double w = 0.0;
+          if (sumNonClampedQuality > 0.0) {
+            w = (qualities[i] / sumNonClampedQuality) * remainingWeight;
+          } else {
+            int nonClampedCount = n - clamped.where((c) => c).length;
+            w = remainingWeight / nonClampedCount;
+          }
+
+          if (w < minWeight) {
+            clamped[i] = true;
+            checkNeeded = true;
+            break;
+          } else {
+            weights[i] = w;
+          }
+        } else {
+          weights[i] = minWeight;
+        }
+      }
+    }
+
+    return weights;
+  }
+
+  double _getMagnitude(List<double> embedding) {
+    double magnitude = 0.0;
+    for (final v in embedding) {
+      magnitude += v * v;
+    }
+    return math.sqrt(magnitude);
+  }
+
+  double _calculateStdDev(List<double> values, double mean) {
+    if (values.isEmpty) return 0.0;
+    double sumOfSquares = 0.0;
+    for (final v in values) {
+      sumOfSquares += math.pow(v - mean, 2);
+    }
+    return math.sqrt(sumOfSquares / values.length);
   }
 
   // ─── COSINE SIMILARITY ──────────────────────────────────────────────────
@@ -365,14 +598,24 @@ class FaceLandmarkService {
 
     debugPrint('[FACE_VER] ═══ VERIFICATION DEBUG ═══');
     debugPrint('[FACE_VER] Live frames: ${liveEmbeddings.length}');
-    debugPrint('[FACE_VER] masterEmbedding present: ${masterEmbedding != null}');
+    debugPrint(
+      '[FACE_VER] masterEmbedding present: ${masterEmbedding != null}',
+    );
 
     // Clamp threshold: never exceed 0.76 (temporary safeguard)
     final double effectiveThreshold = math.max(threshold, 0.65);
-    debugPrint('[FACE_VER] thresholdUsed=${effectiveThreshold.toStringAsFixed(4)} (stored=${threshold.toStringAsFixed(4)}, floor=0.65)');
+    
+    // Store temporarily for diagnostics during current execution
+    _currentMasterEmbedding = masterEmbedding;
+    _currentEffectiveThreshold = effectiveThreshold;
+
+    debugPrint(
+      '[FACE_VER] thresholdUsed=${effectiveThreshold.toStringAsFixed(4)} (stored=${threshold.toStringAsFixed(4)}, floor=0.65)',
+    );
 
     // Determine primary template
-    final bool useMaster = masterEmbedding != null && masterEmbedding.isNotEmpty;
+    final bool useMaster =
+        masterEmbedding != null && masterEmbedding.isNotEmpty;
 
     // Build on-the-fly average of A/B/C for fallback / diagnostics
     final int dim = storedEmbeddingA.length;
@@ -424,9 +667,7 @@ class FaceLandmarkService {
     debugPrint(
       '[FACE_VER] allScores=${sorted.map((s) => s.toStringAsFixed(4)).join(',')}',
     );
-    debugPrint(
-      '[FACE_VER] top3Average=${top3Average.toStringAsFixed(4)}',
-    );
+    debugPrint('[FACE_VER] top3Average=${top3Average.toStringAsFixed(4)}');
     debugPrint(
       '[FACE_VER] thresholdUsed=${effectiveThreshold.toStringAsFixed(4)}',
     );
@@ -481,6 +722,20 @@ class FaceLandmarkService {
   }
 }
 
+class FaceLogger {
+  static void reg(String sessionId, String message) =>
+      debugPrint('[FACE_REG][$sessionId] $message');
+
+  static void ver(String sessionId, String message) =>
+      debugPrint('[FACE_VER][$sessionId] $message');
+
+  static void cal(String sessionId, String message) =>
+      debugPrint('[FACE_CAL][$sessionId] $message');
+
+  static void separator(String sessionId, String prefix) =>
+      debugPrint('[$prefix][$sessionId] ═' * 40);
+}
+
 // Result type - identical to old one
 class VerificationResult {
   final bool isMatch;
@@ -494,19 +749,48 @@ class VerificationResult {
   });
 }
 
-/// Structured result for each frame in a batch embedding request.
-/// Contains the embedding (if face detected), quality pass/fail,
-/// quality score for ranking, and rejection reason if applicable.
 class BatchEmbeddingResult {
   final List<double>? embedding;
   final bool qualityPassed;
-  final double qualityScore; // Higher = better quality, for ranking
   final String? rejectionReason;
+  final double blurScore;
+  final double faceArea;
+  final double yaw;
+  final double pitch;
+  final double rawQualityScore;
 
-  const BatchEmbeddingResult({
-    this.embedding,
-    this.qualityPassed = true,
-    this.qualityScore = 1.0,
+  /// True when the API request itself failed (network error, timeout, HTTP 5xx).
+  /// False when the backend responded successfully (even if quality was rejected).
+  /// The registration screen uses this to distinguish network failures from
+  /// quality failures — only quality failures should restart camera capture.
+  final bool apiFailed;
+
+  double get qualityScore {
+    final double yawAbs = yaw.abs();
+    final double pitchAbs = pitch.abs();
+    return (blurScore * faceArea) / (1.0 + yawAbs + pitchAbs);
+  }
+
+  BatchEmbeddingResult({
+    required this.embedding,
+    required this.qualityPassed,
     this.rejectionReason,
+    required this.blurScore,
+    required this.faceArea,
+    required this.yaw,
+    required this.pitch,
+    required this.rawQualityScore,
+    this.apiFailed =
+        false, // defaults false — normal quality results are never API failures
+  });
+}
+
+class WeightedEmbedding {
+  final List<double> embedding;
+  final double quality;
+
+  const WeightedEmbedding({
+    required this.embedding,
+    required this.quality,
   });
 }

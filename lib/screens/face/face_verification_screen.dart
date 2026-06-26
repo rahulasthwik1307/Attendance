@@ -46,6 +46,14 @@ class FaceVerificationScreen extends StatefulWidget {
 
 class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     with TickerProviderStateMixin {
+  // ─── Session ID & Timings ────────────────────────────────────────────────
+  late final String _sessionId;
+  final Stopwatch _captureStopwatch = Stopwatch();
+  final Stopwatch _apiStopwatch = Stopwatch();
+  final Stopwatch _comparisonStopwatch = Stopwatch();
+  final Stopwatch _totalStopwatch = Stopwatch();
+  int _totalFramesCaptured = 0;
+
   // ─── Animation controllers ──────────────────────────────────────────────
   late AnimationController _pulseController;
   late AnimationController _textFadeController;
@@ -88,7 +96,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   final List<List<double>> _liveEmbeddings = [];
   // Stores raw JPEG bytes during capture phase for batch processing
   final List<Uint8List> _capturedVerificationFrames = [];
-  static const int _framesPerPhase = 5;
+  static const int _framesPerPhase = 8;
+
+  // New state variables for valid frame counting, camera freeze, and processing overlays
+  final List<BatchEmbeddingResult> _validResults = [];
+  int _validFrameCount = 0;
+  bool _cameraFrozen = false;
+  Uint8List? _lastCapturedFrameBytes;
+  bool _isSubmitting = false;
 
   List<double>? _embeddingA;
   List<double>? _embeddingB;
@@ -373,6 +388,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _initializeCamera() async {
     try {
+      _sessionId = FaceLandmarkService.newVerSessionId();
       final cameras = await availableCameras();
       final frontCamera = cameras.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.front,
@@ -417,21 +433,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       if (mounted) setState(() => _cameraPreviewReady = true);
 
       _ringController.forward();
-      _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (_secondsRemaining > 1) {
-          setState(() => _secondsRemaining--);
-          _timerPulseController.forward().then((_) {
-            if (mounted) _timerPulseController.reverse();
-          });
-        } else {
-          setState(() => _secondsRemaining = 0);
-          timer.cancel();
-          // Timer expired → navigate to failed
-          if (mounted && _phase != _Phase.done) {
-            Navigator.of(context).pushReplacementNamed('/attendance_failed');
-          }
-        }
-      });
+      _startCountdownTimer();
     } catch (e) {
       _setError('Camera failed to start: $e');
     }
@@ -800,10 +802,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     }
 
     if (detected) {
+      FaceLogger.ver(_sessionId, 'Blink challenge VERIFIED ✓');
       _challengeVerified = true;
       _livenessService.reset();
       _challengeStartTime = null;
       _blinkCountdownController.stop();
+
+      // Start capture timer
+      _captureStopwatch.start();
 
       if (mounted) {
         setState(() {
@@ -832,11 +838,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // CAPTURE HANDLER — front-only, 5 frames
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _handleCapture(Face face, CameraImage cameraImage) async {
-    if (_liveEmbeddings.length >= _framesPerPhase) return;
+    if (_cameraFrozen) return;
 
     final now = DateTime.now();
-    // Verification frames need less gap than registration — 300ms is sufficient
-    // since we're comparing, not building a template. Cuts capture phase by ~1.5s.
+    // Verification frames need 300ms gap
     if (now.difference(_lastCaptureTime).inMilliseconds < 300) return;
 
     // Check yaw for front pose (±15°)
@@ -857,11 +862,16 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     final Uint8List? jpegBytes = await _captureCurrentFrame();
     if (jpegBytes == null) return;
 
-    // Store JPEG bytes — batch all 5 frames, then send in one request.
+    _lastCapturedFrameBytes = jpegBytes; // Store for freeze preview
+
+    debugPrint(
+      '[FACE_VER] CAPTURE frame accepted | size=${jpegBytes.length}b',
+    );
+
     _capturedVerificationFrames.add(jpegBytes);
 
     setState(() {
-      _captureProgress++;
+      _captureProgress = _validFrameCount + _capturedVerificationFrames.length;
       _borderColor = AppStyles.successGreen;
     });
     HapticFeedback.lightImpact();
@@ -872,15 +882,28 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       }
     });
 
-    debugPrint('[FACE_VER] Frame ${_capturedVerificationFrames.length} captured (JPEG only, embedding deferred)');
-
     _lastCaptureTime = DateTime.now();
 
-    // Check if done
-    if (_capturedVerificationFrames.length >= _framesPerPhase) {
+    // Check if the target valid count is reached in the current batch
+    final int needed = _framesPerPhase - _validFrameCount;
+    if (_capturedVerificationFrames.length >= needed) {
+      _captureStopwatch.stop();
+
+      FaceLogger.ver(
+        _sessionId,
+        'Stopped | totalCaptured=${_capturedVerificationFrames.length} validCount=$_validFrameCount',
+      );
       try {
         await _cameraController?.stopImageStream();
       } catch (_) {}
+
+      // Cancel countdown timer
+      _countdownTimer?.cancel();
+
+      setState(() {
+        _cameraFrozen = true;
+        _isProcessingFrame = true; // Ignore future frames
+      });
 
       _setPhase(_Phase.processing);
       await Future.delayed(const Duration(milliseconds: 50));
@@ -893,56 +916,87 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _processAndVerify() async {
     if (!mounted) return;
+    if (_isSubmitting) return;
+
+    _totalStopwatch.start();
+
+    setState(() {
+      _isSubmitting = true;
+    });
 
     _updateInstruction('Analysing…', subtitle: 'Scanning frame 1 of ${_capturedVerificationFrames.length}');
 
     try {
-      debugPrint('[FACE_VER] Sending ${_capturedVerificationFrames.length} verification frames as batch');
+      _totalFramesCaptured += _capturedVerificationFrames.length;
+      FaceLogger.ver(_sessionId, 'Processing Started');
 
-      // Start a timer that cycles through "Scanning frame X of Y" messages
-      // while the batch request is in flight. This gives the user visible
-      // progress instead of a frozen "Processing…" screen.
-      int frameCounter = 1;
-      final progressTimer = Timer.periodic(
-        const Duration(milliseconds: 900),
-        (timer) {
-          if (!mounted) {
-            timer.cancel();
-            return;
-          }
-          frameCounter++;
-          if (frameCounter <= _capturedVerificationFrames.length) {
-            setState(() {
-              _instructionTitle = 'Analysing…';
-              _instructionSubtitle = 'Scanning frame $frameCounter of ${_capturedVerificationFrames.length}';
-            });
-          } else {
-            setState(() {
-              _instructionTitle = 'Comparing…';
-              _instructionSubtitle = 'Matching against your profile';
-            });
-            timer.cancel();
-          }
-        },
-      );
-
-      final List<List<double>?> batchResults = await _landmarkService.generateEmbeddingBatch(
+      _apiStopwatch.start();
+      final List<BatchEmbeddingResult> batchResults = await _landmarkService.generateEmbeddingBatch(
         jpegBytesList: _capturedVerificationFrames,
+        sessionId: _sessionId,
+        prefix: 'FACE_VER',
       );
+      _apiStopwatch.stop();
 
-      progressTimer.cancel();
+      FaceLogger.ver(_sessionId, 'Processing Finished');
 
-      // Filter nulls and populate _liveEmbeddings
-      _liveEmbeddings.clear();
-      for (final emb in batchResults) {
-        if (emb != null) _liveEmbeddings.add(emb);
+      // Filter and count valid results
+      for (final res in batchResults) {
+        if (res.embedding != null && res.qualityPassed) {
+          _validResults.add(res);
+          FaceLogger.ver(_sessionId, 'Frame Accepted | valid=${_validResults.length}/$_framesPerPhase');
+        } else {
+          FaceLogger.ver(_sessionId, 'Frame Rejected | reason=${res.rejectionReason ?? "No face detected"}');
+        }
       }
 
-      debugPrint('[FACE_VER] Batch verification: ${_liveEmbeddings.length}/${_capturedVerificationFrames.length} valid embeddings');
+      _validFrameCount = _validResults.length;
+      FaceLogger.ver(_sessionId, 'Valid Count: $_validFrameCount/$_framesPerPhase');
 
-      if (_liveEmbeddings.isEmpty) {
-        _setError('No face detected. Please try again in better lighting.');
+      if (_validFrameCount < _framesPerPhase) {
+        // Not enough valid frames! Clear current batch and continue capturing
+        _capturedVerificationFrames.clear();
+
+        setState(() {
+          _cameraFrozen = false;
+          _isProcessingFrame = false;
+          _captureProgress = _validFrameCount;
+          _isSubmitting = false;
+        });
+
+        // Resume capture timer
+        _captureStopwatch.start();
+
+        _setPhase(_Phase.capturing);
+
+        // Restart countdown timer
+        _startCountdownTimer();
+
+        // Restart camera stream
+        try {
+          await _cameraController?.startImageStream(_onCameraFrame);
+        } catch (e) {
+          _setError('Camera could not start. Please try again.');
+          return;
+        }
+
+        _updateInstruction(
+          'Need clearer frames',
+          subtitle: 'Please hold still in good lighting. Capturing ${_framesPerPhase - _validFrameCount} more...',
+        );
         return;
+      }
+
+      // We have reached the target valid count!
+      // Rank accepted frames by quality score
+      _validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
+
+      // Use the highest-quality frames only (top 8)
+      final List<BatchEmbeddingResult> topResults = _validResults.sublist(0, _framesPerPhase);
+
+      _liveEmbeddings.clear();
+      for (final res in topResults) {
+        _liveEmbeddings.add(res.embedding!);
       }
 
       // Calculate dynamic threshold based on front scores
@@ -951,12 +1005,34 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           .toList();
       final double dynamicThreshold = _calculateDynamicThreshold(frontScores);
 
-      debugPrint(
-        '[FACE_VER] Using personal threshold: $_verificationThreshold',
+      FaceLogger.ver(
+        _sessionId,
+        'Using personal threshold: $_verificationThreshold',
       );
-      debugPrint(
-        '[FACE_VER] Master embedding available: ${_masterEmbedding != null}',
+      FaceLogger.ver(
+        _sessionId,
+        'Master embedding available: ${_masterEmbedding != null}',
       );
+
+      // Per-frame similarity matrix logging
+      for (int i = 0; i < topResults.length; i++) {
+        final res = topResults[i];
+        final double sA = _landmarkService.cosineSimilarity(res.embedding!, _embeddingA!);
+        final double sB = _landmarkService.cosineSimilarity(res.embedding!, _embeddingB!);
+        final double sC = _landmarkService.cosineSimilarity(res.embedding!, _embeddingC!);
+        final double sMaster = _masterEmbedding != null
+            ? _landmarkService.cosineSimilarity(res.embedding!, _masterEmbedding!)
+            : 0.0;
+        final double quality = res.rawQualityScore;
+        FaceLogger.ver(
+          _sessionId,
+          '  Frame ${i + 1} | Quality=${quality.toStringAsFixed(1)} | '
+          'sA=${sA.toStringAsFixed(4)} | sB=${sB.toStringAsFixed(4)} | '
+          'sC=${sC.toStringAsFixed(4)} | sMaster=${sMaster.toStringAsFixed(4)}',
+        );
+      }
+      
+      _comparisonStopwatch.start();
       final result = _landmarkService.verifyFace(
         liveEmbeddings: _liveEmbeddings,
         storedEmbeddingA: _embeddingA!,
@@ -965,9 +1041,64 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         masterEmbedding: _masterEmbedding,
         threshold: _verificationThreshold,
       );
+      _comparisonStopwatch.stop();
+      _totalStopwatch.stop();
 
-      debugPrint(
-        '[FACE_VER] Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | EmbALen: ${_embeddingA?.length} | EmbBLen: ${_embeddingB?.length} | EmbCLen: ${_embeddingC?.length} | DynThreshold: ${dynamicThreshold.toStringAsFixed(4)}',
+      // Compute statistics for the session summary
+      final double avgQuality = topResults.isEmpty
+          ? 0.0
+          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => a + b) / topResults.length;
+      final double maxQuality = topResults.isEmpty
+          ? 0.0
+          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => math.max(a, b));
+      final double minQuality = topResults.isEmpty
+          ? 0.0
+          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => math.min(a, b));
+
+      final double overallSimilarityA = topResults.isEmpty
+          ? 0.0
+          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingA!)).reduce((a, b) => a + b) / topResults.length;
+      final double overallSimilarityB = topResults.isEmpty
+          ? 0.0
+          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingB!)).reduce((a, b) => a + b) / topResults.length;
+      final double overallSimilarityC = topResults.isEmpty
+          ? 0.0
+          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingC!)).reduce((a, b) => a + b) / topResults.length;
+      final double overallSimilarityMaster = _masterEmbedding == null
+          ? 0.0
+          : (topResults.isEmpty
+              ? 0.0
+              : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _masterEmbedding!)).reduce((a, b) => a + b) / topResults.length);
+
+      final int framesAccepted = _validFrameCount;
+      final int framesRejected = _totalFramesCaptured - framesAccepted;
+
+      FaceLogger.separator(_sessionId, 'FACE_VER');
+      FaceLogger.ver(_sessionId, 'VERIFICATION SUMMARY');
+      FaceLogger.separator(_sessionId, 'FACE_VER');
+      FaceLogger.ver(_sessionId, '  Frames Captured       : $_totalFramesCaptured');
+      FaceLogger.ver(_sessionId, '  Frames Accepted       : $framesAccepted');
+      FaceLogger.ver(_sessionId, '  Frames Rejected       : $framesRejected');
+      FaceLogger.ver(_sessionId, '  Avg Backend Quality   : ${avgQuality.toStringAsFixed(1)}');
+      FaceLogger.ver(_sessionId, '  Highest Quality       : ${maxQuality.toStringAsFixed(1)}');
+      FaceLogger.ver(_sessionId, '  Lowest Quality        : ${minQuality.toStringAsFixed(1)}');
+      FaceLogger.ver(_sessionId, '  Similarity A          : ${overallSimilarityA.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  Similarity B          : ${overallSimilarityB.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  Similarity C          : ${overallSimilarityC.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  Master Similarity     : ${overallSimilarityMaster.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  Final Similarity      : ${result.score.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  Threshold             : ${_verificationThreshold.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  Decision              : ${result.isMatch ? "PASS" : "FAIL"}');
+      FaceLogger.ver(_sessionId, '  Failure Reason        : ${result.isMatch ? "—" : result.message}');
+      FaceLogger.ver(_sessionId, '  Capture Time          : ${_captureStopwatch.elapsedMilliseconds}ms');
+      FaceLogger.ver(_sessionId, '  Embedding API Time    : ${_apiStopwatch.elapsedMilliseconds}ms');
+      FaceLogger.ver(_sessionId, '  Comparison Time       : ${_comparisonStopwatch.elapsedMilliseconds}ms');
+      FaceLogger.ver(_sessionId, '  Total Time            : ${_totalStopwatch.elapsedMilliseconds}ms');
+      FaceLogger.separator(_sessionId, 'FACE_VER');
+
+      FaceLogger.ver(
+        _sessionId,
+        'Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | DynThreshold: ${dynamicThreshold.toStringAsFixed(4)}',
       );
 
       if (result.isMatch) {
@@ -996,14 +1127,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
               final prefs = await SharedPreferences.getInstance();
               await prefs.setString('emb_master', jsonEncode(newMaster));
               adaptiveUpdateApplied = true;
-              debugPrint('[FACE_VER] adaptiveUpdateApplied=true (score=${result.score.toStringAsFixed(4)})');
+              FaceLogger.ver(_sessionId, 'adaptiveUpdateApplied=true (score=${result.score.toStringAsFixed(4)})');
             }
           } catch (e) {
-            debugPrint('[FACE_VER] Adaptive update failed: $e');
+            FaceLogger.ver(_sessionId, 'Adaptive update failed: $e');
           }
         }
         if (!adaptiveUpdateApplied) {
-          debugPrint('[FACE_VER] adaptiveUpdateApplied=false');
+          FaceLogger.ver(_sessionId, 'adaptiveUpdateApplied=false');
         }
 
         // ── Success ──
@@ -1040,10 +1171,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                 'face_verified': true,
                 'status': 'present',
               }, onConflict: 'student_id,date');
-              debugPrint('[FACE_VER] College attendance saved');
+              FaceLogger.ver(_sessionId, 'College attendance saved');
             }
           } catch (e) {
-            debugPrint('[FACE_VER] Failed to save college attendance: $e');
+            FaceLogger.ver(_sessionId, 'Failed to save college attendance: $e');
           }
         }
 
@@ -1078,6 +1209,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _attemptCount++;
           _liveEmbeddings.clear();
           _capturedVerificationFrames.clear();
+          _validResults.clear();
+          _validFrameCount = 0;
+          _cameraFrozen = false;
+          _lastCapturedFrameBytes = null;
+          _isSubmitting = false;
           _livenessService.resetCalibration();
           _clearSmoothing();
           _challengeVerified = false;
@@ -1088,6 +1224,13 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _isFaceReady = false;
           _lastKnownBlinkCount = 0;
 
+          // Reset stopwatches for next attempt
+          _captureStopwatch.reset();
+          _apiStopwatch.reset();
+          _comparisonStopwatch.reset();
+          _totalStopwatch.reset();
+          _totalFramesCaptured = 0;
+
           setState(() => _borderColor = AppStyles.primaryBlue);
 
           // Restart camera stream
@@ -1096,6 +1239,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           } catch (_) {}
 
           _setPhase(_Phase.positioning);
+          _startCountdownTimer();
         } else {
           // 3 attempts exhausted
           await Future.delayed(const Duration(milliseconds: 600));
@@ -1106,6 +1250,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       }
     } catch (e) {
       _setError('Verification failed: ${e.toString()}');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
     }
   }
 
@@ -1505,7 +1655,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         );
         break;
       case _Phase.processing:
-        _updateInstruction('Processing…', subtitle: 'Comparing your face');
+        _updateInstruction(
+          'Verifying Identity',
+          subtitle: 'Comparing with your registered face...',
+        );
         break;
       case _Phase.done:
         _updateInstruction('Verified!', subtitle: 'Face matched successfully');
@@ -1583,15 +1736,48 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     });
   }
 
+  void _startCountdownTimer() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_secondsRemaining > 1) {
+        setState(() => _secondsRemaining--);
+        _timerPulseController.forward().then((_) {
+          if (mounted) _timerPulseController.reverse();
+        });
+      } else {
+        setState(() => _secondsRemaining = 0);
+        timer.cancel();
+        // Timer expired → navigate to failed
+        if (mounted && _phase != _Phase.done) {
+          Navigator.of(context).pushReplacementNamed('/attendance_failed');
+        }
+      }
+    });
+  }
+
+  String _userFriendlyError(String technicalError) {
+    if (technicalError.contains('Camera') || technicalError.contains('camera')) {
+      return 'Camera could not start. Please try again.';
+    }
+    if (technicalError.contains('timeout') || technicalError.contains('Timeout')) {
+      return 'Processing timed out. Please try again.';
+    }
+    if (technicalError.contains('network') || technicalError.contains('Socket') || technicalError.contains('http') || technicalError.contains('Http')) {
+      return 'Network issue. Please try again.';
+    }
+    return 'Something went wrong. Please try again.';
+  }
+
   void _setError(String message) {
     if (!mounted) return;
-    debugPrint('[FACE_VER] ERROR: $message');
+    debugPrint('[CAPTURE] ERROR: $message');
+    final friendly = _userFriendlyError(message);
     setState(() {
       _phase = _Phase.error;
-      _errorMessage = message;
+      _errorMessage = friendly;
       _borderColor = AppStyles.errorRed;
       _instructionTitle = 'Something went wrong';
-      _instructionSubtitle = 'Please try again';
+      _instructionSubtitle = friendly;
     });
   }
 
@@ -1600,6 +1786,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // ─────────────────────────────────────────────────────────────────────────
   @override
   void dispose() {
+    debugPrint('[CAPTURE] Disposed');
     _pulseController.dispose();
     _textFadeController.dispose();
     _blinkCountdownController.dispose();
@@ -1812,46 +1999,28 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                                               children: [
                                                 _buildCameraPreview(availW),
                                                 // Scan line inside clip
-                                                Positioned.fill(
-                                                  child: AnimatedBuilder(
-                                                    animation:
-                                                        _scanLineController,
-                                                    builder: (context, child) {
-                                                      return CustomPaint(
-                                                        size: Size(
-                                                          circleSize,
-                                                          circleSize,
-                                                        ),
-                                                        painter: _ScanLinePainter(
-                                                          scanValue:
-                                                              _scanLineController
-                                                                  .value,
-                                                          circleSize:
-                                                              circleSize,
-                                                        ),
-                                                      );
-                                                    },
-                                                  ),
-                                                ),
-                                                Positioned.fill(
-                                                  child: AnimatedOpacity(
-                                                    duration: const Duration(
-                                                      milliseconds: 200,
-                                                    ),
-                                                    curve: Curves.easeOut,
-                                                    opacity:
-                                                        (_phase ==
-                                                                _Phase
-                                                                    .processing ||
-                                                            _phase ==
-                                                                _Phase.done)
-                                                        ? 0.12
-                                                        : 0.0,
-                                                    child: Container(
-                                                      color: Colors.black,
+                                                if (!_cameraFrozen)
+                                                  Positioned.fill(
+                                                    child: AnimatedBuilder(
+                                                      animation:
+                                                          _scanLineController,
+                                                      builder: (context, child) {
+                                                        return CustomPaint(
+                                                          size: Size(
+                                                            circleSize,
+                                                            circleSize,
+                                                          ),
+                                                          painter: _ScanLinePainter(
+                                                            scanValue:
+                                                                _scanLineController
+                                                                    .value,
+                                                            circleSize:
+                                                                circleSize,
+                                                          ),
+                                                        );
+                                                      },
                                                     ),
                                                   ),
-                                                ),
                                               ],
                                             ),
                                           ),
@@ -2340,6 +2509,18 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                                                   fontWeight: FontWeight.w500,
                                                 ),
                                               ),
+
+                                              if (_phase == _Phase.processing) ...[
+
+                                                const SizedBox(height: 16),
+
+                                                const CircularProgressIndicator(
+
+                                                  valueColor: AlwaysStoppedAnimation<Color>(AppStyles.primaryBlue),
+
+                                                ),
+
+                                              ],
                                               if (_phase == _Phase.error) ...[
                                                 const SizedBox(height: 16),
                                                 TextButton(
@@ -2378,7 +2559,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     );
   }
 
-  // Build camera preview
+
+
   Widget _buildCameraPreview(double containerWidth) {
     if (!_cameraInitialized || _cameraController == null) {
       return SizedBox(
@@ -2402,16 +2584,31 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         child: SizedBox(
           width: sensorW,
           height: sensorH,
-          child: CameraPreview(_cameraController!),
+          child: _cameraFrozen && _lastCapturedFrameBytes != null
+              ? RotatedBox(
+                  quarterTurns: 3,
+                  child: Image.memory(
+                    _lastCapturedFrameBytes!,
+                    fit: BoxFit.cover,
+                  ),
+                )
+              : CameraPreview(_cameraController!),
         ),
       ),
     );
   }
 
   void _onRetry() {
+    debugPrint('[CAPTURE] Started | screen=verification target=$_framesPerPhase');
     _livenessService.resetCalibration();
     _liveEmbeddings.clear();
     _capturedVerificationFrames.clear();
+    _validResults.clear();
+    _validFrameCount = 0;
+    _cameraFrozen = false;
+    _lastCapturedFrameBytes = null;
+    _isSubmitting = false;
+
     _captureProgress = 0;
     _challengeVerified = false;
     _challengeStartTime = null;
@@ -2424,13 +2621,25 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     setState(() {
       _borderColor = AppStyles.primaryBlue;
       _errorMessage = null;
+      _secondsRemaining = 60; // Reset the countdown timer
     });
+
+    // Restart countdown timer
+    _startCountdownTimer();
 
     // Restart camera stream if needed
     if (_cameraInitialized && _cameraController != null) {
       try {
-        _cameraController!.startImageStream(_onCameraFrame);
-      } catch (_) {}
+        _cameraController!.stopImageStream().then((_) {
+          if (mounted) {
+            _cameraController!.startImageStream(_onCameraFrame);
+          }
+        });
+      } catch (_) {
+        try {
+          _cameraController!.startImageStream(_onCameraFrame);
+        } catch (_) {}
+      }
     }
 
     _setPhase(_Phase.positioning);
