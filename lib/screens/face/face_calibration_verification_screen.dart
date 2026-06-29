@@ -20,6 +20,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/face_ml_service.dart';
 import '../../services/face_landmark_service.dart';
 import '../../utils/app_styles.dart';
+import '../../utils/camera_stabilizer.dart';
 
 // ─── Verification phases ──────────────────────────────────────────────────────
 enum _Phase {
@@ -88,6 +89,10 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   final List<List<double>> _liveEmbeddings = [];
   // Stores raw JPEG bytes during capture phase for batch processing
   final List<Uint8List> _capturedVerificationFrames = [];
+  final List<Map<String, double>> _capturedVerificationFramesStats = [];
+  late CameraStabilizer _cameraStabilizer;
+  Face? _lastProcessedFace;
+  int _nextCaptureInterval = 300;
   static const int _framesPerPhase = 8;
 
   // New state variables for valid frame counting, camera freeze, and processing overlays
@@ -275,6 +280,13 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       );
       await _cameraController!.initialize();
 
+      _cameraStabilizer = CameraStabilizer(
+        controller: _cameraController!,
+        sessionId: _sessionId,
+        logPrefix: 'FACE_CAL',
+      );
+      await _cameraStabilizer.stabilize();
+
       // Set to device minimum zoom for widest field of view
       try {
         final minZoom = await _cameraController!.getMinZoomLevel();
@@ -366,6 +378,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   // CAMERA FRAME PROCESSING — rate-limited to 10fps
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _onCameraFrame(CameraImage cameraImage) async {
+    if (!_cameraStabilizer.isStable) return;
     _lastCameraImage = cameraImage;
 
     final now = DateTime.now();
@@ -430,6 +443,39 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         _isProcessingFrame = false;
         return;
       }
+
+      // Same-face tracking continuity
+      if (_lastProcessedFace != null) {
+        bool isSame = false;
+        if (face.trackingId != null && _lastProcessedFace!.trackingId != null) {
+          isSame = face.trackingId == _lastProcessedFace!.trackingId;
+          if (!isSame) {
+            debugPrint('[FACE_CAMERA] [FACE_CAL][$_sessionId] Face tracking ID changed: ${_lastProcessedFace!.trackingId} -> ${face.trackingId}');
+          }
+        } else {
+          final double iou = _calculateIoU(face.boundingBox, _lastProcessedFace!.boundingBox);
+          isSame = iou >= 0.5;
+          if (!isSame) {
+            debugPrint('[FACE_CAMERA] [FACE_CAL][$_sessionId] Face tracking lost via IoU (IoU: ${iou.toStringAsFixed(2)})');
+          }
+        }
+        if (!isSame) {
+          debugPrint('[FACE_CAMERA] [FACE_CAL][$_sessionId] Face tracking lost — resetting captured frames and buffer');
+          _clearSmoothing();
+          _capturedVerificationFrames.clear();
+          _capturedVerificationFramesStats.clear();
+          _validResults.clear();
+          _validFrameCount = 0;
+          _captureProgress = 0;
+          _steadyStartTime = null;
+          _isFaceReady = false;
+          _livenessService.resetCalibration();
+          _challengeStartTime = null;
+          _blinkCountdownController.stop();
+          _blinkCountdownController.reset();
+        }
+      }
+      _lastProcessedFace = face;
 
       _pushSmoothing(face);
 
@@ -637,7 +683,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     if (_cameraFrozen) return;
 
     final now = DateTime.now();
-    if (now.difference(_lastCaptureTime).inMilliseconds < 280) return;
+    if (now.difference(_lastCaptureTime).inMilliseconds < _nextCaptureInterval) return;
 
     // Check yaw for front pose (±15°)
     final double? yawRaw = face.headEulerAngleY;
@@ -649,6 +695,12 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     }
 
     if (!_isFaceAcceptable(face, cameraImage)) {
+      _isProcessingFrame = false;
+      return;
+    }
+
+    // Stable frame selection check
+    if (!_cameraStabilizer.checkFrameStability(cameraImage)) {
       _isProcessingFrame = false;
       return;
     }
@@ -668,6 +720,8 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
 
     // Store JPEG bytes — batch all 8 frames, then send in one request.
     _capturedVerificationFrames.add(jpegBytes);
+    final stats = _cameraStabilizer.computeFrameStats(cameraImage);
+    _capturedVerificationFramesStats.add(stats);
 
     setState(() {
       _captureProgress = _validFrameCount + _capturedVerificationFrames.length;
@@ -684,6 +738,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     debugPrint('[FACE_CAL] Frame ${_capturedVerificationFrames.length} captured (JPEG only, embedding deferred)');
 
     _lastCaptureTime = DateTime.now();
+    _nextCaptureInterval = 250 + math.Random().nextInt(100);
 
     // Check if the target valid count is reached in the current batch
     final int needed = _framesPerPhase - _validFrameCount;
@@ -734,8 +789,14 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       _apiStopwatch.start();
       final List<BatchEmbeddingResult> batchResults = await _landmarkService.generateEmbeddingBatch(
         jpegBytesList: _capturedVerificationFrames,
+        localStatsList: _capturedVerificationFramesStats,
         sessionId: _sessionId,
         prefix: 'FACE_CAL',
+        storedA: _embeddingA,
+        storedB: _embeddingB,
+        storedC: _embeddingC,
+        storedMaster: _masterEmbedding,
+        threshold: _verificationThreshold,
       );
       _apiStopwatch.stop();
 
@@ -757,6 +818,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       if (_validFrameCount < _framesPerPhase) {
         // Not enough valid frames! Clear current batch and continue capturing
         _capturedVerificationFrames.clear();
+        _capturedVerificationFramesStats.clear();
 
         setState(() {
           _cameraFrozen = false;
@@ -823,17 +885,76 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
           ? 0.0
           : topResults.map((e) => e.rawQualityScore).reduce((a, b) => a + b) / topResults.length;
 
+      final double avgLocalBrightness = _capturedVerificationFramesStats.isEmpty
+          ? 0.0
+          : _capturedVerificationFramesStats.map((s) => s['brightness'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
+      final double avgLocalContrast = _capturedVerificationFramesStats.isEmpty
+          ? 0.0
+          : _capturedVerificationFramesStats.map((s) => s['contrast'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
+      final double avgLocalSharpness = _capturedVerificationFramesStats.isEmpty
+          ? 0.0
+          : _capturedVerificationFramesStats.map((s) => s['sharpness'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
+
       FaceLogger.separator(_sessionId, 'FACE_CAL');
       FaceLogger.cal(_sessionId, 'CALIBRATION SUMMARY');
       FaceLogger.separator(_sessionId, 'FACE_CAL');
       FaceLogger.cal(_sessionId, '  Frames Captured       : $_totalFramesCaptured');
       FaceLogger.cal(_sessionId, '  Frames Accepted       : ${topResults.length}');
       FaceLogger.cal(_sessionId, '  Avg Backend Quality   : ${avgQuality.toStringAsFixed(1)}');
+      FaceLogger.cal(_sessionId, '  Warm-up Time           : ${_cameraStabilizer.warmUpDurationMs}ms');
+      FaceLogger.cal(_sessionId, '  Focus Stabilize Time  : ${_cameraStabilizer.focusStabilizationDurationMs}ms');
+      FaceLogger.cal(_sessionId, '  Exposure Stabilize Time: ${_cameraStabilizer.exposureStabilizationDurationMs}ms');
+      FaceLogger.cal(_sessionId, '  Avg Local Brightness  : ${avgLocalBrightness.toStringAsFixed(1)}');
+      FaceLogger.cal(_sessionId, '  Avg Local Contrast    : ${avgLocalContrast.toStringAsFixed(1)}');
+      FaceLogger.cal(_sessionId, '  Avg Local Sharpness    : ${avgLocalSharpness.toStringAsFixed(1)}');
       FaceLogger.cal(_sessionId, '  Capture Time          : ${_captureStopwatch.elapsedMilliseconds}ms');
       FaceLogger.cal(_sessionId, '  Embedding API Time    : ${_apiStopwatch.elapsedMilliseconds}ms');
       FaceLogger.cal(_sessionId, '  Calibration Time      : ${_calibrationStopwatch.elapsedMilliseconds}ms');
       FaceLogger.cal(_sessionId, '  Total Time            : ${_totalStopwatch.elapsedMilliseconds}ms');
       FaceLogger.cal(_sessionId, 'CALIBRATION COMPLETE');
+      FaceLogger.separator(_sessionId, 'FACE_CAL');
+
+      final double overallSimilarityA = topResults.isEmpty
+          ? 0.0
+          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingA!)).reduce((a, b) => a + b) / topResults.length;
+      final double overallSimilarityB = topResults.isEmpty
+          ? 0.0
+          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingB!)).reduce((a, b) => a + b) / topResults.length;
+      final double overallSimilarityC = topResults.isEmpty
+          ? 0.0
+          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingC!)).reduce((a, b) => a + b) / topResults.length;
+      final double overallSimilarityMaster = _masterEmbedding == null
+          ? 0.0
+          : (topResults.isEmpty
+              ? 0.0
+              : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _masterEmbedding!)).reduce((a, b) => a + b) / topResults.length);
+
+      final double driftScore = _liveEmbeddings.isEmpty ? 0.0 : 1.0 - _landmarkService.cosineSimilarity(_liveEmbeddings.first, _liveEmbeddings.last);
+      final bool driftDetected = driftScore > 0.15;
+
+      FaceLogger.cal(_sessionId, 'EMBEDDING DRIFT DIAGNOSTICS');
+      FaceLogger.separator(_sessionId, 'FACE_CAL');
+      FaceLogger.cal(_sessionId, '  Similarity to Template A : ${overallSimilarityA.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Similarity to Template B : ${overallSimilarityB.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Similarity to Template C : ${overallSimilarityC.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Similarity to Master     : ${overallSimilarityMaster.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Embedding Variance       : ${_landmarkService.lastEmbeddingVariance.toStringAsFixed(6)}');
+      FaceLogger.cal(_sessionId, '  Avg Intra-frame Sim      : ${_landmarkService.lastAverageSimilarity.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Drift Score              : ${driftScore.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Drift Detected           : ${driftDetected ? "YES" : "NO"}');
+      FaceLogger.separator(_sessionId, 'FACE_CAL');
+
+      final double effectiveThreshold = math.max(_verificationThreshold, 0.65);
+      final double similarityMargin = result.score - _verificationThreshold;
+      final double decisionMargin = result.score - effectiveThreshold;
+
+      FaceLogger.cal(_sessionId, 'ADAPTIVE THRESHOLD DIAGNOSTICS');
+      FaceLogger.separator(_sessionId, 'FACE_CAL');
+      FaceLogger.cal(_sessionId, '  Personal Threshold    : ${_verificationThreshold.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Current Threshold     : ${effectiveThreshold.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Adaptive Threshold    : ${dynamicThreshold.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Similarity Margin     : ${similarityMargin.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Decision Margin       : ${decisionMargin.toStringAsFixed(4)}');
       FaceLogger.separator(_sessionId, 'FACE_CAL');
 
       FaceLogger.cal(
@@ -903,13 +1024,21 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
           subtitle: 'Face did not match',
         );
 
-        if (_attemptCount < 3) {
+        bool hasSeverePoseWarning = topResults.any((r) => r.yaw.abs() > 20.0 || r.pitch.abs() > 15.0);
+        bool meetsRetryConditions = result.score >= (_verificationThreshold - 0.03) &&
+            result.score < _verificationThreshold &&
+            avgQuality >= 65.0 &&
+            !hasSeverePoseWarning;
+
+        if (_attemptCount < 2 && meetsRetryConditions) {
+          FaceLogger.cal(_sessionId, 'Retry conditions met: score=${result.score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, pose=OK. Triggering retry.');
           await Future.delayed(const Duration(milliseconds: 1200));
           if (!mounted) return;
 
           _attemptCount++;
           _liveEmbeddings.clear();
           _capturedVerificationFrames.clear();
+          _capturedVerificationFramesStats.clear();
           _validResults.clear();
           _validFrameCount = 0;
           _cameraFrozen = false;
@@ -942,8 +1071,12 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
           _setPhase(_Phase.positioning);
           _startCountdownTimer();
         } else {
-          // 3 attempts exhausted
-          FaceLogger.cal(_sessionId, '3 attempts exhausted — restarting calibration verification');
+          // 2 attempts exhausted
+          if (!meetsRetryConditions) {
+            FaceLogger.cal(_sessionId, 'Retry conditions not met: score=${result.score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, poseWarning=$hasSeverePoseWarning. Rejecting verification.');
+          } else {
+            FaceLogger.cal(_sessionId, '2 attempts exhausted — restarting calibration verification');
+          }
           await Future.delayed(const Duration(milliseconds: 600));
           if (mounted) {
             Navigator.of(context).pushReplacementNamed('/face_calibration_verify');
@@ -1058,6 +1191,24 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     if (offsetX > 0.30) return null;
 
     return biggest;
+  }
+
+  double _calculateIoU(Rect rect1, Rect rect2) {
+    final double intersectionX1 = math.max(rect1.left, rect2.left);
+    final double intersectionY1 = math.max(rect1.top, rect2.top);
+    final double intersectionX2 = math.min(rect1.right, rect2.right);
+    final double intersectionY2 = math.min(rect1.bottom, rect2.bottom);
+
+    final double intersectionWidth = math.max(0.0, intersectionX2 - intersectionX1);
+    final double intersectionHeight = math.max(0.0, intersectionY2 - intersectionY1);
+    final double intersectionArea = intersectionWidth * intersectionHeight;
+
+    final double rect1Area = rect1.width * rect1.height;
+    final double rect2Area = rect2.width * rect2.height;
+    final double unionArea = rect1Area + rect2Area - intersectionArea;
+
+    if (unionArea <= 0.0) return 0.0;
+    return intersectionArea / unionArea;
   }
 
   // ─── Face positioning — smoothed centering + distance + hysteresis ────
@@ -1958,7 +2109,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                                       ),
                                       opacity: _cameraPreviewReady ? 1.0 : 0.0,
                                       child: Text(
-                                        'Attempt $_attemptCount of 3',
+                                        'Attempt $_attemptCount of 2',
                                         style: TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w500,

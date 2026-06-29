@@ -41,6 +41,7 @@ import '../../services/face_ml_service.dart';
 import '../../services/face_landmark_service.dart';
 import '../../utils/app_styles.dart';
 import '../../utils/auth_flow_state.dart';
+import '../../utils/camera_stabilizer.dart';
 
 // FIXED: Removed _computeEmbedding isolate function — ML Kit plugins cannot
 // run in background isolates (BackgroundIsolateBinaryMessenger error).
@@ -83,6 +84,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // ─── Camera ──────────────────────────────────────────────────────────────
   CameraController? _cameraController;
   bool _cameraInitialized = false;
+  late CameraStabilizer _cameraStabilizer;
+  Face? _lastProcessedFace;
+  int _nextCaptureInterval = 280;
 
   // ─── ML ──────────────────────────────────────────────────────────────────
   final FaceMlService _mlService = FaceMlService();
@@ -98,6 +102,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
   // Captured frame bytes (JPEG)
   final List<Uint8List> _frontFrames = [];
+  final List<Map<String, double>> _frontFramesStats = [];
 
   // First front frame saved as registration photo
   Uint8List? _registrationPhotoBytes;
@@ -269,6 +274,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       );
 
       await _cameraController!.initialize();
+      _cameraStabilizer = CameraStabilizer(
+        controller: _cameraController!,
+        sessionId: _sessionId,
+        logPrefix: 'FACE_REG',
+      );
+      await _cameraStabilizer.stabilize();
 
       // Set to device minimum zoom for widest field of view
       try {
@@ -310,6 +321,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // CAMERA FRAME PROCESSING — rate-limited to 10fps
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _onCameraFrame(CameraImage cameraImage) async {
+    if (!_cameraStabilizer.isStable) return;
     // Problem 4: Immediately drop frames once capture is complete or processing
     // has started. These checks must come BEFORE storing _lastCameraImage so
     // that no late-arriving frame can slip through after the camera is frozen.
@@ -402,6 +414,40 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         _isProcessingFrame = false;
         return;
       }
+
+      // Same-face tracking continuity
+      if (_lastProcessedFace != null) {
+        bool isSame = false;
+        if (face.trackingId != null && _lastProcessedFace!.trackingId != null) {
+          isSame = face.trackingId == _lastProcessedFace!.trackingId;
+          if (!isSame) {
+            debugPrint('[FACE_CAMERA] [FACE_REG][$_sessionId] Face tracking ID changed: ${_lastProcessedFace!.trackingId} -> ${face.trackingId}');
+          }
+        } else {
+          final double iou = _calculateIoU(face.boundingBox, _lastProcessedFace!.boundingBox);
+          isSame = iou >= 0.5;
+          if (!isSame) {
+            debugPrint('[FACE_CAMERA] [FACE_REG][$_sessionId] Face tracking lost via IoU (IoU: ${iou.toStringAsFixed(2)})');
+          }
+        }
+        if (!isSame) {
+          debugPrint('[FACE_CAMERA] [FACE_REG][$_sessionId] Face tracking lost — resetting captured frames and buffer');
+          _clearSmoothing();
+          _frontFrames.clear();
+          _frontFramesStats.clear();
+          _validResults.clear();
+          _validFrameCount = 0;
+          _captureProgress = 0;
+          _progressLabel = '';
+          _steadyStartTime = null;
+          _isFaceReady = false;
+          _livenessService.resetCalibration();
+          _challengeStartTime = null;
+          _blinkCountdownController.stop();
+          _blinkCountdownController.reset();
+        }
+      }
+      _lastProcessedFace = face;
 
       // Push raw face metrics into smoothing buffer for moving average
       _pushSmoothing(face);
@@ -648,9 +694,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     if (_captureCompleted) return;
     if (_isSubmitting) return;
 
-    // Minimum delay between captures to avoid overwhelming the camera (280ms)
     final now = DateTime.now();
-    if (now.difference(_lastCaptureTime).inMilliseconds < 280) return;
+    if (now.difference(_lastCaptureTime).inMilliseconds < _nextCaptureInterval) return;
 
     // Validate pose for current phase
     if (!_isPoseCorrect(face, currentPhase)) {
@@ -664,6 +709,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         _getFacingInstruction(face, cameraImage),
         animate: false,
       );
+      return;
+    }
+
+    // Stable frame selection check
+    if (!_cameraStabilizer.checkFrameStability(cameraImage)) {
+      _isProcessingFrame = false;
       return;
     }
 
@@ -717,6 +768,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     switch (currentPhase) {
       case _Phase.front:
         _frontFrames.add(jpegBytes);
+        final stats = _cameraStabilizer.computeFrameStats(cameraImage);
+        _frontFramesStats.add(stats);
         final int totalSoFar = _validFrameCount + _frontFrames.length;
         final int remaining = _framesPerPhase - totalSoFar;
         setState(() {
@@ -739,6 +792,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     }
 
     _lastCaptureTime = DateTime.now();
+    _nextCaptureInterval = 250 + math.Random().nextInt(100);
 
     // Problem 1: compare against total valid count, not just current batch size.
     // needed = how many MORE frames we still need from this and future batches.
@@ -820,6 +874,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       final List<BatchEmbeddingResult> batchResults = await _landmarkService
           .generateEmbeddingBatch(
             jpegBytesList: _frontFrames,
+            localStatsList: _frontFramesStats,
             sessionId: _sessionId,
             prefix: 'FACE_REG',
           );
@@ -889,6 +944,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         FaceLogger.reg(_sessionId, '  Restarting Camera');
 
         _frontFrames.clear();
+        _frontFramesStats.clear();
 
         // Reset _captureCompleted so _handleCapture can collect the remaining frames.
         _captureCompleted = false;
@@ -1031,6 +1087,16 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         final int framesAccepted = _validFrameCount;
         final int framesRejected = _totalFramesCaptured - framesAccepted;
 
+        final double avgLocalBrightness = _frontFramesStats.isEmpty
+            ? 0.0
+            : _frontFramesStats.map((s) => s['brightness'] ?? 0.0).reduce((a, b) => a + b) / _frontFramesStats.length;
+        final double avgLocalContrast = _frontFramesStats.isEmpty
+            ? 0.0
+            : _frontFramesStats.map((s) => s['contrast'] ?? 0.0).reduce((a, b) => a + b) / _frontFramesStats.length;
+        final double avgLocalSharpness = _frontFramesStats.isEmpty
+            ? 0.0
+            : _frontFramesStats.map((s) => s['sharpness'] ?? 0.0).reduce((a, b) => a + b) / _frontFramesStats.length;
+
         FaceLogger.separator(_sessionId, 'FACE_REG');
         FaceLogger.reg(_sessionId, 'REGISTRATION SUMMARY');
         FaceLogger.separator(_sessionId, 'FACE_REG');
@@ -1040,6 +1106,39 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         FaceLogger.reg(_sessionId, '  Avg Backend Quality   : ${avgQuality.toStringAsFixed(1)}');
         FaceLogger.reg(_sessionId, '  Highest Quality       : ${maxQuality.toStringAsFixed(1)}');
         FaceLogger.reg(_sessionId, '  Lowest Quality        : ${minQuality.toStringAsFixed(1)}');
+        FaceLogger.reg(_sessionId, '  Warm-up Time           : ${_cameraStabilizer.warmUpDurationMs}ms');
+        FaceLogger.reg(_sessionId, '  Focus Stabilize Time  : ${_cameraStabilizer.focusStabilizationDurationMs}ms');
+        FaceLogger.reg(_sessionId, '  Exposure Stabilize Time: ${_cameraStabilizer.exposureStabilizationDurationMs}ms');
+        FaceLogger.reg(_sessionId, '  Avg Local Brightness  : ${avgLocalBrightness.toStringAsFixed(1)}');
+        FaceLogger.reg(_sessionId, '  Avg Local Contrast    : ${avgLocalContrast.toStringAsFixed(1)}');
+        FaceLogger.reg(_sessionId, '  Avg Local Sharpness    : ${avgLocalSharpness.toStringAsFixed(1)}');
+
+        // ── Embedding Drift Diagnostics ──
+        final double sA = topEmbeddings.isEmpty ? 0.0 : topEmbeddings.map((res) => _landmarkService.cosineSimilarity(res, embeddingA)).reduce((a, b) => a + b) / topEmbeddings.length;
+        final double sB = topEmbeddings.isEmpty ? 0.0 : topEmbeddings.map((res) => _landmarkService.cosineSimilarity(res, embeddingB)).reduce((a, b) => a + b) / topEmbeddings.length;
+        final double sC = topEmbeddings.isEmpty ? 0.0 : topEmbeddings.map((res) => _landmarkService.cosineSimilarity(res, embeddingC)).reduce((a, b) => a + b) / topEmbeddings.length;
+        final double sMaster = topEmbeddings.isEmpty ? 0.0 : topEmbeddings.map((res) => _landmarkService.cosineSimilarity(res, masterEmbedding)).reduce((a, b) => a + b) / topEmbeddings.length;
+        
+        // Temporarily call weightedAverageEmbeddings to calculate variance and intra-frame similarity of the whole session
+        _landmarkService.weightedAverageEmbeddings(topEmbeddings);
+        final double variance = _landmarkService.lastEmbeddingVariance;
+        final double avgIntraSim = _landmarkService.lastAverageSimilarity;
+        final double driftScore = topEmbeddings.isEmpty ? 0.0 : 1.0 - _landmarkService.cosineSimilarity(topEmbeddings.first, topEmbeddings.last);
+        final bool driftDetected = driftScore > 0.15;
+
+        FaceLogger.separator(_sessionId, 'FACE_REG');
+        FaceLogger.reg(_sessionId, 'EMBEDDING DRIFT DIAGNOSTICS');
+        FaceLogger.separator(_sessionId, 'FACE_REG');
+        FaceLogger.reg(_sessionId, '  Similarity to Template A : ${sA.toStringAsFixed(4)}');
+        FaceLogger.reg(_sessionId, '  Similarity to Template B : ${sB.toStringAsFixed(4)}');
+        FaceLogger.reg(_sessionId, '  Similarity to Template C : ${sC.toStringAsFixed(4)}');
+        FaceLogger.reg(_sessionId, '  Similarity to Master     : ${sMaster.toStringAsFixed(4)}');
+        FaceLogger.reg(_sessionId, '  Embedding Variance       : ${variance.toStringAsFixed(6)}');
+        FaceLogger.reg(_sessionId, '  Avg Intra-frame Sim      : ${avgIntraSim.toStringAsFixed(4)}');
+        FaceLogger.reg(_sessionId, '  Drift Score              : ${driftScore.toStringAsFixed(4)}');
+        FaceLogger.reg(_sessionId, '  Drift Detected           : ${driftDetected ? "YES" : "NO"}');
+        FaceLogger.separator(_sessionId, 'FACE_REG');
+
         FaceLogger.reg(_sessionId, '  Template A Frames     : ${group1.length}');
         FaceLogger.reg(_sessionId, '  Template B Frames     : ${group2.length}');
         FaceLogger.reg(_sessionId, '  Template C Frames     : ${group3.length}');
@@ -1188,6 +1287,24 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       }
       return null;
     }
+  }
+
+  double _calculateIoU(Rect rect1, Rect rect2) {
+    final double intersectionX1 = math.max(rect1.left, rect2.left);
+    final double intersectionY1 = math.max(rect1.top, rect2.top);
+    final double intersectionX2 = math.min(rect1.right, rect2.right);
+    final double intersectionY2 = math.min(rect1.bottom, rect2.bottom);
+
+    final double intersectionWidth = math.max(0.0, intersectionX2 - intersectionX1);
+    final double intersectionHeight = math.max(0.0, intersectionY2 - intersectionY1);
+    final double intersectionArea = intersectionWidth * intersectionHeight;
+
+    final double rect1Area = rect1.width * rect1.height;
+    final double rect2Area = rect2.width * rect2.height;
+    final double unionArea = rect1Area + rect2Area - intersectionArea;
+
+    if (unionArea <= 0.0) return 0.0;
+    return intersectionArea / unionArea;
   }
 
   // Select the biggest face by area and verify it's centered in the UI circle.

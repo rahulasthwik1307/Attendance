@@ -23,6 +23,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/face_ml_service.dart';
 import '../../services/face_landmark_service.dart';
 import '../../utils/app_styles.dart';
+import '../../utils/camera_stabilizer.dart';
 import 'qr_scanner_screen.dart';
 
 // ─── Verification phases ──────────────────────────────────────────────────────
@@ -81,6 +82,22 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   _Phase _phase = _Phase.initializing;
 
   final List<List<double>> _liveEmbeddings = [];
+  final List<Uint8List> _capturedVerificationFrames = [];
+  final List<Map<String, double>> _capturedVerificationFramesStats = [];
+  final List<BatchEmbeddingResult> _validResults = [];
+  int _validFrameCount = 0;
+  bool _cameraFrozen = false;
+  // ignore: unused_field
+  Uint8List? _lastCapturedFrameBytes;
+  bool _isSubmitting = false;
+  late CameraStabilizer _cameraStabilizer;
+  Face? _lastProcessedFace;
+  int _nextCaptureInterval = 300;
+  final Stopwatch _captureStopwatch = Stopwatch();
+  final Stopwatch _apiStopwatch = Stopwatch();
+  final Stopwatch _comparisonStopwatch = Stopwatch();
+  final Stopwatch _totalStopwatch = Stopwatch();
+  int _totalFramesCaptured = 0;
   static const int _framesPerPhase = 5;
 
   List<double>? _embeddingA;
@@ -394,22 +411,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       debugPrint('[CAM_INIT] Camera preview ready');
 
       _ringController.forward();
-      _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (_secondsRemaining > 1) {
-          setState(() => _secondsRemaining--);
-          _timerPulseController.forward().then((_) {
-            if (mounted) _timerPulseController.reverse();
-          });
-        } else {
-          setState(() => _secondsRemaining = 0);
-          timer.cancel();
-          if (mounted && _phase != _Phase.done) {
-            Navigator.of(
-              context,
-            ).pushReplacementNamed('/qr-timeout', arguments: true);
-          }
-        }
-      });
+      _startCountdownTimer();
     } catch (e) {
       debugPrint('[CAM_INIT] ERROR: $e');
       _setError('Camera failed to start: $e');
@@ -519,6 +521,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   // CAMERA FRAME PROCESSING — rate-limited to 10fps
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _onCameraFrame(CameraImage cameraImage) async {
+    if (!_cameraStabilizer.isStable) return;
     _lastCameraImage = cameraImage;
 
     final now = DateTime.now();
@@ -583,6 +586,39 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         _isProcessingFrame = false;
         return;
       }
+
+      // Same-face tracking continuity
+      if (_lastProcessedFace != null) {
+        bool isSame = false;
+        if (face.trackingId != null && _lastProcessedFace!.trackingId != null) {
+          isSame = face.trackingId == _lastProcessedFace!.trackingId;
+          if (!isSame) {
+            debugPrint('[FACE_CAMERA] [QR_VER][${_sessionId ?? 'QR_VER'}] Face tracking ID changed: ${_lastProcessedFace!.trackingId} -> ${face.trackingId}');
+          }
+        } else {
+          final double iou = _calculateIoU(face.boundingBox, _lastProcessedFace!.boundingBox);
+          isSame = iou >= 0.5;
+          if (!isSame) {
+            debugPrint('[FACE_CAMERA] [QR_VER][${_sessionId ?? 'QR_VER'}] Face tracking lost via IoU (IoU: ${iou.toStringAsFixed(2)})');
+          }
+        }
+        if (!isSame) {
+          debugPrint('[FACE_CAMERA] [QR_VER][${_sessionId ?? 'QR_VER'}] Face tracking lost — resetting captured frames and buffer');
+          _clearSmoothing();
+          _capturedVerificationFrames.clear();
+          _capturedVerificationFramesStats.clear();
+          _validResults.clear();
+          _validFrameCount = 0;
+          _captureProgress = 0;
+          _steadyStartTime = null;
+          _isFaceReady = false;
+          _livenessService.resetCalibration();
+          _challengeStartTime = null;
+          _blinkCountdownController.stop();
+          _blinkCountdownController.reset();
+        }
+      }
+      _lastProcessedFace = face;
 
       _pushSmoothing(face);
 
@@ -783,8 +819,10 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   // CAPTURE HANDLER — front-only, 5 frames
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _handleCapture(Face face, CameraImage cameraImage) async {
+    if (_cameraFrozen) return;
+
     final now = DateTime.now();
-    if (now.difference(_lastCaptureTime).inMilliseconds < 300) return;
+    if (now.difference(_lastCaptureTime).inMilliseconds < _nextCaptureInterval) return;
 
     // Check yaw for front pose (±15°)
     final double? yawRaw = face.headEulerAngleY;
@@ -800,13 +838,28 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       return;
     }
 
+    // Stable frame selection check
+    if (!_cameraStabilizer.checkFrameStability(cameraImage)) {
+      _isProcessingFrame = false;
+      return;
+    }
+
     // Grab frame
     final Uint8List? jpegBytes = await _captureCurrentFrame();
     if (jpegBytes == null) return;
 
-    // Update progress before heavy embedding
+    _lastCapturedFrameBytes = jpegBytes;
+
+    debugPrint(
+      '[FACE_VER] CAPTURE frame accepted | size=${jpegBytes.length}b',
+    );
+
+    _capturedVerificationFrames.add(jpegBytes);
+    final stats = _cameraStabilizer.computeFrameStats(cameraImage);
+    _capturedVerificationFramesStats.add(stats);
+
     setState(() {
-      _captureProgress++;
+      _captureProgress = _validFrameCount + _capturedVerificationFrames.length;
       _borderColor = AppStyles.successGreen;
     });
     HapticFeedback.lightImpact();
@@ -817,22 +870,29 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       }
     });
 
-    // Generate embedding
-    final emb = await _landmarkService.generateEmbedding(
-      jpegBytes: jpegBytes,
-      face: face,
-    );
-    if (emb != null) {
-      _liveEmbeddings.add(emb);
-    }
-
     _lastCaptureTime = DateTime.now();
+    _nextCaptureInterval = 250 + math.Random().nextInt(100);
 
-    // Check if done
-    if (_liveEmbeddings.length >= _framesPerPhase) {
+    // Check if the target valid count is reached in the current batch
+    final int needed = _framesPerPhase - _validFrameCount;
+    if (_capturedVerificationFrames.length >= needed) {
+      _captureStopwatch.stop();
+
+      FaceLogger.ver(
+        _sessionId ?? 'QR_VER',
+        'Stopped | totalCaptured=${_capturedVerificationFrames.length} validCount=$_validFrameCount',
+      );
       try {
         await _cameraController?.stopImageStream();
       } catch (_) {}
+
+      // Cancel countdown timer
+      _countdownTimer?.cancel();
+
+      setState(() {
+        _cameraFrozen = true;
+        _isProcessingFrame = true; // Ignore future frames
+      });
 
       _setPhase(_Phase.processing);
       await Future.delayed(const Duration(milliseconds: 50));
@@ -845,12 +905,130 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _processAndVerify() async {
     if (!mounted) return;
+    if (_isSubmitting) return;
 
-    _updateInstruction('Processing…', subtitle: 'Comparing your face');
+    _totalStopwatch.start();
+
+    setState(() {
+      _isSubmitting = true;
+    });
+
+    _updateInstruction('Analysing…', subtitle: 'Scanning frame 1 of ${_capturedVerificationFrames.length}');
 
     try {
-      debugPrint('[FACE_VER] Using personal threshold: $_verificationThreshold');
-      debugPrint('[FACE_VER] Master embedding available: ${_masterEmbedding != null}');
+      _totalFramesCaptured += _capturedVerificationFrames.length;
+      FaceLogger.ver(_sessionId ?? 'QR_VER', 'Processing Started');
+
+      _apiStopwatch.start();
+      final List<BatchEmbeddingResult> batchResults = await _landmarkService.generateEmbeddingBatch(
+        jpegBytesList: _capturedVerificationFrames,
+        localStatsList: _capturedVerificationFramesStats,
+        sessionId: _sessionId,
+        prefix: 'FACE_VER',
+        storedA: _embeddingA,
+        storedB: _embeddingB,
+        storedC: _embeddingC,
+        storedMaster: _masterEmbedding,
+        threshold: _verificationThreshold,
+      );
+      _apiStopwatch.stop();
+
+      FaceLogger.ver(_sessionId ?? 'QR_VER', 'Processing Finished');
+
+      // Filter and count valid results
+      for (final res in batchResults) {
+        if (res.embedding != null && res.qualityPassed) {
+          _validResults.add(res);
+          FaceLogger.ver(_sessionId ?? 'QR_VER', 'Frame Accepted | valid=${_validResults.length}/$_framesPerPhase');
+        } else {
+          FaceLogger.ver(_sessionId ?? 'QR_VER', 'Frame Rejected | reason=${res.rejectionReason ?? "No face detected"}');
+        }
+      }
+
+      _validFrameCount = _validResults.length;
+      FaceLogger.ver(_sessionId ?? 'QR_VER', 'Valid Count: $_validFrameCount/$_framesPerPhase');
+
+      if (_validFrameCount < _framesPerPhase) {
+        // Not enough valid frames! Clear current batch and continue capturing
+        _capturedVerificationFrames.clear();
+        _capturedVerificationFramesStats.clear();
+
+        setState(() {
+          _cameraFrozen = false;
+          _isProcessingFrame = false;
+          _captureProgress = _validFrameCount;
+          _isSubmitting = false;
+        });
+
+        // Resume capture timer
+        _captureStopwatch.start();
+
+        _setPhase(_Phase.capturing);
+
+        // Restart countdown timer
+        _startCountdownTimer();
+
+        // Restart camera stream
+        try {
+          await _cameraController?.startImageStream(_onCameraFrame);
+        } catch (e) {
+          _setError('Camera could not start. Please try again.');
+          return;
+        }
+
+        _updateInstruction(
+          'Need clearer frames',
+          subtitle: 'Please hold still in good lighting. Capturing ${_framesPerPhase - _validFrameCount} more...',
+        );
+        return;
+      }
+
+      // We have reached the target valid count!
+      // Rank accepted frames by quality score
+      _validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
+
+      // Use the highest-quality frames only
+      final List<BatchEmbeddingResult> topResults = _validResults.sublist(0, _framesPerPhase);
+
+      _liveEmbeddings.clear();
+      for (final res in topResults) {
+        _liveEmbeddings.add(res.embedding!);
+      }
+
+      // Calculate dynamic threshold based on front scores
+      final List<double> frontScores = _liveEmbeddings
+          .map((e) => _landmarkService.cosineSimilarity(e, _embeddingA!))
+          .toList();
+      final double dynamicThreshold = _calculateDynamicThreshold(frontScores);
+
+      FaceLogger.ver(
+        _sessionId ?? 'QR_VER',
+        'Using personal threshold: $_verificationThreshold',
+      );
+      FaceLogger.ver(
+        _sessionId ?? 'QR_VER',
+        'Master embedding available: ${_masterEmbedding != null}',
+      );
+
+      // Per-frame similarity matrix logging
+      for (int i = 0; i < topResults.length; i++) {
+        final res = topResults[i];
+        final double sA = _landmarkService.cosineSimilarity(res.embedding!, _embeddingA!);
+        final double sB = _landmarkService.cosineSimilarity(res.embedding!, _embeddingB!);
+        final double sC = _landmarkService.cosineSimilarity(res.embedding!, _embeddingC!);
+        final double sMaster = _masterEmbedding != null
+            ? _landmarkService.cosineSimilarity(res.embedding!, _masterEmbedding!)
+            : 0.0;
+        final double quality = res.rawQualityScore;
+        FaceLogger.ver(
+          _sessionId ?? 'QR_VER',
+          '  Frame ${i + 1} | Quality=${quality.toStringAsFixed(1)} | '
+          'sA=${sA.toStringAsFixed(4)} | sB=${sB.toStringAsFixed(4)} | '
+          'sC=${sC.toStringAsFixed(4)} | sMaster=${sMaster.toStringAsFixed(4)}',
+        );
+      }
+      
+      _comparisonStopwatch.start();
       final result = _landmarkService.verifyFace(
         liveEmbeddings: _liveEmbeddings,
         storedEmbeddingA: _embeddingA!,
@@ -859,9 +1037,108 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         masterEmbedding: _masterEmbedding,
         threshold: _verificationThreshold,
       );
+      _comparisonStopwatch.stop();
+      _totalStopwatch.stop();
 
-      debugPrint(
-        '[FACE_VER] Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | EmbALen: ${_embeddingA?.length} | EmbBLen: ${_embeddingB?.length} | EmbCLen: ${_embeddingC?.length}',
+      // Compute statistics for the session summary
+      final double avgQuality = topResults.isEmpty
+          ? 0.0
+          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => a + b) / topResults.length;
+      final double maxQuality = topResults.isEmpty
+          ? 0.0
+          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => math.max(a, b));
+      final double minQuality = topResults.isEmpty
+          ? 0.0
+          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => math.min(a, b));
+
+      final double overallSimilarityA = topResults.isEmpty
+          ? 0.0
+          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingA!)).reduce((a, b) => a + b) / topResults.length;
+      final double overallSimilarityB = topResults.isEmpty
+          ? 0.0
+          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingB!)).reduce((a, b) => a + b) / topResults.length;
+      final double overallSimilarityC = topResults.isEmpty
+          ? 0.0
+          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingC!)).reduce((a, b) => a + b) / topResults.length;
+      final double overallSimilarityMaster = _masterEmbedding == null
+          ? 0.0
+          : (topResults.isEmpty
+              ? 0.0
+              : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _masterEmbedding!)).reduce((a, b) => a + b) / topResults.length);
+
+      final int framesAccepted = _validFrameCount;
+      final int framesRejected = _totalFramesCaptured - framesAccepted;
+
+      final double avgLocalBrightness = _capturedVerificationFramesStats.isEmpty
+          ? 0.0
+          : _capturedVerificationFramesStats.map((s) => s['brightness'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
+      final double avgLocalContrast = _capturedVerificationFramesStats.isEmpty
+          ? 0.0
+          : _capturedVerificationFramesStats.map((s) => s['contrast'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
+      final double avgLocalSharpness = _capturedVerificationFramesStats.isEmpty
+          ? 0.0
+          : _capturedVerificationFramesStats.map((s) => s['sharpness'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
+
+      FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', 'VERIFICATION SUMMARY');
+      FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Frames Captured       : $_totalFramesCaptured');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Frames Accepted       : $framesAccepted');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Frames Rejected       : $framesRejected');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Avg Backend Quality   : ${avgQuality.toStringAsFixed(1)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Highest Quality       : ${maxQuality.toStringAsFixed(1)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Lowest Quality        : ${minQuality.toStringAsFixed(1)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Warm-up Time           : ${_cameraStabilizer.warmUpDurationMs}ms');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Focus Stabilize Time  : ${_cameraStabilizer.focusStabilizationDurationMs}ms');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Exposure Stabilize Time: ${_cameraStabilizer.exposureStabilizationDurationMs}ms');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Avg Local Brightness  : ${avgLocalBrightness.toStringAsFixed(1)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Avg Local Contrast    : ${avgLocalContrast.toStringAsFixed(1)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Avg Local Sharpness    : ${avgLocalSharpness.toStringAsFixed(1)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity A          : ${overallSimilarityA.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity B          : ${overallSimilarityB.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity C          : ${overallSimilarityC.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Master Similarity     : ${overallSimilarityMaster.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Final Similarity      : ${result.score.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Threshold             : ${_verificationThreshold.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Decision              : ${result.isMatch ? "PASS" : "FAIL"}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Failure Reason        : ${result.isMatch ? "—" : result.message}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Capture Time          : ${_captureStopwatch.elapsedMilliseconds}ms');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Embedding API Time    : ${_apiStopwatch.elapsedMilliseconds}ms');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Comparison Time       : ${_comparisonStopwatch.elapsedMilliseconds}ms');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Total Time            : ${_totalStopwatch.elapsedMilliseconds}ms');
+      FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
+
+      final double driftScore = _liveEmbeddings.isEmpty ? 0.0 : 1.0 - _landmarkService.cosineSimilarity(_liveEmbeddings.first, _liveEmbeddings.last);
+      final bool driftDetected = driftScore > 0.15;
+
+      FaceLogger.ver(_sessionId ?? 'QR_VER', 'EMBEDDING DRIFT DIAGNOSTICS');
+      FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity to Template A : ${overallSimilarityA.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity to Template B : ${overallSimilarityB.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity to Template C : ${overallSimilarityC.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity to Master     : ${overallSimilarityMaster.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Embedding Variance       : ${_landmarkService.lastEmbeddingVariance.toStringAsFixed(6)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Avg Intra-frame Sim      : ${_landmarkService.lastAverageSimilarity.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Drift Score              : ${driftScore.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Drift Detected           : ${driftDetected ? "YES" : "NO"}');
+      FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
+
+      final double effectiveThreshold = math.max(_verificationThreshold, 0.65);
+      final double similarityMargin = result.score - _verificationThreshold;
+      final double decisionMargin = result.score - effectiveThreshold;
+
+      FaceLogger.ver(_sessionId ?? 'QR_VER', 'ADAPTIVE THRESHOLD DIAGNOSTICS');
+      FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Personal Threshold    : ${_verificationThreshold.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Current Threshold     : ${effectiveThreshold.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Adaptive Threshold    : ${dynamicThreshold.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity Margin     : ${similarityMargin.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Decision Margin       : ${decisionMargin.toStringAsFixed(4)}');
+      FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
+
+      FaceLogger.ver(
+        _sessionId ?? 'QR_VER',
+        'Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | DynThreshold: ${dynamicThreshold.toStringAsFixed(4)}',
       );
 
       if (result.isMatch) {
@@ -887,14 +1164,14 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
               final prefs = await SharedPreferences.getInstance();
               await prefs.setString('emb_master', jsonEncode(newMaster));
               adaptiveUpdateApplied = true;
-              debugPrint('[FACE_VER] adaptiveUpdateApplied=true (score=${result.score.toStringAsFixed(4)})');
+              FaceLogger.ver(_sessionId ?? 'QR_VER', 'adaptiveUpdateApplied=true (score=${result.score.toStringAsFixed(4)})');
             }
           } catch (e) {
-            debugPrint('[FACE_VER] Adaptive update failed: $e');
+            FaceLogger.ver(_sessionId ?? 'QR_VER', 'Adaptive update failed: $e');
           }
         }
         if (!adaptiveUpdateApplied) {
-          debugPrint('[FACE_VER] adaptiveUpdateApplied=false');
+          FaceLogger.ver(_sessionId ?? 'QR_VER', 'adaptiveUpdateApplied=false');
         }
 
         // ── Success ──
@@ -918,8 +1195,9 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         // Update period_attendance — set face_verified = true
         try {
           final user = Supabase.instance.client.auth.currentUser;
-          debugPrint(
-            '[QR_FACE] Attempting update — sessionId: $_sessionId, userId: ${user?.id}',
+          FaceLogger.ver(
+            _sessionId ?? 'QR_VER',
+            'Attempting update — sessionId: $_sessionId, userId: ${user?.id}',
           );
           if (user != null && _sessionId != null) {
             await Supabase.instance.client
@@ -931,12 +1209,13 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                 })
                 .eq('session_id', _sessionId!)
                 .eq('student_id', user.id);
-            debugPrint(
-              '[QR_FACE] period_attendance updated — face_verified = true',
+            FaceLogger.ver(
+              _sessionId ?? 'QR_VER',
+              'period_attendance updated — face_verified = true',
             );
           }
         } catch (e) {
-          debugPrint('[QR_FACE] Failed to update period_attendance: $e');
+          FaceLogger.ver(_sessionId ?? 'QR_VER', 'Failed to update period_attendance: $e');
         }
 
         if (!mounted) return;
@@ -952,12 +1231,26 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
           subtitle: 'Face did not match',
         );
 
-        if (_attemptCount < 3) {
+        bool hasSeverePoseWarning = topResults.any((r) => r.yaw.abs() > 20.0 || r.pitch.abs() > 15.0);
+        bool meetsRetryConditions = result.score >= (_verificationThreshold - 0.03) &&
+            result.score < _verificationThreshold &&
+            avgQuality >= 65.0 &&
+            !hasSeverePoseWarning;
+
+        if (_attemptCount < 2 && meetsRetryConditions) {
+          FaceLogger.ver(_sessionId ?? 'QR_VER', 'Retry conditions met: score=${result.score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, pose=OK. Triggering retry.');
           await Future.delayed(const Duration(milliseconds: 1200));
           if (!mounted) return;
 
           _attemptCount++;
           _liveEmbeddings.clear();
+          _capturedVerificationFrames.clear();
+          _capturedVerificationFramesStats.clear();
+          _validResults.clear();
+          _validFrameCount = 0;
+          _cameraFrozen = false;
+          _lastCapturedFrameBytes = null;
+          _isSubmitting = false;
           _livenessService.resetCalibration();
           _clearSmoothing();
           _challengeVerified = false;
@@ -968,6 +1261,13 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
           _isFaceReady = false;
           _lastKnownBlinkCount = 0;
 
+          // Reset stopwatches for next attempt
+          _captureStopwatch.reset();
+          _apiStopwatch.reset();
+          _comparisonStopwatch.reset();
+          _totalStopwatch.reset();
+          _totalFramesCaptured = 0;
+
           setState(() => _borderColor = AppStyles.primaryBlue);
 
           // Restart camera stream
@@ -976,8 +1276,14 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
           } catch (_) {}
 
           _setPhase(_Phase.positioning);
+          _startCountdownTimer();
         } else {
-          // 3 attempts exhausted
+          // 2 attempts exhausted
+          if (!meetsRetryConditions) {
+            FaceLogger.ver(_sessionId ?? 'QR_VER', 'Retry conditions not met: score=${result.score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, poseWarning=$hasSeverePoseWarning. Rejecting verification.');
+          } else {
+            FaceLogger.ver(_sessionId ?? 'QR_VER', '2 attempts exhausted — rejecting verification.');
+          }
           await Future.delayed(const Duration(milliseconds: 600));
           if (mounted) {
             Navigator.of(
@@ -988,7 +1294,46 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       }
     } catch (e) {
       _setError('Verification failed: ${e.toString()}');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
     }
+  }
+
+  double _calculateDynamicThreshold(List<double> scores) {
+    if (scores.isEmpty) return 0.75;
+    double mean = scores.reduce((a, b) => a + b) / scores.length;
+    double variance = scores.map((s) => (s - mean) * (s - mean)).reduce((a, b) => a + b) / scores.length;
+    if (variance < 0.01) {
+      return 0.75;
+    } else if (variance < 0.05) {
+      return 0.75;
+    } else {
+      return 0.75;
+    }
+  }
+
+  void _startCountdownTimer() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_secondsRemaining > 1) {
+        setState(() => _secondsRemaining--);
+        _timerPulseController.forward().then((_) {
+          if (mounted) _timerPulseController.reverse();
+        });
+      } else {
+        setState(() => _secondsRemaining = 0);
+        timer.cancel();
+        if (mounted && _phase != _Phase.done) {
+          Navigator.of(
+            context,
+          ).pushReplacementNamed('/qr-timeout', arguments: true);
+        }
+      }
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1066,6 +1411,24 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       }
       return null;
     }
+  }
+
+  double _calculateIoU(Rect rect1, Rect rect2) {
+    final double intersectionX1 = math.max(rect1.left, rect2.left);
+    final double intersectionY1 = math.max(rect1.top, rect2.top);
+    final double intersectionX2 = math.min(rect1.right, rect2.right);
+    final double intersectionY2 = math.min(rect1.bottom, rect2.bottom);
+
+    final double intersectionWidth = math.max(0.0, intersectionX2 - intersectionX1);
+    final double intersectionHeight = math.max(0.0, intersectionY2 - intersectionY1);
+    final double intersectionArea = intersectionWidth * intersectionHeight;
+
+    final double rect1Area = rect1.width * rect1.height;
+    final double rect2Area = rect2.width * rect2.height;
+    final double unionArea = rect1Area + rect2Area - intersectionArea;
+
+    if (unionArea <= 0.0) return 0.0;
+    return intersectionArea / unionArea;
   }
 
   Face? _selectBiggestCenteredFace(List<Face> faces, CameraImage image) {
@@ -2013,7 +2376,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                                     duration: const Duration(milliseconds: 400),
                                     opacity: _cameraPreviewReady ? 1.0 : 0.0,
                                     child: Text(
-                                      'Attempt $_attemptCount of 3',
+                                      'Attempt $_attemptCount of 2',
                                       style: TextStyle(
                                         fontSize: 13,
                                         fontWeight: FontWeight.w500,
