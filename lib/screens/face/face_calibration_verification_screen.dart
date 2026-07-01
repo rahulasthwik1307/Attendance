@@ -232,7 +232,6 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       });
 
       await _landmarkService.initialize();
-      await _loadEmbeddings();
       await _cameraController!.startImageStream(_onCameraFrame);
       _setPhase(_Phase.positioning);
 
@@ -240,6 +239,8 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
 
       _ringController.forward();
       _startCountdownTimer();
+
+      await _loadEmbeddings();
     } catch (e) {
       _setError('Camera failed to start: $e');
     }
@@ -588,6 +589,10 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   Future<void> _processAndCalibrate() async {
     if (!mounted) return;
     if (_isSubmitting) return;
+
+    if (!_embeddingsLoaded) {
+      await _loadEmbeddings();
+    }
 
     _totalStopwatch.start();
     setState(() => _isSubmitting = true);
@@ -984,8 +989,8 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
 
     final double scale = _uiAvailW / rotW;
     final double circleCameraCX = rotW / 2;
-    double circleTop = _uiAvailH * 0.36 - _uiCircleSize / 2 - 40;
-    circleTop = math.max(circleTop, 24.0);
+    double circleTop = _uiAvailH * 0.30 - _uiCircleSize / 2 - 20;
+    circleTop = math.max(circleTop, 16.0);
     final double circleCameraCY = rotH / 2 + circleTop / scale;
     final double circleCameraSize = _uiCircleSize / scale;
 
@@ -1055,8 +1060,8 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       final double scale = _uiAvailW / rotW;
 
       final double circleCameraCX = rotW / 2;
-      double circleTopUI = _uiAvailH * 0.36 - _uiCircleSize / 2 - 40;
-      circleTopUI = math.max(circleTopUI, 24.0);
+      double circleTopUI = _uiAvailH * 0.30 - _uiCircleSize / 2 - 20;
+      circleTopUI = math.max(circleTopUI, 16.0);
       final double circleCameraCY = rotH / 2 + circleTopUI / scale;
       final double circleCameraSize = _uiCircleSize / scale;
       final double circleRadius = circleCameraSize / 2;
@@ -1392,15 +1397,15 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                   ),
                 ),
               ),
-              const SizedBox(height: 60),
+              const SizedBox(height: 20),
               Expanded(
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final double availW = constraints.maxWidth;
                     final double availH = constraints.maxHeight;
                     final double circleSize = availW * 0.80;
-                    double circleTop = availH * 0.36 - circleSize / 2 - 40;
-                    circleTop = math.max(circleTop, 24.0);
+                    double circleTop = availH * 0.30 - circleSize / 2 - 20;
+                    circleTop = math.max(circleTop, 16.0);
 
                     _uiCircleSize = circleSize;
                     _uiAvailW = availW;
@@ -1427,6 +1432,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                       width: availW,
                       height: availH,
                       child: Stack(
+                        clipBehavior: Clip.none,
                         children: [
                           Positioned.fill(child: Container(color: AppStyles.backgroundLight)),
                           AnimatedPositioned(
@@ -1441,6 +1447,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                               duration: const Duration(milliseconds: 500),
                               curve: Curves.easeIn,
                               child: Stack(
+                                clipBehavior: Clip.none,
                                 children: [
                                 Positioned(
                                   left: (availW - circleSize) / 2,
@@ -1585,7 +1592,9 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                               top: circleTop + circleSize + 32,
                               left: 16,
                               right: 16,
-                              child: Column(
+                              bottom: 16,
+                              child: SingleChildScrollView(
+                                child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     SizedBox(
@@ -1759,6 +1768,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                                   ],
                                 ),
                               ),
+                            ),
                         ],
                       ),
                     );
