@@ -66,7 +66,6 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
 
   CameraController? _cameraController;
   bool _cameraInitialized = false;
-  bool _cameraPreviewReady = false;
 
   final FaceMlService _mlService = FaceMlService();
   final FaceLandmarkService _landmarkService = FaceLandmarkService();
@@ -76,7 +75,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   CameraImage? _lastCameraImage;
   DateTime _lastCaptureTime = DateTime.fromMillisecondsSinceEpoch(0);
 
-  _Phase _phase = _Phase.positioning;
+  _Phase _phase = _Phase.initializing;
 
   final List<List<double>> _liveEmbeddings = [];
   final List<Uint8List> _capturedVerificationFrames = [];
@@ -116,8 +115,8 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
 
 
 
-  String _instructionTitle = 'Fit your face in the circle';
-  String _instructionSubtitle = 'Make sure your full face is visible';
+  String _instructionTitle = 'Setting up camera…';
+  String _instructionSubtitle = 'Please wait';
   Color _borderColor = AppStyles.primaryBlue;
   bool _challengeVerified = false;
 
@@ -234,8 +233,6 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       await _landmarkService.initialize();
       await _cameraController!.startImageStream(_onCameraFrame);
       _setPhase(_Phase.positioning);
-
-      if (mounted) setState(() => _cameraPreviewReady = true);
 
       _ringController.forward();
       _startCountdownTimer();
@@ -1443,7 +1440,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                             right: -offsetX,
                             bottom: -offsetY,
                             child: AnimatedOpacity(
-                              opacity: _cameraPreviewReady ? 1.0 : 0.0,
+                              opacity: 1.0,
                               duration: const Duration(milliseconds: 500),
                               curve: Curves.easeIn,
                               child: Stack(
@@ -1597,82 +1594,84 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    SizedBox(
-                                      height: 56,
-                                      child: Center(
-                                        child: AnimatedSwitcher(
-                                          duration: const Duration(milliseconds: 300),
-                                          child: (_phase == _Phase.liveness &&
-                                                  (_instructionTitle.contains('Blink') || _instructionSubtitle.contains('Blink')) &&
-                                                  !_challengeVerified)
-                                              ? SizedBox(
-                                                  key: const ValueKey('blink'),
-                                                  width: 50,
-                                                  height: 50,
-                                                  child: AnimatedBuilder(
-                                                    animation: _blinkCountdownController,
-                                                    builder: (context, child) {
-                                                      final double remaining = 3.0 * (1.0 - _blinkCountdownController.value);
-                                                      return Stack(
-                                                        alignment: Alignment.center,
-                                                        children: [
-                                                          SizedBox(
-                                                            width: 50,
-                                                            height: 50,
-                                                            child: CircularProgressIndicator(
-                                                              value: 1.0 - _blinkCountdownController.value,
-                                                              strokeWidth: 4.0,
-                                                              color: Colors.orangeAccent,
-                                                              backgroundColor: Colors.orangeAccent.withValues(alpha: 0.15),
+                                    if (_phase != _Phase.initializing) ...[
+                                      SizedBox(
+                                        height: 56,
+                                        child: Center(
+                                          child: AnimatedSwitcher(
+                                            duration: const Duration(milliseconds: 300),
+                                            child: (_phase == _Phase.liveness &&
+                                                    (_instructionTitle.contains('Blink') || _instructionSubtitle.contains('Blink')) &&
+                                                    !_challengeVerified)
+                                                ? SizedBox(
+                                                    key: const ValueKey('blink'),
+                                                    width: 50,
+                                                    height: 50,
+                                                    child: AnimatedBuilder(
+                                                      animation: _blinkCountdownController,
+                                                      builder: (context, child) {
+                                                        final double remaining = 3.0 * (1.0 - _blinkCountdownController.value);
+                                                        return Stack(
+                                                          alignment: Alignment.center,
+                                                          children: [
+                                                            SizedBox(
+                                                              width: 50,
+                                                              height: 50,
+                                                              child: CircularProgressIndicator(
+                                                                value: 1.0 - _blinkCountdownController.value,
+                                                                strokeWidth: 4.0,
+                                                                color: Colors.orangeAccent,
+                                                                backgroundColor: Colors.orangeAccent.withValues(alpha: 0.15),
+                                                              ),
+                                                            ),
+                                                            AnimatedSwitcher(
+                                                              duration: const Duration(milliseconds: 300),
+                                                              transitionBuilder: (Widget child, Animation<double> animation) {
+                                                                return ScaleTransition(scale: animation, child: FadeTransition(opacity: animation, child: child));
+                                                              },
+                                                              child: Text(
+                                                                '${remaining.ceil()}',
+                                                                key: ValueKey<int>(remaining.ceil()),
+                                                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.orangeAccent),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        );
+                                                      },
+                                                    ),
+                                                  )
+                                                : ScaleTransition(
+                                                    key: const ValueKey('ring'),
+                                                    scale: _timerPulseAnim,
+                                                    child: AnimatedBuilder(
+                                                      animation: _ringController,
+                                                      builder: (context, _) {
+                                                        return SizedBox(
+                                                          width: 44,
+                                                          height: 44,
+                                                          child: CustomPaint(
+                                                            painter: _MiniRingPainter(progress: _ringProgress.value, color: timerColor),
+                                                            child: Center(
+                                                              child: Text(
+                                                                '${_secondsRemaining}s',
+                                                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: timerColor),
+                                                              ),
                                                             ),
                                                           ),
-                                                          AnimatedSwitcher(
-                                                            duration: const Duration(milliseconds: 300),
-                                                            transitionBuilder: (Widget child, Animation<double> animation) {
-                                                              return ScaleTransition(scale: animation, child: FadeTransition(opacity: animation, child: child));
-                                                            },
-                                                            child: Text(
-                                                              '${remaining.ceil()}',
-                                                              key: ValueKey<int>(remaining.ceil()),
-                                                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.orangeAccent),
-                                                            ),
-                                                          ),
-                                                        ],
-                                                      );
-                                                    },
+                                                        );
+                                                      },
+                                                    ),
                                                   ),
-                                                )
-                                              : ScaleTransition(
-                                                  key: const ValueKey('ring'),
-                                                  scale: _timerPulseAnim,
-                                                  child: AnimatedBuilder(
-                                                    animation: _ringController,
-                                                    builder: (context, _) {
-                                                      return SizedBox(
-                                                        width: 44,
-                                                        height: 44,
-                                                        child: CustomPaint(
-                                                          painter: _MiniRingPainter(progress: _ringProgress.value, color: timerColor),
-                                                          child: Center(
-                                                            child: Text(
-                                                              '${_secondsRemaining}s',
-                                                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: timerColor),
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      );
-                                                    },
-                                                  ),
-                                                ),
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      'Attempt $_attemptCount of 2',
-                                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.grey.shade500),
-                                    ),
-                                    const SizedBox(height: 10),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        'Attempt $_attemptCount of 2',
+                                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.grey.shade500),
+                                      ),
+                                      const SizedBox(height: 10),
+                                    ],
                                     if (_phase != _Phase.initializing && _phase != _Phase.processing && _phase != _Phase.done)
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(16),
@@ -1820,7 +1819,6 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       _secondsRemaining = _totalSeconds;
       _instructionTitle = 'Fit your face in the circle';
       _instructionSubtitle = 'Make sure your full face is visible';
-      _cameraPreviewReady = true;
     });
 
     _startCountdownTimer();
