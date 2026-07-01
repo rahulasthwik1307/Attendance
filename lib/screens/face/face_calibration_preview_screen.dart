@@ -3,7 +3,6 @@
 // User can retake or confirm. On confirm, saves personal threshold to Supabase
 // and navigates to dashboard.
 
-import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
@@ -12,7 +11,6 @@ import '../../utils/app_styles.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
 import '../../utils/auth_flow_state.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 class FaceCalibrationPreviewScreen extends StatefulWidget {
   const FaceCalibrationPreviewScreen({super.key});
@@ -30,8 +28,9 @@ class _FaceCalibrationPreviewScreenState
 
   bool _isLoading = false;
   bool _isSuccess = false;
+  // Guards duplicate navigation on both Retake and Save paths.
+  bool _isNavigating = false;
   Uint8List? _croppedPhotoBytes;
-  double _score = 0.75;
 
   @override
   void initState() {
@@ -54,7 +53,6 @@ class _FaceCalibrationPreviewScreenState
     if (!mounted) return;
 
     final args = ModalRoute.of(context)?.settings.arguments as Map?;
-    _score = (args?['score'] as num?)?.toDouble() ?? 0.75;
     final Uint8List? rawBytes = args?['photoBytes'] as Uint8List?;
     final faceBbox = args?['faceBbox'] as Rect?;
 
@@ -120,11 +118,11 @@ class _FaceCalibrationPreviewScreenState
         croppedBytes = Uint8List.fromList(img.encodeJpg(rotated, quality: 90));
       }
 
-      if (mounted) {
-        setState(() {
-          _croppedPhotoBytes = croppedBytes;
-        });
-      }
+      // Guard: widget may have been disposed while the image was being processed.
+      if (!mounted) return;
+      setState(() {
+        _croppedPhotoBytes = croppedBytes;
+      });
     });
   }
 
@@ -140,7 +138,7 @@ class _FaceCalibrationPreviewScreenState
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
-        Navigator.of(context).pushReplacementNamed('/face_calibration_verify');
+        _navigateRetake();
       },
       child: Scaffold(
         backgroundColor: Colors.white,
@@ -244,11 +242,7 @@ class _FaceCalibrationPreviewScreenState
                       ),
                     ),
                     child: AnimatedButton(
-                      onPressed: () {
-                        Navigator.of(
-                          context,
-                        ).pushReplacementNamed('/face_calibration_verify');
-                      },
+                      onPressed: _navigateRetake,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.transparent,
                         foregroundColor: AppStyles.primaryBlue,
@@ -284,85 +278,7 @@ class _FaceCalibrationPreviewScreenState
                       ],
                     ),
                     child: AnimatedButton(
-                      onPressed: () async {
-                        if (_isLoading || _isSuccess) return;
-                        if (_croppedPhotoBytes == null) return;
-
-                        setState(() => _isLoading = true);
-                        try {
-                          final double personalThreshold = math.max(
-                            0.68,
-                            _score - 0.16,
-                          );
-                          debugPrint(
-                            '[FACE_CAL_PREVIEW] Saving personal threshold: $personalThreshold (from score: ${_score.toStringAsFixed(4)})',
-                          );
-
-                          final user =
-                              Supabase.instance.client.auth.currentUser;
-                          if (user == null) throw Exception('Not logged in');
-
-                          await Supabase.instance.client
-                              .from('students')
-                              .update({
-                                'verification_threshold': personalThreshold,
-                              })
-                              .eq('id', user.id);
-
-                          // Also cache it immediately so next verification uses it without Supabase call
-                          final prefs = await SharedPreferences.getInstance();
-                          await prefs.setString(
-                            'emb_threshold_${user.id}',
-                            personalThreshold.toString(),
-                          );
-                          debugPrint(
-                            '[FACE_CAL_PREVIEW] Threshold cached: $personalThreshold for user ${user.id}',
-                          );
-
-                          debugPrint(
-                            '[FACE_CAL_PREVIEW] Personal threshold saved to Supabase successfully',
-                          );
-
-                          // Clear embeddings cache so verification loads fresh
-                          await prefs.remove('emb_a');
-                          await prefs.remove('emb_b');
-                          await prefs.remove('emb_c');
-                          await prefs.remove('emb_student_id');
-                          await prefs.remove('emb_cached_at');
-                          debugPrint(
-                            '[FACE_CAL_PREVIEW] Embeddings cache cleared',
-                          );
-
-                          if (!context.mounted) return;
-                          setState(() {
-                            _isLoading = false;
-                            _isSuccess = true;
-                          });
-                          await Future.delayed(
-                            const Duration(milliseconds: 600),
-                          );
-                          if (!context.mounted) return;
-
-                          AuthFlowState.instance.passwordSet = true;
-                          AuthFlowState.instance.faceRegistered = true;
-                          Navigator.of(context).pushNamedAndRemoveUntil(
-                            '/dashboard',
-                            (route) => false,
-                          );
-                        } catch (e) {
-                          debugPrint(
-                            '[FACE_CAL_PREVIEW] Error saving threshold: $e',
-                          );
-                          if (!context.mounted) return;
-                          setState(() => _isLoading = false);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Failed to save: $e'),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                        }
-                      },
+                      onPressed: _onSave,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppStyles.primaryBlue,
                         foregroundColor: Colors.white,
@@ -423,5 +339,73 @@ class _FaceCalibrationPreviewScreenState
         ),
       ),
     );
+  }
+
+  // ── Navigation helpers ──────────────────────────────────────────────────────
+
+  void _navigateRetake() {
+    if (_isNavigating) return;
+    _isNavigating = true;
+    Navigator.of(context).pushReplacementNamed('/face_calibration_verify');
+  }
+
+  Future<void> _onSave() async {
+    if (_isLoading || _isSuccess || _isNavigating) return;
+    if (_croppedPhotoBytes == null) return;
+
+    // Capture context-derived objects synchronously BEFORE any await.
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
+    setState(() => _isLoading = true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // Clear embeddings cache so verification loads fresh
+      await prefs.remove('emb_a');
+      await prefs.remove('emb_b');
+      await prefs.remove('emb_c');
+      await prefs.remove('emb_student_id');
+      await prefs.remove('emb_cached_at');
+      debugPrint(
+        '[FACE_CAL_PREVIEW] Embeddings cache cleared',
+      );
+
+      if (!context.mounted) return;
+      setState(() {
+        _isLoading = false;
+        _isSuccess = true;
+      });
+      await Future.delayed(
+        const Duration(milliseconds: 600),
+      );
+      if (!context.mounted) return;
+
+      // Guard duplicate navigation on the save path.
+      if (_isNavigating) return;
+      _isNavigating = true;
+
+      AuthFlowState.instance.passwordSet = true;
+      AuthFlowState.instance.faceRegistered = true;
+      navigator.pushNamedAndRemoveUntil(
+        '/dashboard',
+        (route) => false,
+      );
+    } catch (e) {
+      debugPrint(
+        '[FACE_CAL_PREVIEW] Error saving: $e',
+      );
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _isNavigating = false; // allow retry after failure
+      });
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Failed to save: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 }

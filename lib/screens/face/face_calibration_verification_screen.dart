@@ -1,15 +1,14 @@
 // lib/screens/face/face_calibration_verification_screen.dart
-// Face verification screen used immediately after teacher approval.
-// No location check. Saves personal threshold on success.
+// Face calibration screen — captures 8 front frames after liveness check,
+// generates embeddings, computes a personalized threshold via ThresholdCalculator
+// and navigates to the preview screen on success. No location check.
 
 import 'dart:async';
-
 import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:camera/camera.dart';
-import 'package:facial_liveness_verification/facial_liveness_verification.dart'
-    show ChallengeType;
+import 'package:facial_liveness_verification/facial_liveness_verification.dart' show ChallengeType;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -19,16 +18,17 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/face_ml_service.dart';
 import '../../services/face_landmark_service.dart';
+import '../../services/calibration_service.dart';
 import '../../utils/app_styles.dart';
 import '../../utils/camera_stabilizer.dart';
+import '../../utils/threshold_calculator.dart';
 
-// ─── Verification phases ──────────────────────────────────────────────────────
 enum _Phase {
   initializing,
-  positioning, // face centering + steady check
-  liveness, // blink challenge
-  capturing, // capturing 5 front frames
-  processing, // running embeddings + comparing
+  positioning,
+  liveness,
+  capturing,
+  processing,
   done,
   error,
 }
@@ -42,7 +42,6 @@ class FaceCalibrationVerificationScreen extends StatefulWidget {
 
 class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerificationScreen>
     with TickerProviderStateMixin {
-  // ─── Session ID & Timings ────────────────────────────────────────────────
   late final String _sessionId;
   final Stopwatch _captureStopwatch = Stopwatch();
   final Stopwatch _apiStopwatch = Stopwatch();
@@ -50,7 +49,6 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   final Stopwatch _totalStopwatch = Stopwatch();
   int _totalFramesCaptured = 0;
 
-  // ─── Animation controllers ──────────────────────────────────────────────
   late AnimationController _pulseController;
   late AnimationController _textFadeController;
   late AnimationController _blinkCountdownController;
@@ -58,9 +56,6 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   late AnimationController _particleController;
   late AnimationController _scanLineController;
 
-
-
-  // ─── Timer ring ─────────────────────────────────────────────────────────
   late AnimationController _timerPulseController;
   late Animation<double> _timerPulseAnim;
   late AnimationController _ringController;
@@ -69,12 +64,10 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   int _secondsRemaining = _totalSeconds;
   Timer? _countdownTimer;
 
-  // ─── Camera ─────────────────────────────────────────────────────────────
   CameraController? _cameraController;
   bool _cameraInitialized = false;
   bool _cameraPreviewReady = false;
 
-  // ─── ML ─────────────────────────────────────────────────────────────────
   final FaceMlService _mlService = FaceMlService();
   final FaceLandmarkService _landmarkService = FaceLandmarkService();
   final LivenessChallengeService _livenessService = LivenessChallengeService();
@@ -83,19 +76,17 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   CameraImage? _lastCameraImage;
   DateTime _lastCaptureTime = DateTime.fromMillisecondsSinceEpoch(0);
 
-  // ─── Verification state ─────────────────────────────────────────────────
-  _Phase _phase = _Phase.initializing;
+  _Phase _phase = _Phase.positioning;
 
   final List<List<double>> _liveEmbeddings = [];
-  // Stores raw JPEG bytes during capture phase for batch processing
   final List<Uint8List> _capturedVerificationFrames = [];
   final List<Map<String, double>> _capturedVerificationFramesStats = [];
-  late CameraStabilizer _cameraStabilizer;
+  CameraStabilizer? _cameraStabilizer;
+  bool _embeddingsLoaded = false;
   Face? _lastProcessedFace;
   int _nextCaptureInterval = 300;
   static const int _framesPerPhase = 8;
 
-  // New state variables for valid frame counting, camera freeze, and processing overlays
   final List<BatchEmbeddingResult> _validResults = [];
   int _validFrameCount = 0;
   bool _cameraFrozen = false;
@@ -106,67 +97,44 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   List<double>? _embeddingB;
   List<double>? _embeddingC;
   List<double>? _masterEmbedding;
+  
   Uint8List? _lastCaptureJpegBytes;
+  Face? _lastCaptureFace;
   double _verificationThreshold = 0.75;
-  dynamic _lastCaptureFace;
 
+  int _consecutiveImageErrors = 0;
   int _attemptCount = 1;
 
-  // Instruction / UI state
-  String _instructionTitle = 'Setting up camera…';
-  String _instructionSubtitle = 'Please wait';
+  // Calibration runtime metrics
+  int _calFramesCaptured = 0;
+  int _calFramesAccepted = 0;
+  int _calFramesRejected = 0;
+  double _calGeneratedThreshold = 0.0;
+  double _calMeanSimilarity = 0.0;
+  double _calSimilarityStdDev = 0.0;
+  final Stopwatch _calDurationStopwatch = Stopwatch();
+
+
+
+  String _instructionTitle = 'Fit your face in the circle';
+  String _instructionSubtitle = 'Make sure your full face is visible';
   Color _borderColor = AppStyles.primaryBlue;
   bool _challengeVerified = false;
 
-  // ─── Challenge verification timeout ─────────────────────────────────────
   DateTime? _challengeStartTime;
   int _lastKnownBlinkCount = 0;
   int _captureProgress = 0;
-
-  // ignore: unused_field
   String? _errorMessage;
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // DYNAMIC THRESHOLD — adjusts threshold based on score consistency
-  // If scores are very consistent (low variance), we can use a slightly
-  // lower threshold since the quality is good.
-  // ─────────────────────────────────────────────────────────────────────────
-  double _calculateDynamicThreshold(List<double> scores) {
-    if (scores.isEmpty) return 0.75;
-
-    // Calculate mean
-    double mean = scores.reduce((a, b) => a + b) / scores.length;
-
-    // Calculate variance (how spread out the scores are)
-    double variance =
-        scores.map((s) => (s - mean) * (s - mean)).reduce((a, b) => a + b) /
-        scores.length;
-
-    // Low variance means scores are very consistent (good quality)
-    // High variance means scores are jumping around (poor quality)
-    if (variance < 0.01) {
-      return 0.75; // Consistent scores = good lighting/pose
-    } else if (variance < 0.05) {
-      return 0.75; // Moderately consistent
-    } else {
-      return 0.75; // Default threshold for inconsistent scores
-    }
-  }
-
-  // ─── Face positioning state ─────────────────────────────────────────────
   DateTime? _steadyStartTime;
   bool _isFaceReady = false;
   Timer? _instructionDebounceTimer;
-
-  // ── Flash effect ──
   bool _showFlash = false;
 
-  // Layout info captured from LayoutBuilder
   double _uiCircleSize = 0;
   double _uiAvailW = 0;
   double _uiAvailH = 0;
 
-  // ─── Smoothing buffer ─────────────────────────────────────────────────
   static const int _smoothingBufferSize = 5;
   final List<double> _bufFaceWidth = [];
   final List<double> _bufFaceHeight = [];
@@ -175,94 +143,60 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   final List<double> _bufYaw = [];
   final List<double> _bufPitch = [];
 
-  // ─── Hysteresis state ─────────────────────────────────────────────────
   String? _lastPosInstruction;
 
-  // ─── Instruction strings ──────────────────────────────────────────────
   final Map<String, String> _subtitles = {
     "Setting up camera…": "Please wait",
     "Fit your face in the circle": "Make sure your full face is visible",
-    "Move closer to the camera":
-        "Step a little closer so your face fills the circle",
+    "Move closer to the camera": "Step a little closer so your face fills the circle",
     "Move slightly backward": "You are too close, step back a little",
     "Move to the center of the circle": "Center your face in the circle",
     "Hold still…": "Almost ready, stay steady",
     "Calibrating…": "Look straight at the camera and hold still",
     "Blink to verify": "Blink naturally to confirm you are present",
     "Blink 2-3 times": "Blink naturally 2 to 3 times",
-    "Capturing 1/5": "Hold still, scanning your face",
-    "Capturing 2/5": "Hold still, scanning your face",
-    "Capturing 3/5": "Hold still, scanning your face",
-    "Capturing 4/5": "Hold still, scanning your face",
-    "Capturing 5/5": "Almost done",
-    "Processing…": "Comparing your face",
-    "Verified!": "Face matched successfully",
-    "Verification Failed": "Face did not match",
+    "Capturing 1/8": "Hold still, scanning your face",
+    "Capturing 2/8": "Hold still, scanning your face",
+    "Capturing 3/8": "Hold still, scanning your face",
+    "Capturing 4/8": "Hold still, scanning your face",
+    "Capturing 5/8": "Hold still, scanning your face",
+    "Capturing 6/8": "Hold still, scanning your face",
+    "Capturing 7/8": "Hold still, scanning your face",
+    "Capturing 8/8": "Almost done",
+    "Processing…": "Computing your face profile",
+    "Calibration Complete": "Your face profile has been personalised",
+    "Calibration Failed": "Please retry with better lighting",
     "Something went wrong": "Please try again",
   };
 
   @override
   void initState() {
     super.initState();
+    _clearSmoothing();
+    _livenessService.reset();
+    _challengeVerified = false;
+    _steadyStartTime = null;
+    _isFaceReady = false;
+    _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat(reverse: true);
+    _textFadeController = AnimationController(vsync: this, duration: const Duration(milliseconds: 250))..forward();
+    _blinkCountdownController = AnimationController(vsync: this, duration: const Duration(seconds: 3));
+    _successBounceController = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _particleController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000));
+    _scanLineController = AnimationController(vsync: this, duration: const Duration(milliseconds: 2000))..repeat(reverse: true);
 
-    // ── Animation setup ────────────────────────────────────────────────────
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat(reverse: true);
-
-    _textFadeController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 250),
-    )..forward();
-
-    _blinkCountdownController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 3),
-    );
-
-    _successBounceController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 600),
-    );
-
-    _particleController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1000),
-    );
-
-    _scanLineController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2000),
-    )..repeat(reverse: true);
-
-    // Timer pulse every second
-    _timerPulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 400),
-    );
+    _timerPulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
     _timerPulseAnim = Tween<double>(begin: 1.0, end: 1.05).animate(
       CurvedAnimation(parent: _timerPulseController, curve: Curves.easeInOut),
     );
 
-    // Ring countdown (smooth depletion over 60s)
-    _ringController = AnimationController(
-      vsync: this,
-      duration: Duration(seconds: _totalSeconds),
-    );
-    _ringProgress = Tween<double>(
-      begin: 1.0,
-      end: 0.0,
-    ).animate(CurvedAnimation(parent: _ringController, curve: Curves.linear));
+    _ringController = AnimationController(vsync: this, duration: const Duration(seconds: _totalSeconds));
+    _ringProgress = Tween<double>(begin: 1.0, end: 0.0).animate(CurvedAnimation(parent: _ringController, curve: Curves.linear));
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _initializeCamera();
     });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // CAMERA INITIALIZATION
-  // ─────────────────────────────────────────────────────────────────────────
   Future<void> _initializeCamera() async {
     try {
       _sessionId = FaceLandmarkService.newCalSessionId();
@@ -285,33 +219,21 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         sessionId: _sessionId,
         logPrefix: 'FACE_CAL',
       );
-      await _cameraStabilizer.stabilize();
+      await _cameraStabilizer!.stabilize();
 
-      // Set to device minimum zoom for widest field of view
       try {
         final minZoom = await _cameraController!.getMinZoomLevel();
         await _cameraController!.setZoomLevel(minZoom);
-      } catch (_) {
-        // Zoom not supported on this device — continue anyway
-      }
+      } catch (_) {}
 
       if (!mounted) return;
       setState(() {
         _cameraInitialized = true;
       });
 
-      // Initialize ML services
       await _landmarkService.initialize();
-
-      // Load stored embeddings
       await _loadEmbeddings();
-      if (_embeddingA == null || _embeddingB == null || _embeddingC == null) {
-        return; // error already set
-      }
-
-      // Start camera stream for face detection
       await _cameraController!.startImageStream(_onCameraFrame);
-
       _setPhase(_Phase.positioning);
 
       if (mounted) setState(() => _cameraPreviewReady = true);
@@ -323,16 +245,16 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // LOAD EMBEDDINGS — cache-first from SharedPreferences, fallback Supabase
-  // ─────────────────────────────────────────────────────────────────────────
   Future<void> _loadEmbeddings() async {
-    debugPrint('[FACE_CAL] Loading embeddings and personal threshold from Supabase for calibration');
+    if (_embeddingsLoaded) {
+      debugPrint('[FACE_CAL] Embedding templates already loaded in memory for this screen instance');
+      return;
+    }
+    debugPrint('[FACE_CAL] Loading templates and personal threshold from Supabase');
     try {
       final user = Supabase.instance.client.auth.currentUser;
-
       if (user == null) {
-        _setError('Could not load face profile. Please try again.');
+        _setError('Session expired. Please log in again.');
         return;
       }
 
@@ -342,52 +264,45 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
           .eq('id', user.id)
           .maybeSingle();
 
-      if (data == null ||
-          data['embedding_a'] == null ||
-          data['embedding_b'] == null ||
-          data['embedding_c'] == null) {
-        _setError('Could not load face profile. Please try again.');
+      if (data == null) {
+        _setError('Could not load face profile. Please register your face first.');
         return;
       }
 
-      _embeddingA = (data['embedding_a'] as List)
-          .map((e) => (e as num).toDouble())
-          .toList();
-      _embeddingB = (data['embedding_b'] as List)
-          .map((e) => (e as num).toDouble())
-          .toList();
-      _embeddingC = (data['embedding_c'] as List)
-          .map((e) => (e as num).toDouble())
-          .toList();
+      if (data['embedding_a'] != null) {
+        _embeddingA = (data['embedding_a'] as List).map((e) => (e as num).toDouble()).toList();
+      }
+      if (data['embedding_b'] != null) {
+        _embeddingB = (data['embedding_b'] as List).map((e) => (e as num).toDouble()).toList();
+      }
+      if (data['embedding_c'] != null) {
+        _embeddingC = (data['embedding_c'] as List).map((e) => (e as num).toDouble()).toList();
+      }
       if (data['face_embedding'] != null) {
-        _masterEmbedding = (data['face_embedding'] as List)
-            .map((e) => (e as num).toDouble())
-            .toList();
+        _masterEmbedding = (data['face_embedding'] as List).map((e) => (e as num).toDouble()).toList();
       }
       
       _verificationThreshold = (data['verification_threshold'] as num?)?.toDouble() ?? 0.75;
-      debugPrint('[FACE_CAL] Personal threshold loaded: $_verificationThreshold');
-      debugPrint('[FACE_CAL] Master embedding loaded: ${_masterEmbedding != null}');
-
+      _embeddingsLoaded = true;
+      debugPrint('[FACE_CAL] Initial threshold loaded: $_verificationThreshold');
     } catch (e) {
       _setError('Could not load face profile. Please try again.');
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // CAMERA FRAME PROCESSING — rate-limited to 10fps
-  // ─────────────────────────────────────────────────────────────────────────
   Future<void> _onCameraFrame(CameraImage cameraImage) async {
-    if (!_cameraStabilizer.isStable) return;
+    if (mounted && _cameraFrozen) {
+      setState(() {
+        _cameraFrozen = false;
+      });
+    }
+    if (_cameraStabilizer == null || !_cameraStabilizer!.isStable) return;
     _lastCameraImage = cameraImage;
 
     final now = DateTime.now();
-    final bool isBlinkPhase =
-        _phase == _Phase.liveness && !_challengeVerified && _isFaceReady;
+    final bool isBlinkPhase = _phase == _Phase.liveness && !_challengeVerified && _isFaceReady;
     if (!isBlinkPhase) {
-      final int limit = (_phase == _Phase.liveness && !_challengeVerified)
-          ? 33
-          : 100;
+      final int limit = (_phase == _Phase.liveness && !_challengeVerified) ? 33 : 100;
       if (now.difference(_lastFrameTime).inMilliseconds < limit) return;
     }
     if (_isProcessingFrame) return;
@@ -410,18 +325,14 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         return;
       }
 
-      final List<Face> faces = await _mlService.faceDetector.processImage(
-        inputImage,
-      );
-
+      final List<Face> faces = await _mlService.faceDetector.processImage(inputImage);
       if (!mounted) {
         _isProcessingFrame = false;
         return;
       }
 
       if (faces.isEmpty) {
-        if ((_phase == _Phase.positioning || _phase == _Phase.liveness) &&
-            !_challengeVerified) {
+        if ((_phase == _Phase.positioning || _phase == _Phase.liveness) && !_challengeVerified) {
           _clearSmoothing();
           _steadyStartTime = null;
           if (_isFaceReady) {
@@ -444,23 +355,16 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         return;
       }
 
-      // Same-face tracking continuity
       if (_lastProcessedFace != null) {
         bool isSame = false;
         if (face.trackingId != null && _lastProcessedFace!.trackingId != null) {
           isSame = face.trackingId == _lastProcessedFace!.trackingId;
-          if (!isSame) {
-            debugPrint('[FACE_CAMERA] [FACE_CAL][$_sessionId] Face tracking ID changed: ${_lastProcessedFace!.trackingId} -> ${face.trackingId}');
-          }
         } else {
           final double iou = _calculateIoU(face.boundingBox, _lastProcessedFace!.boundingBox);
           isSame = iou >= 0.5;
-          if (!isSame) {
-            debugPrint('[FACE_CAMERA] [FACE_CAL][$_sessionId] Face tracking lost via IoU (IoU: ${iou.toStringAsFixed(2)})');
-          }
         }
         if (!isSame) {
-          debugPrint('[FACE_CAMERA] [FACE_CAL][$_sessionId] Face tracking lost — resetting captured frames and buffer');
+          debugPrint('[FACE_CAL] Face tracking lost — resetting captured frames and buffer');
           _clearSmoothing();
           _capturedVerificationFrames.clear();
           _capturedVerificationFramesStats.clear();
@@ -476,18 +380,11 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         }
       }
       _lastProcessedFace = face;
-
       _pushSmoothing(face);
 
-      // ── Positioning gate (positioning + liveness before blink verified) ──
-      if ((_phase == _Phase.positioning || _phase == _Phase.liveness) &&
-          !_challengeVerified) {
+      if ((_phase == _Phase.positioning || _phase == _Phase.liveness) && !_challengeVerified) {
         final bool strict = !_isFaceReady;
-        final String? posInstruction = _getPositioningInstruction(
-          face,
-          cameraImage,
-          strict: strict,
-        );
+        final String? posInstruction = _getPositioningInstruction(face, cameraImage, strict: strict);
 
         if (posInstruction != null) {
           if (_isFaceReady) {
@@ -503,45 +400,30 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
           return;
         }
 
-        // Face is centered — track steadiness
         _steadyStartTime ??= DateTime.now();
-        final int steadyMs = DateTime.now()
-            .difference(_steadyStartTime!)
-            .inMilliseconds;
+        final int steadyMs = DateTime.now().difference(_steadyStartTime!).inMilliseconds;
 
         if (!_isFaceReady) {
           if (steadyMs < 800) {
-            _updateInstruction(
-              'Hold still…',
-              subtitle: 'Almost ready, stay steady',
-              animate: false,
-            );
+            _updateInstruction('Hold still…', subtitle: 'Almost ready, stay steady', animate: false);
             _isProcessingFrame = false;
             return;
           }
           _isFaceReady = true;
           _livenessService.reset();
 
-          // If still in positioning, transition to liveness
           if (_phase == _Phase.positioning) {
             _setPhase(_Phase.liveness);
           }
-
-          _updateInstruction(
-            'Calibrating…',
-            subtitle: 'Look straight at the camera and hold still',
-            animate: false,
-          );
+          _updateInstruction('Calibrating…', subtitle: 'Look straight at the camera and hold still', animate: false);
         }
       }
 
-      // Route to correct phase handler
       switch (_phase) {
         case _Phase.liveness:
           if (!_challengeVerified) {
             await _handleLivenessChallenge(face, ChallengeType.blink);
           } else {
-            // Blink verified — transition to capturing
             await Future.delayed(const Duration(milliseconds: 500));
             if (mounted) _setPhase(_Phase.capturing);
           }
@@ -553,41 +435,24 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
           break;
       }
     } catch (e) {
-      // Swallow frame errors silently
+      // Swallow silently
     } finally {
       _isProcessingFrame = false;
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // LIVENESS CHALLENGE HANDLER
-  // ─────────────────────────────────────────────────────────────────────────
-  Future<void> _handleLivenessChallenge(
-    Face face,
-    ChallengeType challenge,
-  ) async {
+  Future<void> _handleLivenessChallenge(Face face, ChallengeType challenge) async {
     _challengeStartTime ??= DateTime.now();
-
-    final int elapsed = DateTime.now()
-        .difference(_challengeStartTime!)
-        .inMilliseconds;
-
+    final int elapsed = DateTime.now().difference(_challengeStartTime!).inMilliseconds;
     const int timeout = 3000;
 
     if (elapsed > timeout) {
       _livenessService.reset();
       _challengeStartTime = DateTime.now();
-
       if (challenge == ChallengeType.blink) {
         _blinkCountdownController.stop();
       }
-
-      _updateInstruction(
-        'No blink detected',
-        subtitle: 'Blink naturally 2 to 3 times to confirm presence',
-        animate: false,
-      );
-
+      _updateInstruction('No blink detected', subtitle: 'Blink naturally 2 to 3 times to confirm presence', animate: false);
       await Future.delayed(const Duration(milliseconds: 800));
       if (!mounted) return;
 
@@ -595,34 +460,21 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         _blinkCountdownController.reset();
         _blinkCountdownController.forward(from: 0.0);
       }
-      _updateInstruction(
-        _getChallengeInstruction(challenge),
-        subtitle: 'Blink naturally 2 to 3 times to confirm presence',
-        animate: false,
-      );
+      _updateInstruction(_getChallengeInstruction(challenge), subtitle: 'Blink naturally 2 to 3 times to confirm presence', animate: false);
       return;
     }
 
-    // Calibration before detecting
-    if (challenge == ChallengeType.blink &&
-        !_livenessService.isBlinkCalibrated) {
+    if (challenge == ChallengeType.blink && !_livenessService.isBlinkCalibrated) {
       final bool calibDone = _livenessService.calibrateBlink(face);
-      if (!calibDone) {
-        return;
-      }
+      if (!calibDone) return;
       _challengeStartTime = DateTime.now();
       _lastKnownBlinkCount = 0;
       _blinkCountdownController.reset();
       _blinkCountdownController.forward();
-      _updateInstruction(
-        'Blink 2-3 times',
-        subtitle: 'Blink naturally 2 to 3 times',
-        animate: false,
-      );
+      _updateInstruction('Blink 2-3 times', subtitle: 'Blink naturally 2 to 3 times', animate: false);
       return;
     }
 
-    // Try to detect the challenge
     bool detected = false;
     switch (challenge) {
       case ChallengeType.blink:
@@ -630,13 +482,9 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         final int currentBlinkCount = _livenessService.blinkCount;
         if (!detected && currentBlinkCount > _lastKnownBlinkCount) {
           _lastKnownBlinkCount = currentBlinkCount;
-          if (mounted) {
-            setState(() => _borderColor = AppStyles.successGreen);
-          }
+          if (mounted) setState(() => _borderColor = AppStyles.successGreen);
           await Future.delayed(const Duration(milliseconds: 250));
-          if (mounted && !_challengeVerified) {
-            setState(() => _borderColor = AppStyles.primaryBlue);
-          }
+          if (mounted && !_challengeVerified) setState(() => _borderColor = AppStyles.primaryBlue);
         }
         break;
       default:
@@ -649,43 +497,26 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       _livenessService.reset();
       _challengeStartTime = null;
       _blinkCountdownController.stop();
-
-      // Start capture timer
       _captureStopwatch.start();
 
       if (mounted) {
-        setState(() {
-          _borderColor = AppStyles.successGreen;
-        });
+        setState(() => _borderColor = AppStyles.successGreen);
         HapticFeedback.lightImpact();
       }
-      _updateInstruction(
-        'Blink verified!',
-        subtitle: 'Preparing capture…',
-        animate: false,
-      );
+      _updateInstruction('Blink verified!', subtitle: 'Preparing capture…', animate: false);
     }
   }
 
   String _getChallengeInstruction(ChallengeType challenge) {
-    switch (challenge) {
-      case ChallengeType.blink:
-        return 'Blink to verify';
-      default:
-        return 'Hold still…';
-    }
+    return challenge == ChallengeType.blink ? 'Blink to verify' : 'Hold still…';
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // CAPTURE HANDLER — front-only, 5 frames
-  // ─────────────────────────────────────────────────────────────────────────
   Future<void> _handleCapture(Face face, CameraImage cameraImage) async {
     if (_cameraFrozen) return;
 
     final now = DateTime.now();
     if (now.difference(_lastCaptureTime).inMilliseconds < _nextCaptureInterval) return;
 
-    // Check yaw for front pose (±15°)
     final double? yawRaw = face.headEulerAngleY;
     if (yawRaw == null) return;
     final double yaw = -yawRaw;
@@ -699,28 +530,24 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       return;
     }
 
-    // Stable frame selection check
-    if (!_cameraStabilizer.checkFrameStability(cameraImage)) {
+    if (_cameraStabilizer == null || !_cameraStabilizer!.checkFrameStability(cameraImage)) {
       _isProcessingFrame = false;
       return;
     }
 
-    // Grab frame
     final Uint8List? jpegBytes = await _captureCurrentFrame();
     if (jpegBytes == null) return;
 
-    _lastCapturedFrameBytes = jpegBytes; // Store for freeze preview
+    _lastCapturedFrameBytes = jpegBytes;
 
-    // Save first frame for preview screen
     if (_capturedVerificationFrames.isEmpty) {
       _lastCaptureJpegBytes = jpegBytes;
       _lastCaptureFace = face;
-      debugPrint('[FACE_CAL] Saved first capture frame and face bbox for preview');
+      debugPrint('[FACE_CAL] Saved first capture frame for preview');
     }
 
-    // Store JPEG bytes — batch all 8 frames, then send in one request.
     _capturedVerificationFrames.add(jpegBytes);
-    final stats = _cameraStabilizer.computeFrameStats(cameraImage);
+    final stats = _cameraStabilizer!.computeFrameStats(cameraImage);
     _capturedVerificationFramesStats.add(stats);
 
     setState(() {
@@ -735,55 +562,45 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       }
     });
 
-    debugPrint('[FACE_CAL] Frame ${_capturedVerificationFrames.length} captured (JPEG only, embedding deferred)');
-
     _lastCaptureTime = DateTime.now();
     _nextCaptureInterval = 250 + math.Random().nextInt(100);
 
-    // Check if the target valid count is reached in the current batch
     final int needed = _framesPerPhase - _validFrameCount;
     if (_capturedVerificationFrames.length >= needed) {
       _captureStopwatch.stop();
-
-      FaceLogger.cal(
-        _sessionId,
-        'Stopped | totalCaptured=${_capturedVerificationFrames.length} validCount=$_validFrameCount',
-      );
+      FaceLogger.cal(_sessionId, 'Stopped | totalCaptured=${_capturedVerificationFrames.length}');
       try {
         await _cameraController?.stopImageStream();
       } catch (_) {}
-
-      // Cancel countdown timer
       _countdownTimer?.cancel();
 
       setState(() {
         _cameraFrozen = true;
-        _isProcessingFrame = true; // Ignore future frames
+        _isProcessingFrame = true;
       });
 
       _setPhase(_Phase.processing);
       await Future.delayed(const Duration(milliseconds: 50));
-      await _processAndVerify();
+      await _processAndCalibrate();
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // PROCESS AND VERIFY
-  // ─────────────────────────────────────────────────────────────────────────
-  Future<void> _processAndVerify() async {
+  Future<void> _processAndCalibrate() async {
     if (!mounted) return;
     if (_isSubmitting) return;
 
     _totalStopwatch.start();
+    setState(() => _isSubmitting = true);
+    _updateInstruction('Calibrating Recognition', subtitle: 'Optimizing your face profile...');
 
-    setState(() {
-      _isSubmitting = true;
-    });
-
-    _updateInstruction('Processing…', subtitle: 'Comparing your face');
+    _calFramesCaptured = 0;
+    _calFramesAccepted = 0;
+    _calFramesRejected = 0;
+    _calDurationStopwatch.reset();
 
     try {
       _totalFramesCaptured += _capturedVerificationFrames.length;
+      _calFramesCaptured += _capturedVerificationFrames.length;
       FaceLogger.cal(_sessionId, 'Processing Started');
 
       _apiStopwatch.start();
@@ -800,23 +617,17 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       );
       _apiStopwatch.stop();
 
-      FaceLogger.cal(_sessionId, 'Processing Finished');
-
-      // Filter and count valid results
       for (final res in batchResults) {
         if (res.embedding != null && res.qualityPassed) {
           _validResults.add(res);
-          FaceLogger.cal(_sessionId, 'Frame Accepted | valid=${_validResults.length}/$_framesPerPhase');
+          _calFramesAccepted++;
         } else {
-          FaceLogger.cal(_sessionId, 'Frame Rejected | reason=${res.rejectionReason ?? "No face detected"}');
+          _calFramesRejected++;
         }
       }
 
       _validFrameCount = _validResults.length;
-      FaceLogger.cal(_sessionId, 'Valid Count: $_validFrameCount/$_framesPerPhase');
-
       if (_validFrameCount < _framesPerPhase) {
-        // Not enough valid frames! Clear current batch and continue capturing
         _capturedVerificationFrames.clear();
         _capturedVerificationFramesStats.clear();
 
@@ -827,34 +638,22 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
           _isSubmitting = false;
         });
 
-        // Resume capture timer
         _captureStopwatch.start();
-
         _setPhase(_Phase.capturing);
-
-        // Restart countdown timer
         _startCountdownTimer();
 
-        // Restart camera stream
         try {
           await _cameraController?.startImageStream(_onCameraFrame);
-        } catch (e) {
-          _setError('Camera could not start. Please try again.');
+        } catch (_) {
+          _setError('Camera could not resume. Please try again.');
           return;
         }
 
-        _updateInstruction(
-          'Need clearer frames',
-          subtitle: 'Please hold still in good lighting. Capturing ${_framesPerPhase - _validFrameCount} more...',
-        );
+        _updateInstruction('Need clearer frames', subtitle: 'Hold still in good lighting. Capturing ${_framesPerPhase - _validFrameCount} more...');
         return;
       }
 
-      // We have reached the target valid count!
-      // Rank accepted frames by quality score
       _validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
-
-      // Use the highest-quality frames only (top 8)
       final List<BatchEmbeddingResult> topResults = _validResults.sublist(0, _framesPerPhase);
 
       _liveEmbeddings.clear();
@@ -862,251 +661,195 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         _liveEmbeddings.add(res.embedding!);
       }
 
-      // Calculate dynamic threshold based on front scores
-      final List<double> frontScores = _liveEmbeddings
-          .map((e) => _landmarkService.cosineSimilarity(e, _embeddingA!))
-          .toList();
-      final double dynamicThreshold = _calculateDynamicThreshold(frontScores);
+      final List<List<double>> templates = [
+        _embeddingA,
+        _embeddingB,
+        _embeddingC,
+        _masterEmbedding,
+      ].whereType<List<double>>().toList();
 
-      _calibrationStopwatch.start();
-      final result = _landmarkService.verifyFace(
+      double simSum = 0.0;
+      int simCount = 0;
+      for (final live in _liveEmbeddings) {
+        for (final temp in templates) {
+          simSum += _landmarkService.cosineSimilarity(live, temp);
+          simCount++;
+        }
+      }
+      final double meanSim = simCount > 0 ? (simSum / simCount) : 0.0;
+      debugPrint('[FACE_CAL] Identity check mean similarity: $meanSim against $simCount templates');
+
+      if (simCount > 0 && meanSim < 0.75) {
+        throw Exception("Face does not match your registered profile. Please ensure you are the registered student.");
+      }
+
+      _calDurationStopwatch.start();
+      final ThresholdResult calResult = ThresholdCalculator.calculate(
         liveEmbeddings: _liveEmbeddings,
-        storedEmbeddingA: _embeddingA!,
-        storedEmbeddingB: _embeddingB!,
-        storedEmbeddingC: _embeddingC!,
+        embeddingA: _embeddingA,
+        embeddingB: _embeddingB,
+        embeddingC: _embeddingC,
         masterEmbedding: _masterEmbedding,
-        threshold: _verificationThreshold,
+        cosineSimilarity: _landmarkService.cosineSimilarity,
       );
+      _calDurationStopwatch.stop();
       _calibrationStopwatch.stop();
       _totalStopwatch.stop();
 
-      // Compute statistics for the session summary
-      final double avgQuality = topResults.isEmpty
-          ? 0.0
-          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => a + b) / topResults.length;
-
-      final double avgLocalBrightness = _capturedVerificationFramesStats.isEmpty
-          ? 0.0
-          : _capturedVerificationFramesStats.map((s) => s['brightness'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
-      final double avgLocalContrast = _capturedVerificationFramesStats.isEmpty
-          ? 0.0
-          : _capturedVerificationFramesStats.map((s) => s['contrast'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
-      final double avgLocalSharpness = _capturedVerificationFramesStats.isEmpty
-          ? 0.0
-          : _capturedVerificationFramesStats.map((s) => s['sharpness'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
+      // Populate metrics fields
+      _calGeneratedThreshold = calResult.threshold;
+      _calMeanSimilarity = calResult.meanSim;
+      _calSimilarityStdDev = calResult.stdDev;
 
       FaceLogger.separator(_sessionId, 'FACE_CAL');
       FaceLogger.cal(_sessionId, 'CALIBRATION SUMMARY');
-      FaceLogger.separator(_sessionId, 'FACE_CAL');
-      FaceLogger.cal(_sessionId, '  Frames Captured       : $_totalFramesCaptured');
-      FaceLogger.cal(_sessionId, '  Frames Accepted       : ${topResults.length}');
-      FaceLogger.cal(_sessionId, '  Avg Backend Quality   : ${avgQuality.toStringAsFixed(1)}');
-      FaceLogger.cal(_sessionId, '  Warm-up Time           : ${_cameraStabilizer.warmUpDurationMs}ms');
-      FaceLogger.cal(_sessionId, '  Focus Stabilize Time  : ${_cameraStabilizer.focusStabilizationDurationMs}ms');
-      FaceLogger.cal(_sessionId, '  Exposure Stabilize Time: ${_cameraStabilizer.exposureStabilizationDurationMs}ms');
-      FaceLogger.cal(_sessionId, '  Avg Local Brightness  : ${avgLocalBrightness.toStringAsFixed(1)}');
-      FaceLogger.cal(_sessionId, '  Avg Local Contrast    : ${avgLocalContrast.toStringAsFixed(1)}');
-      FaceLogger.cal(_sessionId, '  Avg Local Sharpness    : ${avgLocalSharpness.toStringAsFixed(1)}');
-      FaceLogger.cal(_sessionId, '  Capture Time          : ${_captureStopwatch.elapsedMilliseconds}ms');
-      FaceLogger.cal(_sessionId, '  Embedding API Time    : ${_apiStopwatch.elapsedMilliseconds}ms');
-      FaceLogger.cal(_sessionId, '  Calibration Time      : ${_calibrationStopwatch.elapsedMilliseconds}ms');
-      FaceLogger.cal(_sessionId, '  Total Time            : ${_totalStopwatch.elapsedMilliseconds}ms');
-      FaceLogger.cal(_sessionId, 'CALIBRATION COMPLETE');
+      FaceLogger.cal(_sessionId, '  Frames Captured       : $_totalFramesCaptured (Attempt Captured: $_calFramesCaptured)');
+      FaceLogger.cal(_sessionId, '  Frames Accepted       : ${topResults.length} (Attempt Accepted: $_calFramesAccepted)');
+      FaceLogger.cal(_sessionId, '  Frames Rejected       : $_calFramesRejected');
+      FaceLogger.cal(_sessionId, '  Mean Similarity       : ${_calMeanSimilarity.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  StdDev                : ${_calSimilarityStdDev.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Generated Threshold   : ${_calGeneratedThreshold.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  IsValid               : ${calResult.isValid}');
       FaceLogger.separator(_sessionId, 'FACE_CAL');
 
-      final double overallSimilarityA = topResults.isEmpty
-          ? 0.0
-          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingA!)).reduce((a, b) => a + b) / topResults.length;
-      final double overallSimilarityB = topResults.isEmpty
-          ? 0.0
-          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingB!)).reduce((a, b) => a + b) / topResults.length;
-      final double overallSimilarityC = topResults.isEmpty
-          ? 0.0
-          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingC!)).reduce((a, b) => a + b) / topResults.length;
-      final double overallSimilarityMaster = _masterEmbedding == null
-          ? 0.0
-          : (topResults.isEmpty
-              ? 0.0
-              : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _masterEmbedding!)).reduce((a, b) => a + b) / topResults.length);
+      // Refinement 3: Validation layer — check isValid, accepted frames, and similarity scores count
+      final int templateCount = [_embeddingA, _embeddingB, _embeddingC, _masterEmbedding]
+          .whereType<List<double>>()
+          .length;
+      final int totalScores = _liveEmbeddings.length * templateCount;
 
-      final double driftScore = _liveEmbeddings.isEmpty ? 0.0 : 1.0 - _landmarkService.cosineSimilarity(_liveEmbeddings.first, _liveEmbeddings.last);
-      final bool driftDetected = driftScore > 0.15;
+      if (!calResult.isValid || _calFramesAccepted < 6 || totalScores < 6) {
+        final String reason = !calResult.isValid
+            ? (calResult.failReason ?? 'Calibration could not compute a valid threshold.')
+            : 'Insufficient calibration data. Got $_calFramesAccepted accepted frames and $totalScores similarity scores, but need at least 6 of each.';
+        FaceLogger.cal(_sessionId, 'Threshold validation FAILED: $reason');
+        throw Exception(reason);
+      }
 
-      FaceLogger.cal(_sessionId, 'EMBEDDING DRIFT DIAGNOSTICS');
-      FaceLogger.separator(_sessionId, 'FACE_CAL');
-      FaceLogger.cal(_sessionId, '  Similarity to Template A : ${overallSimilarityA.toStringAsFixed(4)}');
-      FaceLogger.cal(_sessionId, '  Similarity to Template B : ${overallSimilarityB.toStringAsFixed(4)}');
-      FaceLogger.cal(_sessionId, '  Similarity to Template C : ${overallSimilarityC.toStringAsFixed(4)}');
-      FaceLogger.cal(_sessionId, '  Similarity to Master     : ${overallSimilarityMaster.toStringAsFixed(4)}');
-      FaceLogger.cal(_sessionId, '  Embedding Variance       : ${_landmarkService.lastEmbeddingVariance.toStringAsFixed(6)}');
-      FaceLogger.cal(_sessionId, '  Avg Intra-frame Sim      : ${_landmarkService.lastAverageSimilarity.toStringAsFixed(4)}');
-      FaceLogger.cal(_sessionId, '  Drift Score              : ${driftScore.toStringAsFixed(4)}');
-      FaceLogger.cal(_sessionId, '  Drift Detected           : ${driftDetected ? "YES" : "NO"}');
-      FaceLogger.separator(_sessionId, 'FACE_CAL');
+      // Persist threshold before navigation
+      if (!mounted) return;
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        throw Exception('Session expired. Please log in again.');
+      }
 
-      final double effectiveThreshold = math.max(_verificationThreshold, 0.65);
-      final double similarityMargin = result.score - _verificationThreshold;
-      final double decisionMargin = result.score - effectiveThreshold;
-
-      FaceLogger.cal(_sessionId, 'ADAPTIVE THRESHOLD DIAGNOSTICS');
-      FaceLogger.separator(_sessionId, 'FACE_CAL');
-      FaceLogger.cal(_sessionId, '  Personal Threshold    : ${_verificationThreshold.toStringAsFixed(4)}');
-      FaceLogger.cal(_sessionId, '  Current Threshold     : ${effectiveThreshold.toStringAsFixed(4)}');
-      FaceLogger.cal(_sessionId, '  Adaptive Threshold    : ${dynamicThreshold.toStringAsFixed(4)}');
-      FaceLogger.cal(_sessionId, '  Similarity Margin     : ${similarityMargin.toStringAsFixed(4)}');
-      FaceLogger.cal(_sessionId, '  Decision Margin       : ${decisionMargin.toStringAsFixed(4)}');
-      FaceLogger.separator(_sessionId, 'FACE_CAL');
-
-      FaceLogger.cal(
-        _sessionId,
-        'Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | DynThreshold: ${dynamicThreshold.toStringAsFixed(4)}',
+      final bool saved = await CalibrationService.saveThreshold(
+        userId: user.id,
+        threshold: _calGeneratedThreshold,
       );
-      FaceLogger.cal(_sessionId, 'Running calibration verification with threshold: $_verificationThreshold');
+      if (!mounted) return;
 
-      if (result.isMatch) {
-        // ── Update master embedding with calibration data ──
-        try {
-          final calibrationEmbedding = _landmarkService.averageEmbeddings(_liveEmbeddings);
-          List<double> updatedMaster;
-          if (_masterEmbedding != null && _masterEmbedding!.isNotEmpty) {
-            updatedMaster = _landmarkService.averageEmbeddings([
-              _masterEmbedding!,
-              calibrationEmbedding,
-            ]);
-          } else {
-            updatedMaster = calibrationEmbedding;
-          }
-          updatedMaster = _landmarkService.l2Normalize(updatedMaster);
+      if (!saved) {
+        throw Exception('Could not save calibration. Please check your connection and retry.');
+      }
 
-          final user = Supabase.instance.client.auth.currentUser;
-          if (user != null) {
-            await Supabase.instance.client
-                .from('students')
-                .update({'face_embedding': updatedMaster})
-                .eq('id', user.id);
-            FaceLogger.cal(_sessionId, 'Master embedding updated after calibration success');
-          }
-        } catch (e) {
-          FaceLogger.cal(_sessionId, 'Master update after calibration failed: $e');
-        }
+      setState(() => _borderColor = AppStyles.successGreen);
+      setState(() => _showFlash = true);
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) setState(() => _showFlash = false);
+      });
 
-        // ── Success ──
-        setState(() => _borderColor = AppStyles.successGreen);
+      _particleController.forward(from: 0.0);
+      _setPhase(_Phase.done);
+      _updateInstruction('Calibration Complete', subtitle: 'Your face profile has been personalised');
 
-        setState(() => _showFlash = true);
-        Future.delayed(const Duration(milliseconds: 100), () {
-          if (mounted) setState(() => _showFlash = false);
+      FaceLogger.cal(_sessionId, 'Calibration complete — threshold: ${_calGeneratedThreshold.toStringAsFixed(4)}, mean: ${_calMeanSimilarity.toStringAsFixed(4)}, stdDev: ${_calSimilarityStdDev.toStringAsFixed(4)}');
+
+      await Future.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
+      _countdownTimer?.cancel();
+      Navigator.of(context).pushReplacementNamed(
+        '/face_calibration_preview',
+        arguments: {
+          'score': _calMeanSimilarity,
+          'liveEmbeddings': _liveEmbeddings,
+          'photoBytes': _lastCaptureJpegBytes,
+          'faceBbox': _lastCaptureFace?.boundingBox,
+          'generatedThreshold': _calGeneratedThreshold,
+          'meanSimilarity': _calMeanSimilarity,
+          'stdDev': _calSimilarityStdDev,
+          'framesAccepted': _calFramesAccepted,
+          'framesRejected': _calFramesRejected,
+          'durationMs': _calDurationStopwatch.elapsedMilliseconds,
+        },
+      );
+    } catch (e) {
+      // Failure path — retry counter logic
+      if (_attemptCount < 2) {
+        setState(() {
+          _instructionTitle = 'Attempt $_attemptCount Failed';
+          _instructionSubtitle = 'Retrying calibration…';
+          _borderColor = AppStyles.errorRed;
+        });
+        _attemptCount++;
+        FaceLogger.cal(_sessionId, 'Retry triggered — attempt $_attemptCount. Error: $e');
+        await Future.delayed(const Duration(milliseconds: 1200));
+        if (!mounted) return;
+
+        _resetCaptureState(resetAttemptCount: false, keepFrozen: true);
+        setState(() {
+          _phase = _Phase.positioning;
+          _borderColor = AppStyles.primaryBlue;
+          _errorMessage = null;
+          _secondsRemaining = _totalSeconds;
+          _instructionTitle = 'Fit your face in the circle';
+          _instructionSubtitle = 'Make sure your full face is visible';
         });
 
-        _particleController.forward(from: 0.0);
+        _cameraStabilizer?.resetStabilityOnly();
 
-        _setPhase(_Phase.done);
-        _updateInstruction('Verified!', subtitle: 'Face matched successfully');
+        await _safeRestartImageStream();
 
-        FaceLogger.cal(_sessionId, 'Calibration verification passed — score: ${result.score.toStringAsFixed(4)} — navigating to preview');
-        await Future.delayed(const Duration(milliseconds: 600));
-        if (!mounted) return;
-        _countdownTimer?.cancel();
-        Navigator.of(context).pushReplacementNamed(
-          '/face_calibration_preview',
-          arguments: {
-            'score': result.score,
-            'liveEmbeddings': _liveEmbeddings,
-            'photoBytes': _lastCaptureJpegBytes,
-            'faceBbox': _lastCaptureFace?.boundingBox,
-          },
-        );
+        _startCountdownTimer();
       } else {
-        // ── Failure ──
-        setState(() => _borderColor = AppStyles.errorRed);
-        _updateInstruction(
-          'Verification Failed',
-          subtitle: 'Face did not match',
-        );
-
-        bool hasSeverePoseWarning = topResults.any((r) => r.yaw.abs() > 20.0 || r.pitch.abs() > 15.0);
-        bool meetsRetryConditions = result.score >= (_verificationThreshold - 0.03) &&
-            result.score < _verificationThreshold &&
-            avgQuality >= 65.0 &&
-            !hasSeverePoseWarning;
-
-        if (_attemptCount < 2 && meetsRetryConditions) {
-          FaceLogger.cal(_sessionId, 'Retry conditions met: score=${result.score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, pose=OK. Triggering retry.');
-          await Future.delayed(const Duration(milliseconds: 1200));
-          if (!mounted) return;
-
-          _attemptCount++;
-          _liveEmbeddings.clear();
-          _capturedVerificationFrames.clear();
-          _capturedVerificationFramesStats.clear();
-          _validResults.clear();
-          _validFrameCount = 0;
-          _cameraFrozen = false;
-          _lastCapturedFrameBytes = null;
-          _isSubmitting = false;
-          _livenessService.resetCalibration();
-          _clearSmoothing();
-          _challengeVerified = false;
-          _captureProgress = 0;
-          _challengeStartTime = null;
-          _blinkCountdownController.reset();
-          _steadyStartTime = null;
-          _isFaceReady = false;
-          _lastKnownBlinkCount = 0;
-
-          // Reset stopwatches for next attempt
-          _captureStopwatch.reset();
-          _apiStopwatch.reset();
-          _calibrationStopwatch.reset();
-          _totalStopwatch.reset();
-          _totalFramesCaptured = 0;
-
-          setState(() => _borderColor = AppStyles.primaryBlue);
-
-          // Restart camera stream
-          try {
-            await _cameraController!.startImageStream(_onCameraFrame);
-          } catch (_) {}
-
-          _setPhase(_Phase.positioning);
-          _startCountdownTimer();
-        } else {
-          // 2 attempts exhausted
-          if (!meetsRetryConditions) {
-            FaceLogger.cal(_sessionId, 'Retry conditions not met: score=${result.score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, poseWarning=$hasSeverePoseWarning. Rejecting verification.');
-          } else {
-            FaceLogger.cal(_sessionId, '2 attempts exhausted — restarting calibration verification');
-          }
-          await Future.delayed(const Duration(milliseconds: 600));
-          if (mounted) {
-            Navigator.of(context).pushReplacementNamed('/face_calibration_verify');
-          }
-        }
+        FaceLogger.cal(_sessionId, '2 attempts exhausted — showing error card. Error: $e');
+        _setError('Face calibration failed. Please ensure good lighting and look directly at the camera.');
       }
-    } catch (e) {
-      _setError('Verification failed: ${e.toString()}');
     } finally {
       if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-        });
+        setState(() => _isSubmitting = false);
       }
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // HELPERS — copied exactly from registration
-  // ─────────────────────────────────────────────────────────────────────────
-
-  int _consecutiveImageErrors = 0;
+  void _resetCaptureState({required bool resetAttemptCount, bool keepFrozen = false}) {
+    _livenessService.resetCalibration();
+    _liveEmbeddings.clear();
+    _capturedVerificationFrames.clear();
+    _capturedVerificationFramesStats.clear();
+    _validResults.clear();
+    _validFrameCount = 0;
+    _isProcessingFrame = false;
+    if (!keepFrozen) {
+      _cameraFrozen = false;
+      _lastCapturedFrameBytes = null;
+    }
+    _isSubmitting = false;
+    _captureProgress = 0;
+    _challengeVerified = false;
+    _challengeStartTime = null;
+    _blinkCountdownController.reset();
+    _steadyStartTime = null;
+    _isFaceReady = false;
+    _lastKnownBlinkCount = 0;
+    _clearSmoothing();
+    _captureStopwatch.reset();
+    _apiStopwatch.reset();
+    _calibrationStopwatch.reset();
+    _totalStopwatch.reset();
+    _calDurationStopwatch.reset();
+    _totalFramesCaptured = 0;
+    _calFramesCaptured = 0;
+    _calFramesAccepted = 0;
+    _calFramesRejected = 0;
+    if (resetAttemptCount) _attemptCount = 1;
+  }
 
   InputImage? _convertToInputImage(CameraImage image) {
     try {
       final camera = _cameraController!.description;
       final int sensorDegrees = camera.sensorOrientation;
-      final InputImageRotation? rotation = InputImageRotationValue.fromRawValue(
-        sensorDegrees,
-      );
+      final InputImageRotation? rotation = InputImageRotationValue.fromRawValue(sensorDegrees);
       if (rotation == null) return null;
 
       final format = InputImageFormatValue.fromRawValue(image.format.raw);
@@ -1145,14 +888,12 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
             nv21[pos++] = uPlane.bytes[pixelOffset];
           }
         }
-
         bytes = nv21;
       } else {
         bytes = image.planes[0].bytes;
       }
 
       _consecutiveImageErrors = 0;
-
       return InputImage.fromBytes(
         bytes: bytes,
         metadata: InputImageMetadata(
@@ -1173,24 +914,16 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
 
   Face? _selectBiggestCenteredFace(List<Face> faces, CameraImage image) {
     if (faces.isEmpty) return null;
-
-    final sorted = List<Face>.from(faces)
-      ..sort((a, b) {
-        final double areaA = a.boundingBox.width * a.boundingBox.height;
-        final double areaB = b.boundingBox.width * b.boundingBox.height;
-        return areaB.compareTo(areaA);
-      });
-
+    final sorted = List<Face>.from(faces)..sort((a, b) {
+      final double areaA = a.boundingBox.width * a.boundingBox.height;
+      final double areaB = b.boundingBox.width * b.boundingBox.height;
+      return areaB.compareTo(areaA);
+    });
     final Face biggest = sorted.first;
-
-    final double centerX =
-        biggest.boundingBox.left + biggest.boundingBox.width / 2;
+    final double centerX = biggest.boundingBox.left + biggest.boundingBox.width / 2;
     final double imageCenterX = image.width / 2.0;
     final double offsetX = (centerX - imageCenterX).abs() / image.width;
-
-    if (offsetX > 0.30) return null;
-
-    return biggest;
+    return offsetX > 0.30 ? null : biggest;
   }
 
   double _calculateIoU(Rect rect1, Rect rect2) {
@@ -1207,11 +940,9 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     final double rect2Area = rect2.width * rect2.height;
     final double unionArea = rect1Area + rect2Area - intersectionArea;
 
-    if (unionArea <= 0.0) return 0.0;
-    return intersectionArea / unionArea;
+    return unionArea <= 0.0 ? 0.0 : intersectionArea / unionArea;
   }
 
-  // ─── Face positioning — smoothed centering + distance + hysteresis ────
   void _pushSmoothing(Face face) {
     _bufFaceWidth.add(face.boundingBox.width);
     _bufFaceHeight.add(face.boundingBox.height);
@@ -1230,8 +961,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   }
 
   double _bufAvg(List<double> buf) {
-    if (buf.isEmpty) return 0;
-    return buf.reduce((a, b) => a + b) / buf.length;
+    return buf.isEmpty ? 0 : buf.reduce((a, b) => a + b) / buf.length;
   }
 
   void _clearSmoothing() {
@@ -1244,29 +974,19 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     _lastPosInstruction = null;
   }
 
-  String? _getPositioningInstruction(
-    Face face,
-    CameraImage image, {
-    bool strict = true,
-  }) {
+  String? _getPositioningInstruction(Face face, CameraImage image, {bool strict = true}) {
     if (_uiCircleSize == 0 || _uiAvailW == 0) return null;
 
-    final int sensorOrientation =
-        _cameraController!.description.sensorOrientation;
+    final int sensorOrientation = _cameraController!.description.sensorOrientation;
     final bool isRotated = sensorOrientation == 90 || sensorOrientation == 270;
-    final double rotW = isRotated
-        ? image.height.toDouble()
-        : image.width.toDouble();
-    final double rotH = isRotated
-        ? image.width.toDouble()
-        : image.height.toDouble();
+    final double rotW = isRotated ? image.height.toDouble() : image.width.toDouble();
+    final double rotH = isRotated ? image.width.toDouble() : image.height.toDouble();
 
     final double scale = _uiAvailW / rotW;
-
     final double circleCameraCX = rotW / 2;
-    final double circleTop = _uiAvailH * 0.40 - _uiCircleSize / 2;
+    double circleTop = _uiAvailH * 0.36 - _uiCircleSize / 2 - 40;
+    circleTop = math.max(circleTop, 24.0);
     final double circleCameraCY = rotH / 2 + circleTop / scale;
-
     final double circleCameraSize = _uiCircleSize / scale;
 
     final double smoothW = _bufAvg(_bufFaceWidth);
@@ -1280,8 +1000,6 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     final double smoothBottom = smoothCY + smoothH / 2;
 
     final double circleRadius = circleCameraSize / 2;
-
-    // Virtual crown (hairline) — extend upward by 30%
     final double virtualCrownTop = smoothTop - (smoothH * 0.30);
 
     final double circleTopBound = circleCameraCY - circleRadius;
@@ -1289,20 +1007,11 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     final double circleLeftBound = circleCameraCX - circleRadius;
     final double circleRightBound = circleCameraCX + circleRadius;
 
-    if (virtualCrownTop < circleTopBound) {
-      _lastPosInstruction = 'Move slightly backward';
-      return 'Move slightly backward';
-    }
-    if (smoothBottom > circleBottomBound) {
-      _lastPosInstruction = 'Move slightly backward';
-      return 'Move slightly backward';
-    }
-    if (smoothLeft < circleLeftBound || smoothRight > circleRightBound) {
+    if (virtualCrownTop < circleTopBound || smoothBottom > circleBottomBound || smoothLeft < circleLeftBound || smoothRight > circleRightBound) {
       _lastPosInstruction = 'Move slightly backward';
       return 'Move slightly backward';
     }
 
-    // Distance check with hysteresis
     final double faceWidthRatio = smoothW / circleCameraSize;
     final bool wasTooFar = _lastPosInstruction == 'Move closer to the camera';
     final bool wasTooClose = _lastPosInstruction == 'Move slightly backward';
@@ -1313,13 +1022,11 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     }
 
     final double backwardEnter = (_lastPosInstruction == null) ? 0.95 : 0.80;
-    if (faceWidthRatio > backwardEnter ||
-        (wasTooClose && faceWidthRatio > 0.75)) {
+    if (faceWidthRatio > backwardEnter || (wasTooClose && faceWidthRatio > 0.75)) {
       _lastPosInstruction = 'Move slightly backward';
       return 'Move slightly backward';
     }
 
-    // Relaxed centering — 20/25% grace zone
     final double graceZoneX = circleRadius * 0.20;
     final double graceZoneY = circleRadius * 0.25;
 
@@ -1335,27 +1042,21 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       return 'Move to the center of the circle';
     }
 
-    // All checks passed
     _lastPosInstruction = null;
     return null;
   }
 
   bool _isFaceAcceptable(Face face, CameraImage image) {
     if (_uiCircleSize > 0 && _uiAvailW > 0 && _bufFaceWidth.isNotEmpty) {
-      final int sensorOrientation =
-          _cameraController!.description.sensorOrientation;
-      final bool isRotated =
-          sensorOrientation == 90 || sensorOrientation == 270;
-      final double rotW = isRotated
-          ? image.height.toDouble()
-          : image.width.toDouble();
-      final double rotH = isRotated
-          ? image.width.toDouble()
-          : image.height.toDouble();
+      final int sensorOrientation = _cameraController!.description.sensorOrientation;
+      final bool isRotated = sensorOrientation == 90 || sensorOrientation == 270;
+      final double rotW = isRotated ? image.height.toDouble() : image.width.toDouble();
+      final double rotH = isRotated ? image.width.toDouble() : image.height.toDouble();
       final double scale = _uiAvailW / rotW;
 
       final double circleCameraCX = rotW / 2;
-      final double circleTopUI = _uiAvailH * 0.40 - _uiCircleSize / 2;
+      double circleTopUI = _uiAvailH * 0.36 - _uiCircleSize / 2 - 40;
+      circleTopUI = math.max(circleTopUI, 24.0);
       final double circleCameraCY = rotH / 2 + circleTopUI / scale;
       final double circleCameraSize = _uiCircleSize / scale;
       final double circleRadius = circleCameraSize / 2;
@@ -1373,13 +1074,9 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       final double smoothBottom = smoothCY + smoothH / 2;
       final double smoothLeft = smoothCX - smoothW / 2;
       final double smoothRight = smoothCX + smoothW / 2;
-
       final double virtualCrownTop = smoothTop - (smoothH * 0.30);
 
-      if (virtualCrownTop < circleTopBound ||
-          smoothBottom > circleBottomBound ||
-          smoothLeft < circleLeftBound ||
-          smoothRight > circleRightBound) {
+      if (virtualCrownTop < circleTopBound || smoothBottom > circleBottomBound || smoothLeft < circleLeftBound || smoothRight > circleRightBound) {
         return false;
       }
     }
@@ -1394,22 +1091,18 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
 
     final double? pitch = face.headEulerAngleX;
     if (pitch != null && pitch.abs() > 35) return false;
-
     return true;
   }
 
-  // Capture current camera frame as JPEG bytes
   Future<Uint8List?> _captureCurrentFrame() async {
     try {
       if (_lastCameraImage == null) return null;
       final camImg = _lastCameraImage!;
-
       if (camImg.format.group == ImageFormatGroup.jpeg) {
         return Uint8List.fromList(camImg.planes[0].bytes);
       }
-
       return _convertYuvToJpegSync(camImg);
-    } catch (e) {
+    } catch (_) {
       return null;
     }
   }
@@ -1439,31 +1132,23 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
           final int vVal = vPlane.bytes[uvIndex];
 
           final int r = (yVal + 1.402 * (vVal - 128)).round().clamp(0, 255);
-          final int g =
-              (yVal - 0.344136 * (uVal - 128) - 0.714136 * (vVal - 128))
-                  .round()
-                  .clamp(0, 255);
+          final int g = (yVal - 0.344136 * (uVal - 128) - 0.714136 * (vVal - 128)).round().clamp(0, 255);
           final int b = (yVal + 1.772 * (uVal - 128)).round().clamp(0, 255);
 
           image.setPixelRgb(x, y, r, g, b);
         }
       }
-
       return Uint8List.fromList(img.encodeJpg(image, quality: 80));
-    } catch (e) {
+    } catch (_) {
       return null;
     }
   }
 
-  // ─── UI state updates ───────────────────────────────────────────────────
-
   void _setPhase(_Phase newPhase) {
     if (!mounted) return;
-    if (_phase == newPhase) return;
+    if (newPhase == _phase || _phase == _Phase.error) return;
 
-    if (newPhase != _Phase.error &&
-        newPhase != _Phase.positioning &&
-        newPhase != _Phase.liveness) {
+    if (newPhase != _Phase.error && newPhase != _Phase.positioning && newPhase != _Phase.liveness) {
       HapticFeedback.mediumImpact();
       _successBounceController.forward(from: 0.0);
     }
@@ -1475,61 +1160,42 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       _phase = newPhase;
     });
 
-    if (newPhase == _Phase.positioning || newPhase == _Phase.liveness) {
-      if (newPhase == _Phase.positioning) {
-        _challengeVerified = false;
-        _challengeStartTime = null;
-        _livenessService.reset();
-        _steadyStartTime = null;
-        _isFaceReady = false;
-        _clearSmoothing();
-      }
+    if (newPhase == _Phase.positioning) {
+      _challengeVerified = false;
+      _challengeStartTime = null;
+      _livenessService.reset();
+      _steadyStartTime = null;
+      _isFaceReady = false;
+      _clearSmoothing();
     }
 
     switch (newPhase) {
+      case _Phase.initializing:
+        break;
       case _Phase.positioning:
         _blinkCountdownController.reset();
-        _updateInstruction(
-          'Fit your face in the circle',
-          subtitle: 'Make sure your full face is visible',
-        );
+        _updateInstruction('Fit your face in the circle', subtitle: 'Make sure your full face is visible');
         break;
       case _Phase.liveness:
         _blinkCountdownController.reset();
-        _updateInstruction(
-          'Calibrating…',
-          subtitle: 'Look straight at the camera and hold still',
-        );
+        _updateInstruction('Calibrating…', subtitle: 'Look straight at the camera and hold still');
         break;
       case _Phase.capturing:
-        _updateInstruction(
-          'Hold still…',
-          subtitle: 'Scanning your face silently',
-        );
+        _updateInstruction('Hold still…', subtitle: 'Scanning your face silently');
         break;
       case _Phase.processing:
-        _updateInstruction(
-          'Calibrating Recognition',
-          subtitle: 'Optimizing face verification...',
-        );
+        _updateInstruction('Calibrating Recognition', subtitle: 'Optimizing your face profile...');
         break;
       case _Phase.done:
-        _updateInstruction('Verified!', subtitle: 'Face matched successfully');
+        _updateInstruction('Calibration Complete', subtitle: 'Your face profile has been personalised');
         break;
       case _Phase.error:
-        break;
-      default:
         break;
     }
   }
 
-  void _updateInstruction(
-    String title, {
-    String? subtitle,
-    bool animate = true,
-  }) {
+  void _updateInstruction(String title, {String? subtitle, bool animate = true}) {
     if (!mounted) return;
-
     if (_instructionTitle == title) {
       _instructionDebounceTimer?.cancel();
       return;
@@ -1556,8 +1222,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                 lower.contains('move to the center') ||
                 lower.contains('move slightly backward')) {
               _borderColor = Colors.orangeAccent;
-            } else if (_phase != _Phase.error &&
-                _borderColor != AppStyles.successGreen) {
+            } else if (_phase != _Phase.error && _borderColor != AppStyles.successGreen) {
               _borderColor = AppStyles.primaryBlue;
             }
           });
@@ -1570,7 +1235,6 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         setState(() {
           _instructionTitle = title;
           _instructionSubtitle = subtitle ?? (_subtitles[title] ?? '');
-
           final lower = title.toLowerCase();
           if (lower.contains('move closer') ||
               lower.contains('move left') ||
@@ -1580,11 +1244,13 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
               lower.contains('move to the center') ||
               lower.contains('move slightly backward')) {
             _borderColor = Colors.orangeAccent;
-          } else if (_phase != _Phase.error &&
-              _borderColor != AppStyles.successGreen) {
+          } else if (_phase != _Phase.error && _borderColor != AppStyles.successGreen) {
             _borderColor = AppStyles.primaryBlue;
           }
         });
+        if (_phase == _Phase.liveness) {
+          _blinkCountdownController.forward(from: 0.0);
+        }
       }
     });
   }
@@ -1600,44 +1266,60 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       } else {
         setState(() => _secondsRemaining = 0);
         timer.cancel();
-        // Timer expired → restart calibration verification
-        if (mounted && _phase != _Phase.done) {
-          debugPrint('[FACE_CAL] Timer expired — restarting calibration verification');
-          Navigator.of(context).pushReplacementNamed('/face_calibration_verify');
+        if (mounted && _phase != _Phase.done && _phase != _Phase.error) {
+          debugPrint('[FACE_CAL] Timer expired — calling _setError');
+          _setError('Time ran out. Please try again in better lighting.');
         }
       }
     });
   }
 
-  String _userFriendlyError(String technicalError) {
-    if (technicalError.contains('Camera') || technicalError.contains('camera')) {
-      return 'Camera could not start. Please try again.';
-    }
-    if (technicalError.contains('timeout') || technicalError.contains('Timeout')) {
-      return 'Processing timed out. Please try again.';
-    }
-    if (technicalError.contains('network') || technicalError.contains('Socket') || technicalError.contains('http') || technicalError.contains('Http')) {
-      return 'Network issue. Please try again.';
-    }
-    return 'Something went wrong. Please try again.';
-  }
-
   void _setError(String message) {
     if (!mounted) return;
-    debugPrint('[CAPTURE] ERROR: $message');
-    final friendly = _userFriendlyError(message);
+    debugPrint('[FACE_CAL] ERROR: $message');
+
+    if (_lastCapturedFrameBytes == null && _lastCameraImage != null) {
+      try {
+        final camImg = _lastCameraImage!;
+        if (camImg.format.group == ImageFormatGroup.jpeg) {
+          _lastCapturedFrameBytes = Uint8List.fromList(camImg.planes[0].bytes);
+        } else {
+          _lastCapturedFrameBytes = _convertYuvToJpegSync(camImg);
+        }
+      } catch (_) {}
+    }
+
     setState(() {
       _phase = _Phase.error;
-      _errorMessage = friendly;
+      _errorMessage = message;
       _borderColor = AppStyles.errorRed;
-      _instructionTitle = 'Something went wrong';
-      _instructionSubtitle = friendly;
+      _instructionTitle = 'Calibration Failed';
+      _instructionSubtitle = message;
+      _cameraFrozen = true;
     });
+    try {
+      _cameraController?.stopImageStream();
+    } catch (_) {}
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // DISPOSE
-  // ─────────────────────────────────────────────────────────────────────────
+  Future<void> _safeRestartImageStream() async {
+    if (_cameraController == null || !_cameraInitialized) return;
+    try {
+      if (_cameraController!.value.isStreamingImages) {
+        await _cameraController!.stopImageStream();
+      }
+    } catch (e) {
+      debugPrint('[FACE_CAL] stopImageStream error (ignored): $e');
+    }
+    try {
+      if (mounted) {
+        await _cameraController!.startImageStream(_onCameraFrame);
+      }
+    } catch (e) {
+      debugPrint('[FACE_CAL] startImageStream error: $e');
+    }
+  }
+
   @override
   void dispose() {
     debugPrint('[CAPTURE] Disposed');
@@ -1658,17 +1340,12 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       } catch (_) {}
       _cameraController!.dispose();
     }
-
     _mlService.faceDetector.close();
     super.dispose();
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // BUILD
-  // ─────────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    // Timer color: green → amber → red
     final Color timerColor = _secondsRemaining <= 15
         ? AppStyles.errorRed
         : _secondsRemaining <= 30
@@ -1682,7 +1359,6 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         body: SafeArea(
           child: Column(
             children: [
-              // ── Top App Bar ──────────────────────────────────────────────
               Theme(
                 data: Theme.of(context).copyWith(
                   textTheme: Theme.of(context).textTheme.apply(
@@ -1691,18 +1367,15 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                   ),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16.0,
-                    vertical: 16.0,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
                   child: Row(
                     children: [
                       const SizedBox(width: 48),
                       const Spacer(),
                       Column(
-                        children: [
-                          const Text(
-                            'Face Verification',
+                        children: const [
+                          Text(
+                            'Face Calibration',
                             style: TextStyle(
                               fontSize: 19,
                               fontWeight: FontWeight.w800,
@@ -1719,340 +1392,240 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                   ),
                 ),
               ),
-
-              // ── Camera Preview — uses Expanded to fill available space ──
+              const SizedBox(height: 60),
               Expanded(
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                      final double availW = constraints.maxWidth;
-                      final double availH = constraints.maxHeight;
-                      final double circleSize = availW * 0.80;
-                      final double circleTop = availH * 0.40 - circleSize / 2;
+                    final double availW = constraints.maxWidth;
+                    final double availH = constraints.maxHeight;
+                    final double circleSize = availW * 0.80;
+                    double circleTop = availH * 0.36 - circleSize / 2 - 40;
+                    circleTop = math.max(circleTop, 24.0);
 
-                      _uiCircleSize = circleSize;
-                      _uiAvailW = availW;
-                      _uiAvailH = availH;
+                    _uiCircleSize = circleSize;
+                    _uiAvailW = availW;
+                    _uiAvailH = availH;
 
-                      double offsetX = 0;
-                      double offsetY = 0;
-                      if (_cameraInitialized && _bufFaceCX.isNotEmpty) {
-                        final Size? previewSize =
-                            _cameraController?.value.previewSize;
-                        final double sensorW = previewSize?.height ?? 3.0;
-                        if (sensorW > 0) {
-                          final double scale = availW / sensorW;
-                          final double faceUIX = _bufAvg(_bufFaceCX) * scale;
-                          final double faceUIY = _bufAvg(_bufFaceCY) * scale;
-                          final double circleUIX = availW / 2;
-                          final double circleUIY =
-                              circleTop - 100 + circleSize / 2;
+                    double offsetX = 0;
+                    double offsetY = 0;
+                    if (_cameraInitialized && _bufFaceCX.isNotEmpty) {
+                      final Size? previewSize = _cameraController?.value.previewSize;
+                      final double sensorW = previewSize?.height ?? 3.0;
+                      if (sensorW > 0) {
+                        final double scale = availW / sensorW;
+                        final double faceUIX = _bufAvg(_bufFaceCX) * scale;
+                        final double faceUIY = _bufAvg(_bufFaceCY) * scale;
+                        final double circleUIX = availW / 2;
+                        final double circleUIY = circleTop + circleSize / 2;
 
-                          offsetX = (faceUIX - circleUIX).clamp(-6.0, 6.0);
-                          offsetY = (faceUIY - circleUIY).clamp(-6.0, 6.0);
-                        }
+                        offsetX = (faceUIX - circleUIX).clamp(-6.0, 6.0);
+                        offsetY = (faceUIY - circleUIY).clamp(-6.0, 6.0);
                       }
+                    }
 
-                      return SizedBox(
-                        width: availW,
-                        height: availH,
-                        child: Stack(
-                          children: [
-                            // Background
-                            Positioned.fill(
-                              child: Container(
-                                color: AppStyles.backgroundLight,
-                              ),
-                            ),
-
-                            // Face Interactive Overlay Group
-                            AnimatedPositioned(
-                              duration: const Duration(milliseconds: 120),
-                              curve: Curves.easeOut,
-                              left: offsetX,
-                              top: offsetY,
-                              right: -offsetX,
-                              bottom: -offsetY,
+                    return SizedBox(
+                      width: availW,
+                      height: availH,
+                      child: Stack(
+                        children: [
+                          Positioned.fill(child: Container(color: AppStyles.backgroundLight)),
+                          AnimatedPositioned(
+                            duration: const Duration(milliseconds: 120),
+                            curve: Curves.easeOut,
+                            left: offsetX,
+                            top: offsetY,
+                            right: -offsetX,
+                            bottom: -offsetY,
+                            child: AnimatedOpacity(
+                              opacity: _cameraPreviewReady ? 1.0 : 0.0,
+                              duration: const Duration(milliseconds: 500),
+                              curve: Curves.easeIn,
                               child: Stack(
                                 children: [
-                                  // Circle clip for the camera preview
-                                  Positioned(
-                                    left: (availW - circleSize) / 2,
-                                    top: circleTop - 100,
-                                    child: ClipOval(
-                                      child: SizedBox(
-                                        width: circleSize,
-                                        height: circleSize,
-                                        child: OverflowBox(
-                                          maxWidth: availW,
-                                          maxHeight: availH,
-                                          child: Transform.translate(
-                                            offset: Offset(0, -circleTop),
-                                            child: Stack(
-                                              children: [
-                                                _buildCameraPreview(availW),
-                                                // Scan line inside clip
-                                                if (!_cameraFrozen)
-                                                  Positioned.fill(
-                                                    child: AnimatedBuilder(
-                                                      animation:
-                                                          _scanLineController,
-                                                      builder: (context, child) {
-                                                        return CustomPaint(
-                                                          size: Size(
-                                                            circleSize,
-                                                            circleSize,
-                                                          ),
-                                                          painter: _ScanLinePainter(
-                                                            scanValue:
-                                                                _scanLineController
-                                                                    .value,
-                                                            circleSize:
-                                                                circleSize,
-                                                          ),
-                                                        );
-                                                      },
-                                                    ),
+                                Positioned(
+                                  left: (availW - circleSize) / 2,
+                                  top: circleTop,
+                                  child: ClipOval(
+                                    child: SizedBox(
+                                      width: circleSize,
+                                      height: circleSize,
+                                      child: OverflowBox(
+                                        maxWidth: availW,
+                                        maxHeight: availH,
+                                        child: Transform.translate(
+                                          offset: Offset(0, -circleTop),
+                                          child: Stack(
+                                            children: [
+                                              _buildCameraPreview(availW),
+                                              if (!_cameraFrozen)
+                                                Positioned.fill(
+                                                  child: AnimatedBuilder(
+                                                    animation: _scanLineController,
+                                                    builder: (context, child) {
+                                                      return CustomPaint(
+                                                        size: Size(circleSize, circleSize),
+                                                        painter: _ScanLinePainter(
+                                                          scanValue: _scanLineController.value,
+                                                          circleSize: circleSize,
+                                                        ),
+                                                      );
+                                                    },
                                                   ),
-                                              ],
-                                            ),
+                                                ),
+                                            ],
                                           ),
                                         ),
                                       ),
                                     ),
                                   ),
-
-                                  // Pulsing circle border + progress
-                                  Positioned(
-                                    left: (availW - circleSize) / 2,
-                                    top: circleTop - 100,
-                                    child: ScaleTransition(
-                                      scale:
-                                          Tween<double>(
-                                            begin: 1.0,
-                                            end: 1.05,
-                                          ).animate(
-                                            CurvedAnimation(
-                                              parent: _successBounceController,
-                                              curve: Curves.elasticOut,
-                                            ),
-                                          ),
-                                      child: TweenAnimationBuilder<double>(
-                                        tween: Tween<double>(
-                                          begin: 0.0,
-                                          end:
-                                              _captureProgress /
-                                              _framesPerPhase,
-                                        ),
-                                        duration: const Duration(
-                                          milliseconds: 800,
-                                        ),
-                                        curve: Curves.elasticOut,
-                                        builder:
-                                            (context, animatedProgress, child) {
-                                              double tilt = 0.0;
-                                              if (animatedProgress > 0.4 &&
-                                                  animatedProgress < 0.9) {
-                                                tilt =
-                                                    math.sin(
-                                                      (animatedProgress - 0.4) *
-                                                          math.pi *
-                                                          4,
-                                                    ) *
-                                                    0.03;
-                                              }
-                                              return Transform.rotate(
-                                                angle: tilt,
-                                                child: AnimatedBuilder(
-                                                  animation: _pulseController,
-                                                  builder: (context, _) {
-                                                    return CustomPaint(
-                                                      size: Size(
-                                                        circleSize,
-                                                        circleSize,
-                                                      ),
-                                                      painter: _BorderPainter(
-                                                        pulseValue:
-                                                            _pulseController
-                                                                .value,
-                                                        baseColor: _borderColor,
-                                                        progress:
-                                                            animatedProgress,
-                                                        phase: _phase,
-                                                        flowValue: 0.0,
-                                                      ),
-                                                    );
-                                                  },
+                                ),
+                                Positioned(
+                                  left: (availW - circleSize) / 2,
+                                  top: circleTop,
+                                  child: ScaleTransition(
+                                    scale: Tween<double>(begin: 1.0, end: 1.05).animate(
+                                      CurvedAnimation(parent: _successBounceController, curve: Curves.elasticOut),
+                                    ),
+                                    child: TweenAnimationBuilder<double>(
+                                      tween: Tween<double>(begin: 0.0, end: _captureProgress / _framesPerPhase),
+                                      duration: const Duration(milliseconds: 800),
+                                      curve: Curves.elasticOut,
+                                      builder: (context, animatedProgress, child) {
+                                        double tilt = 0.0;
+                                        if (animatedProgress > 0.4 && animatedProgress < 0.9) {
+                                          tilt = math.sin((animatedProgress - 0.4) * math.pi * 4) * 0.03;
+                                        }
+                                        return Transform.rotate(
+                                          angle: tilt,
+                                          child: AnimatedBuilder(
+                                            animation: _pulseController,
+                                            builder: (context, _) {
+                                              return CustomPaint(
+                                                size: Size(circleSize, circleSize),
+                                                painter: _BorderPainter(
+                                                  pulseValue: _pulseController.value,
+                                                  baseColor: _borderColor,
+                                                  progress: animatedProgress,
+                                                  phase: _phase,
+                                                  flowValue: 0.0,
                                                 ),
                                               );
                                             },
-                                      ),
+                                          ),
+                                        );
+                                      },
                                     ),
                                   ),
-                                ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                          Positioned.fill(
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 600),
+                              curve: Curves.easeOut,
+                              opacity: _phase == _Phase.capturing ? 0.3 : 0.0,
+                              child: CustomPaint(
+                                painter: _FillLightPainter(
+                                  circleCenter: Offset(availW / 2, circleTop + circleSize / 2),
+                                  circleRadius: circleSize / 2,
+                                ),
                               ),
                             ),
-
-                            // Fill Light Overlay
-                            Positioned.fill(
-                              child: AnimatedOpacity(
-                                duration: const Duration(milliseconds: 600),
-                                curve: Curves.easeOut,
-                                opacity: _phase == _Phase.capturing ? 0.3 : 0.0,
-                                child: CustomPaint(
-                                  painter: _FillLightPainter(
-                                    circleCenter: Offset(
-                                      availW / 2,
-                                      (circleTop - 100) + circleSize / 2,
-                                    ),
-                                    circleRadius: circleSize / 2,
+                          ),
+                          Positioned.fill(
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 100),
+                              curve: Curves.easeOut,
+                              opacity: _showFlash ? 0.3 : 0.0,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  gradient: RadialGradient(
+                                    center: FractionalOffset(0.5, (circleTop + circleSize / 2) / availH),
+                                    radius: 0.8,
+                                    colors: [Colors.white, Colors.white.withValues(alpha: 0.0)],
                                   ),
                                 ),
                               ),
                             ),
-
-                            // Studio Flash on Capture
-                            Positioned.fill(
-                              child: AnimatedOpacity(
-                                duration: const Duration(milliseconds: 100),
-                                curve: Curves.easeOut,
-                                opacity: _showFlash ? 0.3 : 0.0,
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    gradient: RadialGradient(
-                                      center: FractionalOffset(
-                                        0.5,
-                                        ((circleTop - 100) + circleSize / 2) /
-                                            availH,
-                                      ),
-                                      radius: 0.8,
-                                      colors: [
-                                        Colors.white,
-                                        Colors.white.withValues(alpha: 0.0),
-                                      ],
-                                    ),
-                                  ),
-                                ),
+                          ),
+                          Positioned(
+                            left: (availW - circleSize) / 2,
+                            top: circleTop,
+                            child: AnimatedBuilder(
+                              animation: _particleController,
+                              builder: (context, _) => CustomPaint(
+                                size: Size(circleSize, circleSize),
+                                painter: _ParticleBurstPainter(_particleController.value),
                               ),
                             ),
-
-                            // Confetti Particle Burst
+                          ),
+                          if (_phase == _Phase.error)
                             Positioned(
-                              left: (availW - circleSize) / 2,
-                              top: circleTop - 100,
-                              child: AnimatedBuilder(
-                                animation: _particleController,
-                                builder: (context, _) => CustomPaint(
-                                  size: Size(circleSize, circleSize),
-                                  painter: _ParticleBurstPainter(
-                                    _particleController.value,
-                                  ),
-                                ),
-                              ),
-                            ),
-
-                            // ── Dynamic Layout Column ──
-                            Positioned(
-                              top: (circleTop - 100) + circleSize + 32,
+                              top: circleTop + circleSize + 24,
                               left: 16,
                               right: 16,
-                              child: AnimatedOpacity(
-                                opacity: _cameraPreviewReady ? 1.0 : 0.0,
-                                duration: const Duration(milliseconds: 500),
-                                curve: Curves.easeIn,
-                                child: Column(
+                              bottom: 16,
+                              child: Container(
+                                alignment: Alignment.topCenter,
+                                child: SlideTransition(
+                                  position: Tween<Offset>(begin: const Offset(0, 0.06), end: const Offset(0, 0)).animate(
+                                    CurvedAnimation(parent: _textFadeController, curve: Curves.easeOut),
+                                  ),
+                                  child: FadeTransition(
+                                    opacity: _textFadeController,
+                                    child: _buildErrorStateCard(),
+                                  ),
+                                ),
+                              ),
+                            )
+                          else
+                            Positioned(
+                              top: circleTop + circleSize + 32,
+                              left: 16,
+                              right: 16,
+                              child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    // Single timer slot — swaps between 60s ring and blink countdown
                                     SizedBox(
                                       height: 56,
                                       child: Center(
                                         child: AnimatedSwitcher(
-                                          duration: const Duration(
-                                            milliseconds: 300,
-                                          ),
-                                          child:
-                                              (_phase == _Phase.liveness &&
-                                                  (_instructionTitle.contains(
-                                                        'Blink',
-                                                      ) ||
-                                                      _instructionSubtitle
-                                                          .contains('Blink')) &&
+                                          duration: const Duration(milliseconds: 300),
+                                          child: (_phase == _Phase.liveness &&
+                                                  (_instructionTitle.contains('Blink') || _instructionSubtitle.contains('Blink')) &&
                                                   !_challengeVerified)
                                               ? SizedBox(
                                                   key: const ValueKey('blink'),
                                                   width: 50,
                                                   height: 50,
                                                   child: AnimatedBuilder(
-                                                    animation:
-                                                        _blinkCountdownController,
+                                                    animation: _blinkCountdownController,
                                                     builder: (context, child) {
-                                                      final double remaining =
-                                                          3.0 *
-                                                          (1.0 -
-                                                              _blinkCountdownController
-                                                                  .value);
+                                                      final double remaining = 3.0 * (1.0 - _blinkCountdownController.value);
                                                       return Stack(
-                                                        alignment:
-                                                            Alignment.center,
+                                                        alignment: Alignment.center,
                                                         children: [
                                                           SizedBox(
                                                             width: 50,
                                                             height: 50,
                                                             child: CircularProgressIndicator(
-                                                              value:
-                                                                  1.0 -
-                                                                  _blinkCountdownController
-                                                                      .value,
+                                                              value: 1.0 - _blinkCountdownController.value,
                                                               strokeWidth: 4.0,
-                                                              color: Colors
-                                                                  .orangeAccent,
-                                                              backgroundColor: Colors
-                                                                  .orangeAccent
-                                                                  .withValues(
-                                                                    alpha: 0.15,
-                                                                  ),
+                                                              color: Colors.orangeAccent,
+                                                              backgroundColor: Colors.orangeAccent.withValues(alpha: 0.15),
                                                             ),
                                                           ),
                                                           AnimatedSwitcher(
-                                                            duration:
-                                                                const Duration(
-                                                                  milliseconds:
-                                                                      300,
-                                                                ),
-                                                            transitionBuilder:
-                                                                (
-                                                                  Widget child,
-                                                                  Animation<
-                                                                    double
-                                                                  >
-                                                                  animation,
-                                                                ) {
-                                                                  return ScaleTransition(
-                                                                    scale:
-                                                                        animation,
-                                                                    child: FadeTransition(
-                                                                      opacity:
-                                                                          animation,
-                                                                      child:
-                                                                          child,
-                                                                    ),
-                                                                  );
-                                                                },
+                                                            duration: const Duration(milliseconds: 300),
+                                                            transitionBuilder: (Widget child, Animation<double> animation) {
+                                                              return ScaleTransition(scale: animation, child: FadeTransition(opacity: animation, child: child));
+                                                            },
                                                             child: Text(
                                                               '${remaining.ceil()}',
-                                                              key:
-                                                                  ValueKey<int>(
-                                                                    remaining
-                                                                        .ceil(),
-                                                                  ),
-                                                              style: const TextStyle(
-                                                                fontSize: 18,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w800,
-                                                                color: Colors
-                                                                    .orangeAccent,
-                                                              ),
+                                                              key: ValueKey<int>(remaining.ceil()),
+                                                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.orangeAccent),
                                                             ),
                                                           ),
                                                         ],
@@ -2070,25 +1643,11 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                                                         width: 44,
                                                         height: 44,
                                                         child: CustomPaint(
-                                                          painter:
-                                                              _MiniRingPainter(
-                                                                progress:
-                                                                    _ringProgress
-                                                                        .value,
-                                                                color:
-                                                                    timerColor,
-                                                              ),
+                                                          painter: _MiniRingPainter(progress: _ringProgress.value, color: timerColor),
                                                           child: Center(
                                                             child: Text(
                                                               '${_secondsRemaining}s',
-                                                              style: TextStyle(
-                                                                fontSize: 12,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w800,
-                                                                color:
-                                                                    timerColor,
-                                                              ),
+                                                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: timerColor),
                                                             ),
                                                           ),
                                                         ),
@@ -2099,122 +1658,54 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                                         ),
                                       ),
                                     ),
-
                                     const SizedBox(height: 6),
-
-                                    // Attempt counter
-                                    AnimatedOpacity(
-                                      duration: const Duration(
-                                        milliseconds: 400,
-                                      ),
-                                      opacity: _cameraPreviewReady ? 1.0 : 0.0,
-                                      child: Text(
-                                        'Attempt $_attemptCount of 2',
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w500,
-                                          color: Colors.grey.shade500,
-                                        ),
-                                      ),
+                                    Text(
+                                      'Attempt $_attemptCount of 2',
+                                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.grey.shade500),
                                     ),
-
                                     const SizedBox(height: 10),
-
-                                    // HUD strip (Liveness → Scanning → Done)
-                                    if (_phase != _Phase.initializing &&
-                                        _phase != _Phase.processing &&
-                                        _phase != _Phase.done)
+                                    if (_phase != _Phase.initializing && _phase != _Phase.processing && _phase != _Phase.done)
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(16),
                                         child: BackdropFilter(
-                                          filter: ImageFilter.blur(
-                                            sigmaX: 10,
-                                            sigmaY: 10,
-                                          ),
+                                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                                           child: Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 16,
-                                              vertical: 12,
-                                            ),
+                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                                             decoration: BoxDecoration(
                                               color: Colors.black54,
                                               gradient: LinearGradient(
                                                 begin: Alignment.topLeft,
                                                 end: Alignment.bottomRight,
-                                                colors: [
-                                                  Colors.black.withValues(
-                                                    alpha: 0.6,
-                                                  ),
-                                                  Colors.transparent,
-                                                ],
+                                                colors: [Colors.black.withValues(alpha: 0.6), Colors.transparent],
                                               ),
-                                              borderRadius:
-                                                  BorderRadius.circular(16),
-                                              border: Border.all(
-                                                color: Colors.white.withValues(
-                                                  alpha: 0.5,
-                                                ),
-                                                width: 0.5,
-                                              ),
+                                              borderRadius: BorderRadius.circular(16),
+                                              border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 0.5),
                                             ),
                                             child: AnimatedBuilder(
                                               animation: _pulseController,
                                               builder: (context, _) {
                                                 return Row(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment
-                                                          .spaceBetween,
+                                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                                   children: [
                                                     _NeonChip(
                                                       label: 'Liveness',
-                                                      isActive:
-                                                          _phase ==
-                                                              _Phase
-                                                                  .positioning ||
-                                                          _phase ==
-                                                              _Phase.liveness,
-                                                      isDone:
-                                                          _challengeVerified,
-                                                      pulseValue:
-                                                          _pulseController
-                                                              .value,
+                                                      isActive: _phase == _Phase.positioning || _phase == _Phase.liveness,
+                                                      isDone: _challengeVerified,
+                                                      pulseValue: _pulseController.value,
                                                     ),
-                                                    _ShimmerLine(
-                                                      isDone:
-                                                          _challengeVerified,
-                                                      pulseController:
-                                                          _pulseController,
-                                                    ),
+                                                    _ShimmerLine(isDone: _challengeVerified, pulseController: _pulseController),
                                                     _NeonChip(
                                                       label: 'Scanning',
-                                                      isActive:
-                                                          _phase ==
-                                                          _Phase.capturing,
-                                                      isDone:
-                                                          _liveEmbeddings
-                                                              .length >=
-                                                          _framesPerPhase,
-                                                      pulseValue:
-                                                          _pulseController
-                                                              .value,
+                                                      isActive: _phase == _Phase.capturing,
+                                                      isDone: _liveEmbeddings.length >= _framesPerPhase,
+                                                      pulseValue: _pulseController.value,
                                                     ),
-                                                    _ShimmerLine(
-                                                      isDone:
-                                                          _liveEmbeddings
-                                                              .length >=
-                                                          _framesPerPhase,
-                                                      pulseController:
-                                                          _pulseController,
-                                                    ),
+                                                    _ShimmerLine(isDone: _liveEmbeddings.length >= _framesPerPhase, pulseController: _pulseController),
                                                     _NeonChip(
                                                       label: 'Done',
-                                                      isActive:
-                                                          _phase == _Phase.done,
-                                                      isDone:
-                                                          _phase == _Phase.done,
-                                                      pulseValue:
-                                                          _pulseController
-                                                              .value,
+                                                      isActive: _phase == _Phase.done,
+                                                      isDone: _phase == _Phase.done,
+                                                      pulseValue: _pulseController.value,
                                                     ),
                                                   ],
                                                 );
@@ -2223,110 +1714,42 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                                           ),
                                         ),
                                       ),
-
                                     const SizedBox(height: 18),
-
-                                    // Instruction card
                                     SlideTransition(
-                                      position:
-                                          Tween<Offset>(
-                                            begin: const Offset(0, 0.06),
-                                            end: const Offset(0, 0),
-                                          ).animate(
-                                            CurvedAnimation(
-                                              parent: _textFadeController,
-                                              curve: Curves.easeOut,
-                                            ),
-                                          ),
+                                      position: Tween<Offset>(begin: const Offset(0, 0.06), end: const Offset(0, 0)).animate(
+                                        CurvedAnimation(parent: _textFadeController, curve: Curves.easeOut),
+                                      ),
                                       child: FadeTransition(
                                         opacity: _textFadeController,
                                         child: Container(
                                           decoration: BoxDecoration(
                                             color: Colors.white,
-                                            borderRadius: BorderRadius.circular(
-                                              16,
-                                            ),
-                                            border: Border.all(
-                                              color: _phase == _Phase.error
-                                                  ? AppStyles.errorRed
-                                                        .withValues(alpha: 0.3)
-                                                  : AppStyles.primaryBlue
-                                                        .withValues(alpha: 0.1),
-                                              width: 1.5,
-                                            ),
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: Colors.black.withValues(
-                                                  alpha: 0.05,
-                                                ),
-                                                blurRadius: 10,
-                                                offset: const Offset(0, 4),
-                                              ),
-                                            ],
+                                            borderRadius: BorderRadius.circular(16),
+                                            border: Border.all(color: _borderColor.withValues(alpha: 0.1), width: 1.5),
+                                            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 4))],
                                           ),
                                           padding: EdgeInsets.symmetric(
                                             horizontal: 16,
-                                            vertical:
-                                                _instructionTitle ==
-                                                    'Move to the center of the circle'
-                                                ? 6
-                                                : 10,
+                                            vertical: _instructionTitle == 'Move to the center of the circle' ? 6 : 10,
                                           ),
                                           child: Column(
                                             mainAxisSize: MainAxisSize.min,
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
+                                            mainAxisAlignment: MainAxisAlignment.center,
                                             children: [
                                               Text(
                                                 _instructionTitle,
                                                 textAlign: TextAlign.center,
-                                                style: TextStyle(
-                                                  fontSize: 20,
-                                                  fontWeight: FontWeight.w700,
-                                                  color: _phase == _Phase.error
-                                                      ? AppStyles.errorRed
-                                                      : AppStyles.primaryBlue,
-                                                ),
+                                                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppStyles.primaryBlue),
                                               ),
-                                              _instructionTitle ==
-                                                      'Move to the center of the circle'
-                                                  ? const SizedBox.shrink()
-                                                  : const SizedBox(height: 2),
+                                              _instructionTitle == 'Move to the center of the circle' ? const SizedBox.shrink() : const SizedBox(height: 2),
                                               Text(
                                                 _instructionSubtitle,
                                                 textAlign: TextAlign.center,
-                                                style: TextStyle(
-                                                  fontSize: 14,
-                                                  color: Colors.grey.shade600,
-                                                  fontWeight: FontWeight.w500,
-                                                ),
+                                                style: TextStyle(fontSize: 14, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
                                               ),
-
                                               if (_phase == _Phase.processing) ...[
-
                                                 const SizedBox(height: 16),
-
-                                                const CircularProgressIndicator(
-
-                                                  valueColor: AlwaysStoppedAnimation<Color>(AppStyles.primaryBlue),
-
-                                                ),
-
-                                              ],
-                                              if (_phase == _Phase.error) ...[
-                                                const SizedBox(height: 16),
-                                                TextButton(
-                                                  onPressed: _onRetry,
-                                                  child: const Text(
-                                                    'Try Again',
-                                                    style: TextStyle(
-                                                      color:
-                                                          AppStyles.primaryBlue,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                ),
+                                                const CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(AppStyles.primaryBlue)),
                                               ],
                                             ],
                                           ),
@@ -2336,12 +1759,11 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                                   ],
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
               ),
             ],
           ),
@@ -2352,11 +1774,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
 
   Widget _buildCameraPreview(double containerWidth) {
     if (!_cameraInitialized || _cameraController == null) {
-      return SizedBox(
-        width: containerWidth,
-        height: containerWidth,
-        child: _PulsingCameraLoader(),
-      );
+      return SizedBox(width: containerWidth, height: containerWidth, child: _PulsingCameraLoader());
     }
 
     final Size? previewSize = _cameraController!.value.previewSize;
@@ -2374,86 +1792,102 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
           width: sensorW,
           height: sensorH,
           child: _cameraFrozen && _lastCapturedFrameBytes != null
-              ? RotatedBox(
-                  quarterTurns: 3,
-                  child: Image.memory(
-                    _lastCapturedFrameBytes!,
-                    fit: BoxFit.cover,
-                  ),
-                )
+              ? RotatedBox(quarterTurns: 3, child: Image.memory(_lastCapturedFrameBytes!, fit: BoxFit.cover))
               : CameraPreview(_cameraController!),
         ),
       ),
     );
   }
 
-
-
   void _onRetry() {
-    debugPrint('[CAPTURE] Started | screen=calibration_verification target=$_framesPerPhase');
-    _livenessService.resetCalibration();
-    _liveEmbeddings.clear();
-    _capturedVerificationFrames.clear();
-    _validResults.clear();
-    _validFrameCount = 0;
-    _cameraFrozen = false;
-    _lastCapturedFrameBytes = null;
-    _isSubmitting = false;
-
-    _captureProgress = 0;
-    _challengeVerified = false;
-    _challengeStartTime = null;
-    _blinkCountdownController.reset();
-    _steadyStartTime = null;
-    _isFaceReady = false;
-    _lastKnownBlinkCount = 0;
-    _clearSmoothing();
+    debugPrint('[FACE_CAL] User retry | resetting all state including attempt counter');
+    _resetCaptureState(resetAttemptCount: true, keepFrozen: true);
 
     setState(() {
+      _phase = _Phase.positioning;
       _borderColor = AppStyles.primaryBlue;
       _errorMessage = null;
       _secondsRemaining = _totalSeconds;
+      _instructionTitle = 'Fit your face in the circle';
+      _instructionSubtitle = 'Make sure your full face is visible';
+      _cameraPreviewReady = true;
     });
 
-    // Restart countdown timer
     _startCountdownTimer();
-
-    // Restart ring animation
     _ringController.reset();
     _ringController.forward();
 
-    // Restart camera stream if needed
-    if (_cameraInitialized && _cameraController != null) {
-      try {
-        _cameraController!.stopImageStream().then((_) {
-          if (mounted) {
-            _cameraController!.startImageStream(_onCameraFrame);
-          }
-        });
-      } catch (_) {
-        try {
-          _cameraController!.startImageStream(_onCameraFrame);
-        } catch (_) {}
-      }
-    }
+    _cameraStabilizer?.resetStabilityOnly();
 
-    _setPhase(_Phase.positioning);
+    _safeRestartImageStream();
+  }
+
+  void _restartCalibration() {
+    _onRetry();
+  }
+
+  Widget _buildErrorStateCard() {
+    if (_phase != _Phase.error) return const SizedBox.shrink();
+
+    final bool isSmallScreen = MediaQuery.of(context).size.height < 700;
+    final double cardPaddingVer = isSmallScreen ? 12.0 : 16.0;
+    const double cardPaddingHor = 16.0;
+    final double iconToTitle = isSmallScreen ? 6.0 : 8.0;
+    final double titleToMessage = isSmallScreen ? 6.0 : 8.0;
+    final double messageToButton = isSmallScreen ? 10.0 : 12.0;
+
+    final double buttonHeight = isSmallScreen ? 38.0 : 42.0;
+
+    const IconData icon = Icons.face_retouching_off_rounded;
+    const Color iconColor = AppStyles.errorRed;
+    const String title = 'Calibration Failed';
+    final String message = _errorMessage ?? 'Please retry in good lighting, facing the camera directly.';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: iconColor.withValues(alpha: 0.3), width: 1.5),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 4))],
+      ),
+      padding: EdgeInsets.symmetric(horizontal: cardPaddingHor, vertical: cardPaddingVer),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: isSmallScreen ? 28 : 32, color: iconColor),
+          SizedBox(height: iconToTitle),
+          const Text(title, textAlign: TextAlign.center, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: iconColor)),
+          SizedBox(height: titleToMessage),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, color: Colors.grey.shade700, fontWeight: FontWeight.w500, height: 1.4),
+          ),
+          SizedBox(height: messageToButton),
+          ElevatedButton(
+            onPressed: _restartCalibration,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppStyles.primaryBlue,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              minimumSize: Size(160, buttonHeight),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text('Try Again', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
   }
 }
 
-// ─── _NeonChip ────────────────────────────────────────────────────────────────
 class _NeonChip extends StatefulWidget {
   final String label;
   final bool isActive;
   final bool isDone;
   final double pulseValue;
 
-  const _NeonChip({
-    required this.label,
-    required this.isActive,
-    required this.isDone,
-    required this.pulseValue,
-  });
+  const _NeonChip({required this.label, required this.isActive, required this.isDone, required this.pulseValue});
 
   @override
   State<_NeonChip> createState() => _NeonChipState();
@@ -2465,9 +1899,7 @@ class _NeonChipState extends State<_NeonChip> {
   @override
   void didUpdateWidget(_NeonChip oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!oldWidget.isDone && widget.isDone) {
-      _triggerBounce();
-    }
+    if (!oldWidget.isDone && widget.isDone) _triggerBounce();
   }
 
   void _triggerBounce() async {
@@ -2480,12 +1912,11 @@ class _NeonChipState extends State<_NeonChip> {
 
   @override
   Widget build(BuildContext context) {
-    final chip = _buildChipContent();
     return AnimatedScale(
       scale: widget.isDone ? _scale : 1.0,
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOutBack,
-      child: chip,
+      child: _buildChipContent(),
     );
   }
 
@@ -2496,27 +1927,14 @@ class _NeonChipState extends State<_NeonChip> {
         decoration: BoxDecoration(
           color: const Color(0xFF2ECC71),
           borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF2ECC71).withValues(alpha: 0.4),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
+          boxShadow: [BoxShadow(color: const Color(0xFF2ECC71).withValues(alpha: 0.4), blurRadius: 6, offset: const Offset(0, 2))],
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(Icons.check, color: Colors.white, size: 12),
             const SizedBox(width: 4),
-            Text(
-              widget.label,
-              style: const TextStyle(
-                fontSize: 12,
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+            Text(widget.label, style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w700)),
           ],
         ),
       );
@@ -2528,30 +1946,10 @@ class _NeonChipState extends State<_NeonChip> {
         decoration: BoxDecoration(
           color: AppStyles.primaryBlue.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: AppStyles.primaryBlue.withValues(
-              alpha: 0.5 + (0.5 * widget.pulseValue),
-            ),
-            width: 1.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: AppStyles.primaryBlue.withValues(
-                alpha: 0.2 * widget.pulseValue,
-              ),
-              blurRadius: 8,
-              spreadRadius: 2,
-            ),
-          ],
+          border: Border.all(color: AppStyles.primaryBlue.withValues(alpha: 0.5 + (0.5 * widget.pulseValue)), width: 1.5),
+          boxShadow: [BoxShadow(color: AppStyles.primaryBlue.withValues(alpha: 0.2 * widget.pulseValue), blurRadius: 8, spreadRadius: 2)],
         ),
-        child: Text(
-          widget.label,
-          style: const TextStyle(
-            fontSize: 12,
-            color: AppStyles.primaryBlue,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+        child: Text(widget.label, style: const TextStyle(fontSize: 12, color: AppStyles.primaryBlue, fontWeight: FontWeight.w700)),
       );
     }
 
@@ -2562,19 +1960,11 @@ class _NeonChipState extends State<_NeonChip> {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: const Color(0xFFD1D5DB), width: 1.0),
       ),
-      child: Text(
-        widget.label,
-        style: const TextStyle(
-          fontSize: 12,
-          color: Color(0xFF6B7280),
-          fontWeight: FontWeight.w600,
-        ),
-      ),
+      child: Text(widget.label, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280), fontWeight: FontWeight.w600)),
     );
   }
 }
 
-// ─── _ShimmerLine ─────────────────────────────────────────────────────────────
 class _ShimmerLine extends StatelessWidget {
   final bool isDone;
   final AnimationController pulseController;
@@ -2594,16 +1984,8 @@ class _ShimmerLine extends StatelessWidget {
               color: isDone ? null : Colors.grey.shade600,
               gradient: isDone
                   ? LinearGradient(
-                      colors: const [
-                        Color(0xFF2ECC71),
-                        Colors.white,
-                        Color(0xFF2ECC71),
-                      ],
-                      stops: [
-                        math.max(0.0, pulseController.value - 0.3),
-                        pulseController.value,
-                        math.min(1.0, pulseController.value + 0.3),
-                      ],
+                      colors: const [Color(0xFF2ECC71), Colors.white, Color(0xFF2ECC71)],
+                      stops: [math.max(0.0, pulseController.value - 0.3), pulseController.value, math.min(1.0, pulseController.value + 0.3)],
                     )
                   : null,
             ),
@@ -2614,14 +1996,12 @@ class _ShimmerLine extends StatelessWidget {
   }
 }
 
-// ─── _PulsingCameraLoader ─────────────────────────────────────────────────────
 class _PulsingCameraLoader extends StatefulWidget {
   @override
   State<_PulsingCameraLoader> createState() => _PulsingCameraLoaderState();
 }
 
-class _PulsingCameraLoaderState extends State<_PulsingCameraLoader>
-    with SingleTickerProviderStateMixin {
+class _PulsingCameraLoaderState extends State<_PulsingCameraLoader> with SingleTickerProviderStateMixin {
   late AnimationController _pulse;
   late Animation<double> _scale;
   late Animation<double> _opacity;
@@ -2629,18 +2009,9 @@ class _PulsingCameraLoaderState extends State<_PulsingCameraLoader>
   @override
   void initState() {
     super.initState();
-    _pulse = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    )..repeat(reverse: true);
-    _scale = Tween<double>(
-      begin: 0.82,
-      end: 1.0,
-    ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
-    _opacity = Tween<double>(
-      begin: 0.4,
-      end: 0.85,
-    ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+    _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat(reverse: true);
+    _scale = Tween<double>(begin: 0.82, end: 1.0).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+    _opacity = Tween<double>(begin: 0.4, end: 0.85).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
   }
 
   @override
@@ -2664,23 +2035,13 @@ class _PulsingCameraLoaderState extends State<_PulsingCameraLoader>
                 child: Container(
                   width: 72,
                   height: 72,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF1A73E8).withValues(alpha: 0.12),
-                  ),
+                  decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0xFF1A73E8).withValues(alpha: 0.12)),
                   child: Center(
                     child: Container(
                       width: 44,
                       height: 44,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Color(0xFF1A73E8),
-                      ),
-                      child: const Icon(
-                        Icons.camera_alt_rounded,
-                        color: Colors.white,
-                        size: 22,
-                      ),
+                      decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF1A73E8)),
+                      child: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 22),
                     ),
                   ),
                 ),
@@ -2693,7 +2054,6 @@ class _PulsingCameraLoaderState extends State<_PulsingCameraLoader>
   }
 }
 
-// ─── _FillLightPainter ────────────────────────────────────────────────────────
 class _FillLightPainter extends CustomPainter {
   final Offset circleCenter;
   final double circleRadius;
@@ -2702,28 +2062,15 @@ class _FillLightPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final Path backgroundPath = Path()
-      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
-    final Path circlePath = Path()
-      ..addOval(Rect.fromCircle(center: circleCenter, radius: circleRadius));
-    final Path fillPath = Path.combine(
-      PathOperation.difference,
-      backgroundPath,
-      circlePath,
-    );
+    final Path backgroundPath = Path()..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+    final Path circlePath = Path()..addOval(Rect.fromCircle(center: circleCenter, radius: circleRadius));
+    final Path fillPath = Path.combine(PathOperation.difference, backgroundPath, circlePath);
 
     final Paint paint = Paint()
       ..shader = RadialGradient(
-        center: Alignment(
-          (circleCenter.dx / size.width) * 2 - 1,
-          (circleCenter.dy / size.height) * 2 - 1,
-        ),
+        center: Alignment((circleCenter.dx / size.width) * 2 - 1, (circleCenter.dy / size.height) * 2 - 1),
         radius: 1.2,
-        colors: [
-          Colors.white,
-          const Color(0xFFE2F0FD),
-          Colors.white.withValues(alpha: 0.0),
-        ],
+        colors: [Colors.white, const Color(0xFFE2F0FD), Colors.white.withValues(alpha: 0.0)],
         stops: const [0.2, 0.6, 1.0],
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
 
@@ -2732,12 +2079,10 @@ class _FillLightPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _FillLightPainter oldDelegate) {
-    return oldDelegate.circleCenter != circleCenter ||
-        oldDelegate.circleRadius != circleRadius;
+    return oldDelegate.circleCenter != circleCenter || oldDelegate.circleRadius != circleRadius;
   }
 }
 
-// ─── _BorderPainter ───────────────────────────────────────────────────────────
 class _BorderPainter extends CustomPainter {
   final double pulseValue;
   final Color baseColor;
@@ -2745,13 +2090,7 @@ class _BorderPainter extends CustomPainter {
   final _Phase phase;
   final double flowValue;
 
-  _BorderPainter({
-    required this.pulseValue,
-    required this.baseColor,
-    required this.progress,
-    required this.phase,
-    required this.flowValue,
-  });
+  _BorderPainter({required this.pulseValue, required this.baseColor, required this.progress, required this.phase, required this.flowValue});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -2759,12 +2098,7 @@ class _BorderPainter extends CustomPainter {
     final Offset center = Offset(radius, radius);
     final Rect rect = Rect.fromCircle(center: center, radius: radius);
 
-    // 1. Base pulsing border
-    final paint = Paint()
-      ..color = baseColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.0;
-
+    final paint = Paint()..color = baseColor..style = PaintingStyle.stroke..strokeWidth = 4.0;
     final shadowPaint = Paint()
       ..color = baseColor.withValues(alpha: pulseValue * 0.5)
       ..style = PaintingStyle.stroke
@@ -2774,15 +2108,9 @@ class _BorderPainter extends CustomPainter {
     canvas.drawCircle(center, radius, shadowPaint);
     canvas.drawCircle(center, radius, paint);
 
-    // 2. Progress ring
     if (progress > 0) {
       const Color progressColor = Color(0xFF2ECC71);
-      final progressPaint = Paint()
-        ..color = progressColor
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 8.0
-        ..strokeCap = StrokeCap.butt;
-
+      final progressPaint = Paint()..color = progressColor..style = PaintingStyle.stroke..strokeWidth = 8.0..strokeCap = StrokeCap.butt;
       final progressGlow = Paint()
         ..color = progressColor.withValues(alpha: 0.6)
         ..style = PaintingStyle.stroke
@@ -2796,16 +2124,11 @@ class _BorderPainter extends CustomPainter {
     }
 
     if (phase != _Phase.processing && phase != _Phase.done) {
-      // Breathing halo
       final double breathOffset = 4.0 + (10.0 * pulseValue);
       final double haloRadius = radius + breathOffset;
-
       final Paint haloPaint = Paint()
         ..shader = RadialGradient(
-          colors: [
-            baseColor.withValues(alpha: 0.15 * (1.0 - pulseValue)),
-            baseColor.withValues(alpha: 0.0),
-          ],
+          colors: [baseColor.withValues(alpha: 0.15 * (1.0 - pulseValue)), baseColor.withValues(alpha: 0.0)],
           stops: const [0.8, 1.0],
         ).createShader(Rect.fromCircle(center: center, radius: haloRadius));
 
@@ -2822,18 +2145,8 @@ class _BorderPainter extends CustomPainter {
       canvas.drawArc(rect, glowAngle, 0.436, false, glowArcPaint);
     }
 
-    // 3D circle illusion
-    final Paint topHighlightPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.18)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.0
-      ..strokeCap = StrokeCap.round;
-
-    final Paint bottomShadowPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.12)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.0
-      ..strokeCap = StrokeCap.round;
+    final Paint topHighlightPaint = Paint()..color = Colors.white.withValues(alpha: 0.18)..style = PaintingStyle.stroke..strokeWidth = 4.0..strokeCap = StrokeCap.round;
+    final Paint bottomShadowPaint = Paint()..color = Colors.black.withValues(alpha: 0.12)..style = PaintingStyle.stroke..strokeWidth = 4.0..strokeCap = StrokeCap.round;
 
     canvas.drawArc(rect, -math.pi * 0.85, 1.57, false, topHighlightPaint);
     canvas.drawArc(rect, math.pi * 0.15, 1.57, false, bottomShadowPaint);
@@ -2841,46 +2154,29 @@ class _BorderPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _BorderPainter oldDelegate) {
-    return oldDelegate.pulseValue != pulseValue ||
-        oldDelegate.baseColor != baseColor ||
-        oldDelegate.progress != progress ||
-        oldDelegate.phase != phase ||
-        oldDelegate.flowValue != flowValue;
+    return oldDelegate.pulseValue != pulseValue || oldDelegate.baseColor != baseColor || oldDelegate.progress != progress || oldDelegate.phase != phase;
   }
 }
 
-// ─── _ParticleBurstPainter ────────────────────────────────────────────────────
 class _ParticleBurstPainter extends CustomPainter {
   final double progress;
-
   _ParticleBurstPainter(this.progress);
 
   @override
   void paint(Canvas canvas, Size size) {
     if (progress <= 0.0 || progress >= 1.0) return;
-
     final center = Offset(size.width / 2, size.height / 2);
-    final paint = Paint()
-      ..color = Colors.white.withValues(alpha: 1.0 - progress);
+    final paint = Paint()..color = Colors.white.withValues(alpha: 1.0 - progress);
 
     final random = math.Random(12345);
     for (int i = 0; i < 30; i++) {
       final angle = random.nextDouble() * 2 * math.pi;
       final speed = 50.0 + random.nextDouble() * 100.0;
       final distance = (size.width / 2) + speed * progress;
-
       final x = center.dx + math.cos(angle) * distance;
       final y = center.dy + math.sin(angle) * distance;
-
       final rectSize = 3.0 + random.nextDouble() * 5.0;
-      canvas.drawRect(
-        Rect.fromCenter(
-          center: Offset(x, y),
-          width: rectSize,
-          height: rectSize,
-        ),
-        paint,
-      );
+      canvas.drawRect(Rect.fromCenter(center: Offset(x, y), width: rectSize, height: rectSize), paint);
     }
   }
 
@@ -2890,7 +2186,6 @@ class _ParticleBurstPainter extends CustomPainter {
   }
 }
 
-// ─── _ScanLinePainter ─────────────────────────────────────────────────────────
 class _ScanLinePainter extends CustomPainter {
   final double scanValue;
   final double circleSize;
@@ -2901,19 +2196,13 @@ class _ScanLinePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final double radius = circleSize / 2;
     final double yOffset = (scanValue - 0.5) * circleSize;
-    final double halfWidth = math.sqrt(
-      math.max(0.0, radius * radius - yOffset * yOffset),
-    );
+    final double halfWidth = math.sqrt(math.max(0.0, radius * radius - yOffset * yOffset));
 
     final paint = Paint()
       ..color = AppStyles.primaryBlue
       ..strokeWidth = 2.5
       ..shader = LinearGradient(
-        colors: [
-          AppStyles.primaryBlue.withValues(alpha: 0),
-          AppStyles.primaryBlue,
-          AppStyles.primaryBlue.withValues(alpha: 0),
-        ],
+        colors: [AppStyles.primaryBlue.withValues(alpha: 0), AppStyles.primaryBlue, AppStyles.primaryBlue.withValues(alpha: 0)],
       ).createShader(Rect.fromLTWH(radius - halfWidth, 0, halfWidth * 2, 1));
 
     final Offset start = Offset(radius - halfWidth, radius + yOffset);
@@ -2936,7 +2225,6 @@ class _ScanLinePainter extends CustomPainter {
   }
 }
 
-// ─── _MiniRingPainter ─────────────────────────────────────────────────────────
 class _MiniRingPainter extends CustomPainter {
   final double progress;
   final Color color;
@@ -2948,36 +2236,15 @@ class _MiniRingPainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final radius = (size.width - 8) / 2;
 
-    final trackPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.08)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.5
-      ..strokeCap = StrokeCap.round;
+    final trackPaint = Paint()..color = Colors.black.withValues(alpha: 0.08)..style = PaintingStyle.stroke..strokeWidth = 3.5..strokeCap = StrokeCap.round;
+    canvas.drawArc(Rect.fromCircle(center: center, radius: radius), -math.pi / 2, 2 * math.pi, false, trackPaint);
 
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      -math.pi / 2,
-      2 * math.pi,
-      false,
-      trackPaint,
-    );
-
-    final arcPaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.5
-      ..strokeCap = StrokeCap.round;
-
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      -math.pi / 2,
-      2 * math.pi * progress,
-      false,
-      arcPaint,
-    );
+    final arcPaint = Paint()..color = color..style = PaintingStyle.stroke..strokeWidth = 3.5..strokeCap = StrokeCap.round;
+    canvas.drawArc(Rect.fromCircle(center: center, radius: radius), -math.pi / 2, 2 * math.pi * progress, false, arcPaint);
   }
 
   @override
-  bool shouldRepaint(covariant _MiniRingPainter old) =>
-      old.progress != progress || old.color != color;
+  bool shouldRepaint(covariant _MiniRingPainter oldDelegate) {
+    return oldDelegate.progress != progress || oldDelegate.color != color;
+  }
 }
