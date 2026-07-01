@@ -1570,7 +1570,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
                           ),
                           if (_phase == _Phase.error)
                             Positioned(
-                              top: circleTop + circleSize + 24,
+                              top: circleTop + circleSize + 40,
                               left: 16,
                               right: 16,
                               bottom: 16,
