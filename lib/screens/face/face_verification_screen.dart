@@ -2698,10 +2698,28 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   Widget _buildCameraPreview(double containerWidth) {
     if (!_cameraInitialized || _cameraController == null) {
+      final double circleSize = _uiCircleSize;
+      final double circleTop = _uiAvailH * 0.40 - circleSize / 2;
+      final double targetCenterY = circleTop + circleSize / 2;
       return SizedBox(
         width: containerWidth,
         height: containerWidth,
-        child: _PulsingCameraLoader(),
+        child: Stack(
+          children: [
+            Container(color: const Color(0xFFF0F4FF)),
+            Align(
+              alignment: Alignment(
+                0.0,
+                (targetCenterY / (containerWidth / 2)) - 1.0,
+              ),
+              child: SizedBox(
+                width: 120,
+                height: 120,
+                child: _PulsingCameraLoader(),
+              ),
+            ),
+          ],
+        ),
       );
     }
 
@@ -2961,31 +2979,40 @@ class _PulsingCameraLoader extends StatefulWidget {
 }
 
 class _PulsingCameraLoaderState extends State<_PulsingCameraLoader>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _pulse;
+    with TickerProviderStateMixin {
+  late AnimationController _pulseController;
+  late AnimationController _rotateController;
   late Animation<double> _scale;
   late Animation<double> _opacity;
 
   @override
   void initState() {
     super.initState();
-    _pulse = AnimationController(
+    _pulseController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1400),
+      duration: const Duration(milliseconds: 1200),
     )..repeat(reverse: true);
+
     _scale = Tween<double>(
-      begin: 0.82,
-      end: 1.0,
-    ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+      begin: 0.90,
+      end: 1.05,
+    ).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
+
     _opacity = Tween<double>(
-      begin: 0.4,
-      end: 0.85,
-    ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+      begin: 0.6,
+      end: 0.95,
+    ).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
+
+    _rotateController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2500),
+    )..repeat();
   }
 
   @override
   void dispose() {
-    _pulse.dispose();
+    _pulseController.dispose();
+    _rotateController.dispose();
     super.dispose();
   }
 
@@ -2995,41 +3022,116 @@ class _PulsingCameraLoaderState extends State<_PulsingCameraLoader>
       color: const Color(0xFFF0F4FF),
       child: Center(
         child: AnimatedBuilder(
-          animation: _pulse,
+          animation: Listenable.merge([_pulseController, _rotateController]),
           builder: (context, child) {
-            return Opacity(
-              opacity: _opacity.value,
-              child: Transform.scale(
-                scale: _scale.value,
-                child: Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF1A73E8).withValues(alpha: 0.12),
+            return SizedBox(
+              width: 120,
+              height: 120,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  CustomPaint(
+                    size: const Size(120, 120),
+                    painter: _OrbitRingsPainter(
+                      rotation1: _rotateController.value * 2 * math.pi,
+                      rotation2: -_rotateController.value * 2 * math.pi,
+                      color: const Color(0xFF1A73E8),
+                    ),
                   ),
-                  child: Center(
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Color(0xFF1A73E8),
-                      ),
-                      child: const Icon(
-                        Icons.camera_alt_rounded,
-                        color: Colors.white,
-                        size: 22,
+                  ScaleTransition(
+                    scale: _scale,
+                    child: FadeTransition(
+                      opacity: _opacity,
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF1A73E8),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF1A73E8).withValues(alpha: 0.3),
+                              blurRadius: 8,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.camera_alt_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
                       ),
                     ),
                   ),
-                ),
+                ],
               ),
             );
           },
         ),
       ),
     );
+  }
+}
+
+class _OrbitRingsPainter extends CustomPainter {
+  final double rotation1;
+  final double rotation2;
+  final Color color;
+
+  _OrbitRingsPainter({
+    required this.rotation1,
+    required this.rotation2,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+
+    final outerRect = Rect.fromCircle(center: center, radius: 42);
+    final outerPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round
+      ..shader = SweepGradient(
+        colors: [color, color.withValues(alpha: 0.1), color],
+        stops: const [0.0, 0.5, 1.0],
+      ).createShader(outerRect);
+
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(rotation1);
+    canvas.translate(-center.dx, -center.dy);
+    canvas.drawArc(outerRect, 0, math.pi * 0.7, false, outerPaint);
+    canvas.drawArc(outerRect, math.pi, math.pi * 0.7, false, outerPaint);
+    canvas.restore();
+
+    final innerRect = Rect.fromCircle(center: center, radius: 34);
+    final innerPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round
+      ..shader = SweepGradient(
+        colors: [color.withValues(alpha: 0.8), color.withValues(alpha: 0.05), color.withValues(alpha: 0.8)],
+        stops: const [0.0, 0.5, 1.0],
+      ).createShader(innerRect);
+
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(rotation2);
+    canvas.translate(-center.dx, -center.dy);
+    canvas.drawArc(innerRect, 0, math.pi * 0.4, false, innerPaint);
+    canvas.drawArc(innerRect, math.pi * 2 / 3, math.pi * 0.4, false, innerPaint);
+    canvas.drawArc(innerRect, math.pi * 4 / 3, math.pi * 0.4, false, innerPaint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _OrbitRingsPainter oldDelegate) {
+    return oldDelegate.rotation1 != rotation1 ||
+        oldDelegate.rotation2 != rotation2 ||
+        oldDelegate.color != color;
   }
 }
 

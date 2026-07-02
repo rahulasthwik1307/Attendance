@@ -1868,7 +1868,9 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
 
       // Fetch teacher full names from users table
       final teacherIds = timetableRows
-          .map((r) => r['teacher_id'] as String)
+          .map((r) => r['teacher_id'] as String?)
+          .where((id) => id != null)
+          .cast<String>()
           .toSet()
           .toList();
       final Map<String, String> teacherFullNames = {};
@@ -1936,7 +1938,7 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
       for (final row in sortedRows) {
         final subjectId = row['subject_id'] as String;
 
-        final teacherId = row['teacher_id'] as String;
+        final teacherId = row['teacher_id'] as String?;
         final subjectName =
             (row['subject'] as Map?)?['name'] as String? ?? 'Unknown';
         final periodNumber =
@@ -1948,9 +1950,11 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
             );
         final endTime = ((row['period'] as Map?)?['end_time'] as String? ?? '')
             .substring(0, 5);
-        final title = teacherTitles[teacherId] ?? 'Mr';
-        final fullName = teacherFullNames[teacherId] ?? '';
-        final facultyName = fullName.isNotEmpty ? '$title. $fullName' : title;
+        // Empty when unassigned — the schedule card simply omits the teacher line,
+        // matching how commercial student apps handle missing faculty assignment
+        final title = teacherId != null ? (teacherTitles[teacherId] ?? 'Mr') : '';
+        final fullName = teacherId != null ? (teacherFullNames[teacherId] ?? '') : '';
+        final facultyName = fullName.isNotEmpty ? '$title. $fullName' : '';
 
         final key = subjectId;
         final session = sessionMap[key];
@@ -3482,18 +3486,20 @@ class _ScheduleCardState extends State<_ScheduleCard>
                                 height: 1.25,
                               ),
                             ),
-                            const SizedBox(height: 5),
-                            // Faculty name — always directly below subject
-                            Text(
-                              widget.item['teacher'] as String,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: textSecondary,
-                                fontWeight: FontWeight.w600,
+                            if ((widget.item['teacher'] as String? ?? '').isNotEmpty) ...[
+                              const SizedBox(height: 5),
+                              // Faculty name — always directly below subject when assigned
+                              Text(
+                                widget.item['teacher'] as String,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: textSecondary,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                            ),
+                            ],
                           ],
                         ),
                       ),

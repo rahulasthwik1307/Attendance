@@ -312,6 +312,40 @@ class _HistoryScreenState extends State<HistoryScreen>
         return;
       }
 
+      // Build subjectId -> teacher display name map via teacher_assignments
+      // (the current source of truth for who teaches what)
+      final assignmentsForClass = await supabase
+          .from('teacher_assignments')
+          .select('subject_id, teacher_id')
+          .eq('class_id', _studentClassId!);
+
+      final Map<String, String> subjectTeacherMap = {};
+      final assignmentTeacherIds = (assignmentsForClass as List)
+          .map((a) => a['teacher_id'] as String?)
+          .where((id) => id != null)
+          .cast<String>()
+          .toSet()
+          .toList();
+
+      if (assignmentTeacherIds.isNotEmpty) {
+        final teacherNamesResp = await supabase
+            .rpc('get_teacher_names', params: {'teacher_ids': assignmentTeacherIds});
+        final Map<String, String> idToName = {};
+        for (final t in (teacherNamesResp as List)) {
+          final id = t['id'] as String?;
+          final name = (t['full_name'] as String?)?.trim() ?? '';
+          final title = (t['title'] as String?)?.trim() ?? 'Mr';
+          if (id != null && name.isNotEmpty) idToName[id] = '$title. $name';
+        }
+        for (final a in assignmentsForClass) {
+          final subjId = a['subject_id'] as String?;
+          final teacherId = a['teacher_id'] as String?;
+          if (subjId != null && teacherId != null && idToName.containsKey(teacherId)) {
+            subjectTeacherMap[subjId] = idToName[teacherId]!;
+          }
+        }
+      }
+
       // Fetch all finalized sessions for this class from startDate
       final startDateStr = startDate.toIso8601String().split('T')[0];
       final todayStr = today.toIso8601String().split('T')[0];
@@ -468,6 +502,7 @@ class _HistoryScreenState extends State<HistoryScreen>
           built.add({
             'dateGroup': dateGroup,
             'subject': subjectName,
+            'teacher': subjectTeacherMap[subjectId] ?? '',
             'period': periodLabel,
             'time': timeDisplay,
             'status': status,
@@ -638,7 +673,9 @@ class _HistoryScreenState extends State<HistoryScreen>
 
       // Fetch teacher names
       final teacherIds = rows
-          .map((r) => r['teacher_id'] as String)
+          .map((r) => r['teacher_id'] as String?)
+          .where((id) => id != null)
+          .cast<String>()
           .toSet()
           .toList();
       final teacherNamesResp = await supabase
@@ -656,10 +693,11 @@ class _HistoryScreenState extends State<HistoryScreen>
       }
 
       final List<Map<String, dynamic>> slots = rows.map<Map<String, dynamic>>((r) {
-        final teacherId = r['teacher_id'] as String;
-        final title = teacherTitleMap[teacherId] ?? 'Mr';
-        final fullName = teacherFullNames[teacherId] ?? '';
-        final facultyName = fullName.trim().isNotEmpty ? '$title. $fullName' : 'Faculty';
+        final teacherId = r['teacher_id'] as String?;
+        final title = teacherId != null ? (teacherTitleMap[teacherId] ?? 'Mr') : '';
+        final fullName = teacherId != null ? (teacherFullNames[teacherId] ?? '') : '';
+        // Empty string when unassigned — the UI hides the row entirely rather than showing a label
+        final facultyName = fullName.trim().isNotEmpty ? '$title. $fullName' : '';
 
         final periodNum = (r['period'] as Map?)?['period_number'] as int? ?? 0;
         final startTime = ((r['period'] as Map?)?['start_time'] as String? ?? '').isNotEmpty
@@ -1733,6 +1771,30 @@ class _ClassPeriodRow extends StatelessWidget {
                         theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
                   ),
                 ),
+                if ((record['teacher'] as String? ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.person_outline_rounded,
+                        size: 11,
+                        color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                      ),
+                      const SizedBox(width: 3),
+                      Flexible(
+                        child: Text(
+                          record['teacher'] as String,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -3107,11 +3169,11 @@ class _WeekGridView extends StatelessWidget {
                         ? words.map((w) => w.isNotEmpty ? w[0].toUpperCase() : '').join()
                         : subject.length > 4 ? subject.substring(0, 4) : subject;
 
-                    // Last name only for grid cell (e.g. "Devi" from "Mr. Devi")
+                    // Last name only for grid cell — empty string when unassigned
                     final parts = faculty.trim().split(' ');
-                    final teacherShort = parts.length >= 2
-                        ? parts[1]
-                        : (parts.isNotEmpty ? parts[0] : faculty);
+                    final teacherShort = faculty.isEmpty
+                        ? ''
+                        : (parts.length >= 2 ? parts[1] : (parts.isNotEmpty ? parts[0] : faculty));
 
 
                     return Expanded(
@@ -3165,19 +3227,20 @@ class _WeekGridView extends StatelessWidget {
                                 color: color.withValues(alpha: 0.3),
                               ),
                               const SizedBox(height: 4),
-                              Text(
-                                teacherShort,
-                                textAlign: TextAlign.center,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 6,
-                                  fontWeight: FontWeight.w700,
-                                  color: isDark
-                                      ? Colors.white.withValues(alpha: 0.55)
-                                      : AppStyles.textGray,
+                              if (teacherShort.isNotEmpty)
+                                Text(
+                                  teacherShort,
+                                  textAlign: TextAlign.center,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 6,
+                                    fontWeight: FontWeight.w700,
+                                    color: isDark
+                                        ? Colors.white.withValues(alpha: 0.55)
+                                        : AppStyles.textGray,
+                                  ),
                                 ),
-                              ),
                             ],
                           ),
                         ),
@@ -3318,32 +3381,33 @@ class _TimetablePeriodRowState extends State<_TimetablePeriodRow> {
                                   overflow: TextOverflow.ellipsis,
                                 ),
                                 const SizedBox(height: 3),
-                                Row(
-                                  children: [
-                                    Icon(
-                                      Icons.person_outline_rounded,
-                                      size: 11,
-                                      color: widget.theme.textTheme
-                                              .bodyMedium?.color ??
-                                          AppStyles.textGray,
-                                    ),
-                                    const SizedBox(width: 3),
-                                    Expanded(
-                                      child: Text(
-                                        faculty,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w500,
-                                          color: widget.theme.textTheme
-                                                  .bodyMedium?.color ??
-                                              AppStyles.textGray,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
+                                if (faculty.isNotEmpty)
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.person_outline_rounded,
+                                        size: 11,
+                                        color: widget.theme.textTheme
+                                                .bodyMedium?.color ??
+                                            AppStyles.textGray,
                                       ),
-                                    ),
-                                  ],
-                                ),
+                                      const SizedBox(width: 3),
+                                      Expanded(
+                                        child: Text(
+                                          faculty,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w500,
+                                            color: widget.theme.textTheme
+                                                    .bodyMedium?.color ??
+                                                AppStyles.textGray,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                               ],
                             ),
                           ),
