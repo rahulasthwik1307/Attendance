@@ -22,6 +22,7 @@ import '../../services/calibration_service.dart';
 import '../../utils/app_styles.dart';
 import '../../utils/camera_stabilizer.dart';
 import '../../utils/threshold_calculator.dart';
+import '../../utils/calibration_template_builder.dart';
 
 enum _Phase {
   initializing,
@@ -112,6 +113,8 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
   double _calMeanSimilarity = 0.0;
   double _calSimilarityStdDev = 0.0;
   final Stopwatch _calDurationStopwatch = Stopwatch();
+  // Stage 2: single structured result replacing scattered diagnostic state vars.
+  CalibrationIdentityResult? _calibrationResult;
 
 
 
@@ -663,26 +666,43 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
         _liveEmbeddings.add(res.embedding!);
       }
 
-      final List<List<double>> templates = [
-        _embeddingA,
-        _embeddingB,
-        _embeddingC,
-        _masterEmbedding,
-      ].whereType<List<double>>().toList();
+      // Build stable live templates mirroring the registration architecture.
+      // Splits accepted embeddings into 3 dynamic groups, fuses each via
+      // weightedAverageEmbeddings(), then fuses the group templates into a
+      // Live Master — identical to how the registration Master is produced.
+      final CalibrationLiveTemplate liveTemplate =
+          CalibrationTemplateBuilder.buildLiveTemplate(
+        acceptedEmbeddings: _liveEmbeddings,
+        landmarkService:    _landmarkService,
+      );
 
-      double simSum = 0.0;
-      int simCount = 0;
-      for (final live in _liveEmbeddings) {
-        for (final temp in templates) {
-          simSum += _landmarkService.cosineSimilarity(live, temp);
-          simCount++;
-        }
-      }
-      final double meanSim = simCount > 0 ? (simSum / simCount) : 0.0;
-      debugPrint('[FACE_CAL] Identity check mean similarity: $meanSim against $simCount templates');
+      // Weighted identity decision with dynamic, normalised weights.
+      // Master template receives 3 votes; each auxiliary receives 1 vote.
+      // Weights are recomputed from the set of templates actually present.
+      _calibrationResult = CalibrationTemplateBuilder.computeIdentity(
+        liveTemplate:      liveTemplate,
+        storedA:           _embeddingA,
+        storedB:           _embeddingB,
+        storedC:           _embeddingC,
+        storedMaster:      _masterEmbedding,
+        landmarkService:   _landmarkService,
+        identityThreshold: 0.75,
+      );
 
-      if (simCount > 0 && meanSim < 0.75) {
-        throw Exception("Face does not match your registered profile. Please ensure you are the registered student.");
+      FaceLogger.cal(_sessionId, 'Live Template Fusion');
+      FaceLogger.cal(_sessionId, '  Groups           : ${liveTemplate.groupSizes}');
+      FaceLogger.cal(_sessionId, '  Fusion Quality   : ${liveTemplate.fusionQuality.toStringAsFixed(1)}');
+      FaceLogger.cal(_sessionId, '  Fusion Confidence: ${liveTemplate.fusionConfidence.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, 'Identity Decision (Template ↔ Template)');
+      FaceLogger.cal(_sessionId, '  Live Master <-> Reg Master : ${_calibrationResult!.simMaster.toStringAsFixed(4)} (w=${_calibrationResult!.weightMaster.toStringAsFixed(4)})');
+      FaceLogger.cal(_sessionId, '  Live A      <-> Reg A      : ${_calibrationResult!.simA.toStringAsFixed(4)} (w=${_calibrationResult!.weightA.toStringAsFixed(4)})');
+      FaceLogger.cal(_sessionId, '  Live B      <-> Reg B      : ${_calibrationResult!.simB.toStringAsFixed(4)} (w=${_calibrationResult!.weightB.toStringAsFixed(4)})');
+      FaceLogger.cal(_sessionId, '  Live C      <-> Reg C      : ${_calibrationResult!.simC.toStringAsFixed(4)} (w=${_calibrationResult!.weightC.toStringAsFixed(4)})');
+      FaceLogger.cal(_sessionId, '  Identity Score   : ${_calibrationResult!.identityScore.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Decision         : ${_calibrationResult!.decision}');
+
+      if (!_calibrationResult!.passed) {
+        throw Exception('Face does not match your registered profile. Please ensure you are the registered student.');
       }
 
       _calDurationStopwatch.start();
@@ -708,6 +728,15 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
       FaceLogger.cal(_sessionId, '  Frames Captured       : $_totalFramesCaptured (Attempt Captured: $_calFramesCaptured)');
       FaceLogger.cal(_sessionId, '  Frames Accepted       : ${topResults.length} (Attempt Accepted: $_calFramesAccepted)');
       FaceLogger.cal(_sessionId, '  Frames Rejected       : $_calFramesRejected');
+      FaceLogger.cal(_sessionId, '  Live Fusion Groups    : ${_calibrationResult!.liveTemplate.groupSizes}');
+      FaceLogger.cal(_sessionId, '  Live Master <-> Master: ${_calibrationResult!.simMaster.toStringAsFixed(4)} (w=${_calibrationResult!.weightMaster.toStringAsFixed(4)})');
+      FaceLogger.cal(_sessionId, '  Live A      <-> Reg A : ${_calibrationResult!.simA.toStringAsFixed(4)} (w=${_calibrationResult!.weightA.toStringAsFixed(4)})');
+      FaceLogger.cal(_sessionId, '  Live B      <-> Reg B : ${_calibrationResult!.simB.toStringAsFixed(4)} (w=${_calibrationResult!.weightB.toStringAsFixed(4)})');
+      FaceLogger.cal(_sessionId, '  Live C      <-> Reg C : ${_calibrationResult!.simC.toStringAsFixed(4)} (w=${_calibrationResult!.weightC.toStringAsFixed(4)})');
+      FaceLogger.cal(_sessionId, '  Identity Score        : ${_calibrationResult!.identityScore.toStringAsFixed(4)}');
+      FaceLogger.cal(_sessionId, '  Identity Decision     : ${_calibrationResult!.decision}');
+      FaceLogger.cal(_sessionId, '  Fusion Quality        : ${_calibrationResult!.liveTemplate.fusionQuality.toStringAsFixed(1)}');
+      FaceLogger.cal(_sessionId, '  Fusion Confidence     : ${_calibrationResult!.liveTemplate.fusionConfidence.toStringAsFixed(4)}');
       FaceLogger.cal(_sessionId, '  Mean Similarity       : ${_calMeanSimilarity.toStringAsFixed(4)}');
       FaceLogger.cal(_sessionId, '  StdDev                : ${_calSimilarityStdDev.toStringAsFixed(4)}');
       FaceLogger.cal(_sessionId, '  Generated Threshold   : ${_calGeneratedThreshold.toStringAsFixed(4)}');
@@ -773,6 +802,10 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
           'framesAccepted': _calFramesAccepted,
           'framesRejected': _calFramesRejected,
           'durationMs': _calDurationStopwatch.elapsedMilliseconds,
+          // Stage 2 diagnostics (additive — preview screen ignores unknown keys)
+          'identityScore': _calibrationResult?.identityScore ?? 0.0,
+          'identityDecision': _calibrationResult?.decision ?? 'N/A',
+          'liveFusionGroups': _calibrationResult?.liveTemplate.groupSizes.toString() ?? 'N/A',
         },
       );
     } catch (e) {
@@ -844,6 +877,7 @@ class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerif
     _calFramesCaptured = 0;
     _calFramesAccepted = 0;
     _calFramesRejected = 0;
+    _calibrationResult = null;
     if (resetAttemptCount) _attemptCount = 1;
   }
 
