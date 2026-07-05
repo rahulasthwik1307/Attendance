@@ -100,11 +100,8 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   int _totalFramesCaptured = 0;
   static const int _framesPerPhase = 5;
 
-  List<double>? _embeddingA;
-  List<double>? _embeddingB;
-  List<double>? _embeddingC;
   List<double>? _masterEmbedding;
-  double _verificationThreshold = 0.82;
+  double _verificationThreshold = 0.70;
 
   int _attemptCount = 1;
 
@@ -388,7 +385,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       debugPrint('[CAM_INIT] ML landmark service initialized');
 
       await _loadEmbeddings();
-      if (_embeddingA == null || _embeddingB == null || _embeddingC == null) {
+      if (_masterEmbedding == null) {
         debugPrint('[CAM_INIT] Embeddings missing — aborting');
         return;
       }
@@ -431,31 +428,17 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       final user = Supabase.instance.client.auth.currentUser;
 
       if (user != null && cachedStudentId == user.id && !isExpired) {
-        final embAJson = prefs.getString('emb_a');
-        final embBJson = prefs.getString('emb_b');
-        final embCJson = prefs.getString('emb_c');
         final embMasterJson = prefs.getString('emb_master');
         final String? thresholdStr = prefs.getString('emb_threshold_${user.id}');
-        if (embAJson != null && embBJson != null && embCJson != null) {
-          _embeddingA = (jsonDecode(embAJson) as List)
+        if (embMasterJson != null) {
+          _masterEmbedding = (jsonDecode(embMasterJson) as List)
               .map((e) => (e as num).toDouble())
               .toList();
-          _embeddingB = (jsonDecode(embBJson) as List)
-              .map((e) => (e as num).toDouble())
-              .toList();
-          _embeddingC = (jsonDecode(embCJson) as List)
-              .map((e) => (e as num).toDouble())
-              .toList();
-          if (embMasterJson != null) {
-            _masterEmbedding = (jsonDecode(embMasterJson) as List)
-                .map((e) => (e as num).toDouble())
-                .toList();
-          }
           _verificationThreshold = thresholdStr != null 
-              ? double.tryParse(thresholdStr) ?? 0.82 
-              : 0.82;
+              ? double.tryParse(thresholdStr) ?? 0.70 
+              : 0.70;
           debugPrint('[FACE_VER] Threshold loaded from cache: $_verificationThreshold');
-          debugPrint('[FACE_VER] Master embedding cached: ${_masterEmbedding != null}');
+          debugPrint('[FACE_VER] Master embedding loaded from cache');
           return;
         }
       }
@@ -468,49 +451,39 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
       final data = await Supabase.instance.client
           .from('students')
-          .select('embedding_a, embedding_b, embedding_c, face_embedding, verification_threshold')
+          .select('face_embedding, verification_threshold')
           .eq('id', user.id)
           .maybeSingle();
 
-      if (data == null ||
-          data['embedding_a'] == null ||
-          data['embedding_b'] == null ||
-          data['embedding_c'] == null) {
+      if (data == null || data['face_embedding'] == null) {
         _setError('Could not load face profile. Please try again.');
         return;
       }
 
-      _embeddingA = (data['embedding_a'] as List)
+      _masterEmbedding = (data['face_embedding'] as List)
           .map((e) => (e as num).toDouble())
           .toList();
-      _embeddingB = (data['embedding_b'] as List)
-          .map((e) => (e as num).toDouble())
-          .toList();
-      _embeddingC = (data['embedding_c'] as List)
-          .map((e) => (e as num).toDouble())
-          .toList();
-      if (data['face_embedding'] != null) {
-        _masterEmbedding = (data['face_embedding'] as List)
-            .map((e) => (e as num).toDouble())
-            .toList();
-      }
-      _verificationThreshold = (data['verification_threshold'] as num?)?.toDouble() ?? 0.82;
+      _verificationThreshold = (data['verification_threshold'] as num?)?.toDouble() ?? 0.70;
       debugPrint('[FACE_VER] Threshold loaded from Supabase: $_verificationThreshold');
-      debugPrint('[FACE_VER] Master embedding loaded: ${_masterEmbedding != null}');
+      debugPrint('[FACE_VER] Master embedding loaded from Supabase');
+
+      // Clear any previous user's cached embeddings first
+      await prefs.remove('emb_a');
+      await prefs.remove('emb_b');
+      await prefs.remove('emb_c');
+      await prefs.remove('emb_master');
+      await prefs.remove('emb_student_id');
+      await prefs.remove('emb_cached_at');
 
       // Cache for next time
-      await prefs.setString('emb_a', jsonEncode(_embeddingA));
-      await prefs.setString('emb_b', jsonEncode(_embeddingB));
-      await prefs.setString('emb_c', jsonEncode(_embeddingC));
       if (_masterEmbedding != null) {
         await prefs.setString('emb_master', jsonEncode(_masterEmbedding));
       }
       await prefs.setString('emb_threshold_${user.id}', _verificationThreshold.toString());
-      debugPrint('[FACE_VER] Threshold cached for user ${user.id}: $_verificationThreshold');
       await prefs.setString('emb_student_id', user.id);
       await prefs.setInt('emb_cached_at', now);
       debugPrint(
-        '[FACE_VER] Embeddings A, B, C + master loaded from Supabase and cached',
+        '[FACE_VER] Master embedding loaded from Supabase and cached',
       );
     } catch (e) {
       _setError('Could not load face profile. Please try again.');
@@ -925,9 +898,6 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         localStatsList: _capturedVerificationFramesStats,
         sessionId: _sessionId,
         prefix: 'FACE_VER',
-        storedA: _embeddingA,
-        storedB: _embeddingB,
-        storedC: _embeddingC,
         storedMaster: _masterEmbedding,
         threshold: _verificationThreshold,
       );
@@ -995,46 +965,19 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         _liveEmbeddings.add(res.embedding!);
       }
 
-      // Calculate dynamic threshold based on front scores
-      final List<double> frontScores = _liveEmbeddings
-          .map((e) => _landmarkService.cosineSimilarity(e, _embeddingA!))
-          .toList();
-      final double dynamicThreshold = _calculateDynamicThreshold(frontScores);
-
       FaceLogger.ver(
         _sessionId ?? 'QR_VER',
-        'Using personal threshold: $_verificationThreshold',
+        'Using threshold: $_verificationThreshold',
       );
       FaceLogger.ver(
         _sessionId ?? 'QR_VER',
         'Master embedding available: ${_masterEmbedding != null}',
       );
 
-      // Per-frame similarity matrix logging
-      for (int i = 0; i < topResults.length; i++) {
-        final res = topResults[i];
-        final double sA = _landmarkService.cosineSimilarity(res.embedding!, _embeddingA!);
-        final double sB = _landmarkService.cosineSimilarity(res.embedding!, _embeddingB!);
-        final double sC = _landmarkService.cosineSimilarity(res.embedding!, _embeddingC!);
-        final double sMaster = _masterEmbedding != null
-            ? _landmarkService.cosineSimilarity(res.embedding!, _masterEmbedding!)
-            : 0.0;
-        final double quality = res.rawQualityScore;
-        FaceLogger.ver(
-          _sessionId ?? 'QR_VER',
-          '  Frame ${i + 1} | Quality=${quality.toStringAsFixed(1)} | '
-          'sA=${sA.toStringAsFixed(4)} | sB=${sB.toStringAsFixed(4)} | '
-          'sC=${sC.toStringAsFixed(4)} | sMaster=${sMaster.toStringAsFixed(4)}',
-        );
-      }
-      
       _comparisonStopwatch.start();
       final result = _landmarkService.verifyFace(
         liveEmbeddings: _liveEmbeddings,
-        storedEmbeddingA: _embeddingA!,
-        storedEmbeddingB: _embeddingB!,
-        storedEmbeddingC: _embeddingC!,
-        masterEmbedding: _masterEmbedding,
+        storedMasterEmbedding: _masterEmbedding!,
         threshold: _verificationThreshold,
       );
       _comparisonStopwatch.stop();
@@ -1050,21 +993,6 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       final double minQuality = topResults.isEmpty
           ? 0.0
           : topResults.map((e) => e.rawQualityScore).reduce((a, b) => math.min(a, b));
-
-      final double overallSimilarityA = topResults.isEmpty
-          ? 0.0
-          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingA!)).reduce((a, b) => a + b) / topResults.length;
-      final double overallSimilarityB = topResults.isEmpty
-          ? 0.0
-          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingB!)).reduce((a, b) => a + b) / topResults.length;
-      final double overallSimilarityC = topResults.isEmpty
-          ? 0.0
-          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingC!)).reduce((a, b) => a + b) / topResults.length;
-      final double overallSimilarityMaster = _masterEmbedding == null
-          ? 0.0
-          : (topResults.isEmpty
-              ? 0.0
-              : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _masterEmbedding!)).reduce((a, b) => a + b) / topResults.length);
 
       final int framesAccepted = _validFrameCount;
       final int framesRejected = _totalFramesCaptured - framesAccepted;
@@ -1094,10 +1022,6 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       FaceLogger.ver(_sessionId ?? 'QR_VER', '  Avg Local Brightness  : ${avgLocalBrightness.toStringAsFixed(1)}');
       FaceLogger.ver(_sessionId ?? 'QR_VER', '  Avg Local Contrast    : ${avgLocalContrast.toStringAsFixed(1)}');
       FaceLogger.ver(_sessionId ?? 'QR_VER', '  Avg Local Sharpness    : ${avgLocalSharpness.toStringAsFixed(1)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity A          : ${overallSimilarityA.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity B          : ${overallSimilarityB.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity C          : ${overallSimilarityC.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Master Similarity     : ${overallSimilarityMaster.toStringAsFixed(4)}');
       FaceLogger.ver(_sessionId ?? 'QR_VER', '  Final Similarity      : ${result.score.toStringAsFixed(4)}');
       FaceLogger.ver(_sessionId ?? 'QR_VER', '  Threshold             : ${_verificationThreshold.toStringAsFixed(4)}');
       FaceLogger.ver(_sessionId ?? 'QR_VER', '  Decision              : ${result.isMatch ? "PASS" : "FAIL"}');
@@ -1108,71 +1032,13 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       FaceLogger.ver(_sessionId ?? 'QR_VER', '  Total Time            : ${_totalStopwatch.elapsedMilliseconds}ms');
       FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
 
-      final double driftScore = _liveEmbeddings.isEmpty ? 0.0 : 1.0 - _landmarkService.cosineSimilarity(_liveEmbeddings.first, _liveEmbeddings.last);
-      final bool driftDetected = driftScore > 0.15;
-
-      FaceLogger.ver(_sessionId ?? 'QR_VER', 'EMBEDDING DRIFT DIAGNOSTICS');
-      FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity to Template A : ${overallSimilarityA.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity to Template B : ${overallSimilarityB.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity to Template C : ${overallSimilarityC.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity to Master     : ${overallSimilarityMaster.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Embedding Variance       : ${_landmarkService.lastEmbeddingVariance.toStringAsFixed(6)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Avg Intra-frame Sim      : ${_landmarkService.lastAverageSimilarity.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Drift Score              : ${driftScore.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Drift Detected           : ${driftDetected ? "YES" : "NO"}');
-      FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
-
-      final double effectiveThreshold = math.max(_verificationThreshold, 0.65);
-      final double similarityMargin = result.score - _verificationThreshold;
-      final double decisionMargin = result.score - effectiveThreshold;
-
-      FaceLogger.ver(_sessionId ?? 'QR_VER', 'ADAPTIVE THRESHOLD DIAGNOSTICS');
-      FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Personal Threshold    : ${_verificationThreshold.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Current Threshold     : ${effectiveThreshold.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Adaptive Threshold    : ${dynamicThreshold.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Similarity Margin     : ${similarityMargin.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId ?? 'QR_VER', '  Decision Margin       : ${decisionMargin.toStringAsFixed(4)}');
-      FaceLogger.separator(_sessionId ?? 'QR_VER', 'FACE_VER');
-
       FaceLogger.ver(
         _sessionId ?? 'QR_VER',
-        'Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | DynThreshold: ${dynamicThreshold.toStringAsFixed(4)}',
+        'Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length}',
       );
 
       if (result.isMatch) {
-        // ── Adaptive update: improve master on high-confidence match ──
-        bool adaptiveUpdateApplied = false;
-        if (result.score >= 0.80 && _masterEmbedding != null) {
-          try {
-            final meanLive = _landmarkService.averageEmbeddings(_liveEmbeddings);
-            final int dim = _masterEmbedding!.length;
-            final List<double> blended = List.generate(
-              dim,
-              (i) => 0.95 * _masterEmbedding![i] + 0.05 * meanLive[i],
-            );
-            final newMaster = _landmarkService.l2Normalize(blended);
 
-            final user = Supabase.instance.client.auth.currentUser;
-            if (user != null) {
-              await Supabase.instance.client
-                  .from('students')
-                  .update({'face_embedding': newMaster})
-                  .eq('id', user.id);
-              _masterEmbedding = newMaster;
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setString('emb_master', jsonEncode(newMaster));
-              adaptiveUpdateApplied = true;
-              FaceLogger.ver(_sessionId ?? 'QR_VER', 'adaptiveUpdateApplied=true (score=${result.score.toStringAsFixed(4)})');
-            }
-          } catch (e) {
-            FaceLogger.ver(_sessionId ?? 'QR_VER', 'Adaptive update failed: $e');
-          }
-        }
-        if (!adaptiveUpdateApplied) {
-          FaceLogger.ver(_sessionId ?? 'QR_VER', 'adaptiveUpdateApplied=false');
-        }
 
         // ── Success ──
         setState(() => _borderColor = AppStyles.successGreen);
@@ -1303,18 +1169,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     }
   }
 
-  double _calculateDynamicThreshold(List<double> scores) {
-    if (scores.isEmpty) return 0.75;
-    double mean = scores.reduce((a, b) => a + b) / scores.length;
-    double variance = scores.map((s) => (s - mean) * (s - mean)).reduce((a, b) => a + b) / scores.length;
-    if (variance < 0.01) {
-      return 0.75;
-    } else if (variance < 0.05) {
-      return 0.75;
-    } else {
-      return 0.75;
-    }
-  }
+
 
   void _startCountdownTimer() {
     _countdownTimer?.cancel();

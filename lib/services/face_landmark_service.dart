@@ -106,15 +106,26 @@ class FaceLandmarkService {
       final List<dynamic> embeddings = json['embeddings'];
 
       if (embeddings.isEmpty || embeddings[0] == null) {
-        debugPrint('[FACE_LANDMARK] No face detected by API');
+        debugPrint('[FACE_LANDMARK] Embedding Generation Success: false');
         // Log quality info even on failure
         final List<dynamic>? qualityList = json['quality'] as List<dynamic>?;
         if (qualityList != null && qualityList.isNotEmpty) {
           final q = qualityList[0] as Map<String, dynamic>;
-          debugPrint(
-            '[FACE_LANDMARK] QUALITY: passed=${q['passed']} '
-            'blur=${q['blur_score']} reasons=${q['reasons']}',
-          );
+          final double rawQualityScore = (q['quality_score'] as num?)?.toDouble() ?? 0.0;
+          final double blurScore = (q['blur_score'] as num?)?.toDouble() ?? 0.0;
+          final double faceArea = (q['face_area'] as num?)?.toDouble() ?? 0.0;
+          final double yaw = (q['yaw'] as num?)?.toDouble() ?? 0.0;
+          final double pitch = (q['pitch'] as num?)?.toDouble() ?? 0.0;
+          final List<dynamic>? reasons = q['reasons'] as List<dynamic>?;
+
+          debugPrint('[FACE_LANDMARK] Quality Score: $rawQualityScore');
+          debugPrint('[FACE_LANDMARK] Blur Score: $blurScore');
+          debugPrint('[FACE_LANDMARK] Face Area: $faceArea');
+          debugPrint('[FACE_LANDMARK] Yaw: $yaw');
+          debugPrint('[FACE_LANDMARK] Pitch: $pitch');
+          if (reasons != null && reasons.isNotEmpty) {
+            debugPrint('[FACE_LANDMARK] Quality Reasons: ${reasons.join(', ')}');
+          }
         }
         return null;
       }
@@ -123,7 +134,8 @@ class FaceLandmarkService {
           .map((e) => (e as num).toDouble())
           .toList();
 
-      debugPrint('[FACE_LANDMARK] Received ${embedding.length}-dim embedding');
+      debugPrint('[FACE_LANDMARK] Embedding Generation Success: true');
+      debugPrint('[FACE_LANDMARK] Embedding Length: ${embedding.length}');
 
       // Log quality diagnostics from backend
       double rawQualityScore = 0.0;
@@ -131,12 +143,20 @@ class FaceLandmarkService {
       if (qualityList != null && qualityList.isNotEmpty) {
         final q = qualityList[0] as Map<String, dynamic>;
         rawQualityScore = (q['quality_score'] as num?)?.toDouble() ?? 0.0;
-        debugPrint(
-          '[FACE_LANDMARK] QUALITY: passed=${q['passed']} '
-          'blur=${q['blur_score']} faceArea=${q['face_area']} '
-          'yaw=${q['yaw']} pitch=${q['pitch']} '
-          'reasons=${q['reasons']}',
-        );
+        final double blurScore = (q['blur_score'] as num?)?.toDouble() ?? 0.0;
+        final double faceArea = (q['face_area'] as num?)?.toDouble() ?? 0.0;
+        final double yaw = (q['yaw'] as num?)?.toDouble() ?? 0.0;
+        final double pitch = (q['pitch'] as num?)?.toDouble() ?? 0.0;
+        final List<dynamic>? reasons = q['reasons'] as List<dynamic>?;
+
+        debugPrint('[FACE_LANDMARK] Quality Score: $rawQualityScore');
+        debugPrint('[FACE_LANDMARK] Blur Score: $blurScore');
+        debugPrint('[FACE_LANDMARK] Face Area: $faceArea');
+        debugPrint('[FACE_LANDMARK] Yaw: $yaw');
+        debugPrint('[FACE_LANDMARK] Pitch: $pitch');
+        if (reasons != null && reasons.isNotEmpty) {
+          debugPrint('[FACE_LANDMARK] Quality Reasons: ${reasons.join(', ')}');
+        }
       }
 
       _embeddingQualities[embedding] = rawQualityScore;
@@ -208,6 +228,7 @@ class FaceLandmarkService {
 
       stopwatch.stop();
       log('API Duration: ${stopwatch.elapsedMilliseconds}ms');
+      debugPrint('[FACE_LANDMARK] API Duration: ${stopwatch.elapsedMilliseconds}ms');
 
       if (response.statusCode != 200) {
         log('API Error — HTTP ${response.statusCode}');
@@ -299,6 +320,20 @@ class FaceLandmarkService {
           log('  Reason = $reason');
           log('  Score  = $qScore');
         }
+
+        debugPrint('[FACE_LANDMARK] Frame $frameNum:');
+        debugPrint('[FACE_LANDMARK]   Embedding Generation Success: ${emb != null}');
+        if (emb != null) {
+          debugPrint('[FACE_LANDMARK]   Embedding Length: ${emb.length}');
+        }
+        debugPrint('[FACE_LANDMARK]   Quality Score: $rawQualityScore');
+        debugPrint('[FACE_LANDMARK]   Blur Score: $blurScore');
+        debugPrint('[FACE_LANDMARK]   Face Area: $faceArea');
+        debugPrint('[FACE_LANDMARK]   Yaw: $yaw');
+        debugPrint('[FACE_LANDMARK]   Pitch: $pitch');
+        if (rejectionReason != null) {
+          debugPrint('[FACE_LANDMARK]   Quality Reasons: $rejectionReason');
+        }
       }
 
       final int accepted = result
@@ -353,32 +388,12 @@ class FaceLandmarkService {
 
   // ─── AVERAGE EMBEDDINGS ─────────────────────────────────────────────────
   // Works with any embedding dimension (192 or 512).
-  // Dispatches to weightedAverageEmbeddings if kUseWeightedFusion is enabled,
-  // otherwise falls back to simpleAverageEmbeddings.
   // ────────────────────────────────────────────────────────────────────────
   List<double> averageEmbeddings(List<List<double>> embeddings) {
-    if (kUseWeightedFusion) {
-      return weightedAverageEmbeddings(embeddings);
-    }
-    return simpleAverageEmbeddings(embeddings);
-  }
-
-  List<double> simpleAverageEmbeddings(List<List<double>> embeddings) {
-    debugPrint('[FACE_LANDMARK] Averaging ${embeddings.length} embeddings (simple)');
-    if (embeddings.isEmpty) {
-      debugPrint('[FACE_LANDMARK] No embeddings to average');
-      return [];
-    }
-    if (embeddings.length == 1) {
-      debugPrint('[FACE_LANDMARK] Only one embedding, returning as is');
-      return embeddings[0];
-    }
-
+    if (embeddings.isEmpty) return [];
+    if (embeddings.length == 1) return embeddings[0];
     final int vecSize = embeddings[0].length;
-    debugPrint('[FACE_LANDMARK] Embedding dimension: $vecSize');
-
     final List<double> averaged = List.filled(vecSize, 0.0);
-
     for (final emb in embeddings) {
       for (int i = 0; i < vecSize; i++) {
         averaged[i] += emb[i];
@@ -387,274 +402,7 @@ class FaceLandmarkService {
     for (int i = 0; i < vecSize; i++) {
       averaged[i] /= embeddings.length;
     }
-
-    final normalized = _l2Normalize(averaged);
-    debugPrint(
-      '[FACE_LANDMARK] Averaged embedding first 5: ${normalized.sublist(0, math.min(5, normalized.length)).map((v) => v.toStringAsFixed(4)).join(', ')}',
-    );
-
-    return normalized;
-  }
-
-  List<double> weightedAverageEmbeddings(List<List<double>> embeddings) {
-    if (embeddings.isEmpty) {
-      debugPrint('[FACE_EMBEDDING] No embeddings to average');
-      return [];
-    }
-    if (embeddings.length == 1) {
-      debugPrint('[FACE_EMBEDDING] Only one embedding, returning as is');
-      lastAverageSimilarity = 1.0;
-      lastEmbeddingVariance = 0.0;
-      lastFusionQuality = _embeddingQualities[embeddings[0]] ?? 80.0;
-      lastFusionConfidence = lastFusionQuality / 100.0;
-      return embeddings[0];
-    }
-
-    final int n = embeddings.length;
-    final int vecSize = embeddings[0].length;
-
-    // 1. Build Pairwise Similarity Matrix
-    final List<List<double>> simMatrix = List.generate(n, (_) => List.filled(n, 1.0));
-    for (int i = 0; i < n; i++) {
-      for (int j = i + 1; j < n; j++) {
-        final double sim = cosineSimilarity(embeddings[i], embeddings[j]);
-        simMatrix[i][j] = sim;
-        simMatrix[j][i] = sim;
-      }
-    }
-
-    // Print Similarity Matrix
-    debugPrint('[FACE_EMBEDDING] Pairwise Similarity Matrix:');
-    for (int i = 0; i < n; i++) {
-      final row = simMatrix[i].map((s) => s.toStringAsFixed(4)).join('  ');
-      debugPrint('[FACE_EMBEDDING]   Row ${i + 1}: [ $row ]');
-    }
-
-    // 2. Compute mean similarities for outlier analysis
-    final List<double> meanSims = List.filled(n, 0.0);
-    double totalSimSum = 0.0;
-    int simCount = 0;
-    for (int i = 0; i < n; i++) {
-      double sum = 0.0;
-      for (int j = 0; j < n; j++) {
-        if (i != j) {
-          sum += simMatrix[i][j];
-          totalSimSum += simMatrix[i][j];
-          simCount++;
-        }
-      }
-      meanSims[i] = sum / (n - 1);
-    }
-    final double overallMeanSim = simCount > 0 ? totalSimSum / simCount : 1.0;
-
-    // Calculate Median and MAD (Median Absolute Deviation)
-    final List<double> sortedSims = List.from(meanSims)..sort();
-    final double median = sortedSims[n ~/ 2];
-    
-    final List<double> deviations = meanSims.map((s) => (s - median).abs()).toList();
-    final List<double> sortedDeviations = List.from(deviations)..sort();
-    final double mad = sortedDeviations[n ~/ 2];
-
-    // Calculate Mean and StdDev for fallback
-    final double mean = meanSims.reduce((a, b) => a + b) / n;
-    double sumSqDiff = 0.0;
-    for (int i = 0; i < n; i++) {
-      sumSqDiff += math.pow(meanSims[i] - mean, 2);
-    }
-    final double stdDev = math.sqrt(sumSqDiff / n);
-
-    // 3. Outlier Rejection
-    final List<int> acceptedIndices = [];
-    final List<int> rejectedIndices = [];
-    String rejectionReason = "None";
-
-    for (int i = 0; i < n; i++) {
-      bool isOutlier = false;
-      if (n > 2) {
-        if (mad > 0.001) {
-          final double threshold = median - 2.0 * mad;
-          if (meanSims[i] < threshold) {
-            isOutlier = true;
-            rejectionReason = "MAD outlier (similarity ${meanSims[i].toStringAsFixed(4)} < limit ${threshold.toStringAsFixed(4)})";
-          }
-        } else if (stdDev > 0.001) {
-          final double threshold = mean - 1.5 * stdDev;
-          if (meanSims[i] < threshold) {
-            isOutlier = true;
-            rejectionReason = "StdDev outlier (similarity ${meanSims[i].toStringAsFixed(4)} < limit ${threshold.toStringAsFixed(4)})";
-          }
-        }
-      } else {
-        // With n=2, reject the lower quality one if similarity is extremely low (< 0.75)
-        if (simMatrix[0][1] < 0.75) {
-          final q0 = _embeddingQualities[embeddings[0]] ?? 80.0;
-          final q1 = _embeddingQualities[embeddings[1]] ?? 80.0;
-          if (i == 0 && q0 < q1) {
-            isOutlier = true;
-            rejectionReason = "Extremely low pairwise similarity (<0.75) and lower quality than Frame 2";
-          }
-          if (i == 1 && q1 < q0) {
-            isOutlier = true;
-            rejectionReason = "Extremely low pairwise similarity (<0.75) and lower quality than Frame 1";
-          }
-        }
-      }
-
-      if (isOutlier) {
-        rejectedIndices.add(i);
-      } else {
-        acceptedIndices.add(i);
-      }
-    }
-
-    // Fallback: if all rejected, keep the highest quality one
-    if (acceptedIndices.isEmpty) {
-      int bestIdx = 0;
-      double maxQ = -1.0;
-      for (int i = 0; i < n; i++) {
-        final q = _embeddingQualities[embeddings[i]] ?? 80.0;
-        if (q > maxQ) {
-          maxQ = q;
-          bestIdx = i;
-        }
-      }
-      acceptedIndices.add(bestIdx);
-      rejectedIndices.remove(bestIdx);
-    }
-
-    // Print Outlier logs
-    debugPrint('[FACE_EMBEDDING] Outlier Rejection Summary:');
-    debugPrint('[FACE_EMBEDDING]   Median Similarity  : ${median.toStringAsFixed(4)}');
-    debugPrint('[FACE_EMBEDDING]   MAD                : ${mad.toStringAsFixed(4)}');
-    debugPrint('[FACE_EMBEDDING]   Mean Similarity    : ${mean.toStringAsFixed(4)}');
-    debugPrint('[FACE_EMBEDDING]   Std Dev            : ${stdDev.toStringAsFixed(4)}');
-    debugPrint('[FACE_EMBEDDING]   Accepted Indices   : ${acceptedIndices.map((idx) => 'Frame ${idx + 1}').join(', ')}');
-    debugPrint('[FACE_EMBEDDING]   Rejected Indices   : ${rejectedIndices.isEmpty ? 'None' : rejectedIndices.map((idx) => 'Frame ${idx + 1}').join(', ')}');
-    if (rejectedIndices.isNotEmpty) {
-      debugPrint('[FACE_EMBEDDING]   Rejection Reason   : $rejectionReason');
-    }
-
-    // 4. Quality-Weighted Average of accepted indices
-    final List<List<double>> filteredEmbeddings = [];
-    final List<double> filteredQualities = [];
-    for (final idx in acceptedIndices) {
-      final emb = embeddings[idx];
-      filteredEmbeddings.add(emb);
-      filteredQualities.add(_embeddingQualities[emb] ?? 80.0);
-    }
-
-    final int m = filteredEmbeddings.length;
-    final List<bool> clamped = List.filled(m, false);
-    final List<double> weights = _calculateWeights(filteredQualities, clamped);
-
-    final List<double> weightedAveraged = List.filled(vecSize, 0.0);
-    for (int i = 0; i < m; i++) {
-      final emb = filteredEmbeddings[i];
-      final w = weights[i];
-      for (int j = 0; j < vecSize; j++) {
-        weightedAveraged[j] += emb[j] * w;
-      }
-    }
-
-    final List<double> normalized = _l2Normalize(weightedAveraged);
-
-    // 5. Compute embedding variance (variance of accepted embeddings similarities to fused embedding)
-    final List<double> simsToFused = [];
-    for (int i = 0; i < m; i++) {
-      simsToFused.add(cosineSimilarity(filteredEmbeddings[i], normalized));
-    }
-    final double meanSimToFused = simsToFused.reduce((a, b) => a + b) / m;
-    double varSum = 0.0;
-    for (final sim in simsToFused) {
-      varSum += math.pow(sim - meanSimToFused, 2);
-    }
-    final double embeddingVariance = m > 1 ? varSum / m : 0.0;
-
-    // Final Fusion Quality
-    double finalFusionQuality = 0.0;
-    for (int i = 0; i < m; i++) {
-      finalFusionQuality += filteredQualities[i] * weights[i];
-    }
-    final double fusionConfidence = finalFusionQuality / 100.0;
-
-    // Set diagnostics properties
-    lastAverageSimilarity = overallMeanSim;
-    lastEmbeddingVariance = embeddingVariance;
-    lastFusionQuality = finalFusionQuality;
-    lastFusionConfidence = fusionConfidence;
-
-    // Print logs
-    debugPrint('[FACE_EMBEDDING] FUSION DIAGNOSTICS:');
-    for (int i = 0; i < m; i++) {
-      debugPrint('[FACE_EMBEDDING]   Accepted Frame ${acceptedIndices[i] + 1} | Quality Weight: ${weights[i].toStringAsFixed(4)}');
-    }
-    debugPrint('[FACE_EMBEDDING]   Final Weighted Similarity : ${meanSimToFused.toStringAsFixed(4)}');
-    debugPrint('[FACE_EMBEDDING]   Embedding Variance        : ${embeddingVariance.toStringAsFixed(6)}');
-    debugPrint('[FACE_EMBEDDING]   Final Fusion Quality      : ${finalFusionQuality.toStringAsFixed(1)}');
-    debugPrint('[FACE_EMBEDDING]   Fusion Confidence         : ${fusionConfidence.toStringAsFixed(4)}');
-
-    _embeddingQualities[normalized] = finalFusionQuality;
-
-    return normalized;
-  }
-
-  List<double> _calculateWeights(List<double> qualities, List<bool> clamped, {double minWeightVal = 0.05}) {
-    final int n = qualities.length;
-    if (n == 0) return [];
-    if (n == 1) return [1.0];
-
-    double minWeight = minWeightVal;
-    if (minWeight * n >= 1.0) {
-      minWeight = 0.9 / n;
-    }
-
-    double totalQuality = qualities.reduce((a, b) => a + b);
-    if (totalQuality == 0.0) {
-      return List.filled(n, 1.0 / n);
-    }
-
-    final List<double> weights = List.filled(n, 0.0);
-    bool checkNeeded = true;
-
-    while (checkNeeded) {
-      checkNeeded = false;
-      double sumClamped = 0.0;
-      double sumNonClampedQuality = 0.0;
-
-      for (int i = 0; i < n; i++) {
-        if (clamped[i]) {
-          sumClamped += minWeight;
-        } else {
-          sumNonClampedQuality += qualities[i];
-        }
-      }
-
-      final double remainingWeight = 1.0 - sumClamped;
-
-      for (int i = 0; i < n; i++) {
-        if (!clamped[i]) {
-          double w = 0.0;
-          if (sumNonClampedQuality > 0.0) {
-            w = (qualities[i] / sumNonClampedQuality) * remainingWeight;
-          } else {
-            int nonClampedCount = n - clamped.where((c) => c).length;
-            w = remainingWeight / nonClampedCount;
-          }
-
-          if (w < minWeight) {
-            clamped[i] = true;
-            checkNeeded = true;
-            break;
-          } else {
-            weights[i] = w;
-          }
-        } else {
-          weights[i] = minWeight;
-        }
-      }
-    }
-
-    return weights;
+    return _l2Normalize(averaged);
   }
 
 
@@ -671,157 +419,53 @@ class FaceLandmarkService {
   }
 
   // ─── VERIFY FACE ───────────────────────────────────────────────────────
-  // Master-embedding primary scoring with top-3 aggregation.
-  //
-  // If masterEmbedding (face_embedding) is provided, it is used as the
-  // primary comparison target.  A/B/C scores are logged as diagnostics.
-  //
-  // Aggregation: sort all frame scores descending → take best 3 → average.
-  // Threshold: clamped to min(storedThreshold, 0.76).
+  // Simple 1:1 cosine similarity check against storedMasterEmbedding.
   // ────────────────────────────────────────────────────────────────────────
   VerificationResult verifyFace({
     required List<List<double>> liveEmbeddings,
-    required List<double> storedEmbeddingA,
-    required List<double> storedEmbeddingB,
-    required List<double> storedEmbeddingC,
-    List<double>? masterEmbedding,
-    double threshold = 0.82,
+    required List<double> storedMasterEmbedding,
+    double threshold = 0.70,
   }) {
     if (liveEmbeddings.isEmpty) {
-      return VerificationResult(
+      return const VerificationResult(
         isMatch: false,
         score: 0.0,
         message: 'No frames captured',
       );
     }
 
-    debugPrint('[FACE_VER] ═══ VERIFICATION DEBUG ═══');
-    debugPrint('[FACE_VER] Live frames: ${liveEmbeddings.length}');
-    debugPrint('[FACE_VER] masterEmbedding present: ${masterEmbedding != null}');
-
-    double adaptiveThreshold = threshold;
-    if (lastFusionQuality < 75.0) {
-      double ratio = (75.0 - lastFusionQuality).clamp(0.0, 75.0) / 75.0;
-      adaptiveThreshold -= 0.04 * ratio;
-    }
-    if (lastEmbeddingVariance < 0.005) {
-      adaptiveThreshold -= 0.02;
-    } else if (lastEmbeddingVariance > 0.02) {
-      adaptiveThreshold += 0.02;
-    }
-    final double effectiveThreshold = adaptiveThreshold.clamp(0.75, 0.85);
-
-    debugPrint('[FACE_VER] thresholdUsed=${effectiveThreshold.toStringAsFixed(4)} (stored=${threshold.toStringAsFixed(4)}, adaptive=$adaptiveThreshold)');
-
-    // ── 1. Run Fused Embedding Generation ──
-    final List<double> fusedLive = weightedAverageEmbeddings(liveEmbeddings);
-
-    // Determine templates presence
-    final bool useMaster = masterEmbedding != null && masterEmbedding.isNotEmpty;
-
-    // ── 2. Run Comparative Matching Diagnostics (FACE_MATCH) ──
-    final double sA = cosineSimilarity(fusedLive, storedEmbeddingA);
-    final double sB = cosineSimilarity(fusedLive, storedEmbeddingB);
-    final double sC = cosineSimilarity(fusedLive, storedEmbeddingC);
-    final double sMaster = useMaster ? cosineSimilarity(fusedLive, masterEmbedding) : 0.0;
-
-    final double wMaster = useMaster ? 0.50 : 0.0;
-    final double wA = useMaster ? 0.1666 : 0.3333;
-    final double wB = useMaster ? 0.1666 : 0.3333;
-    final double wC = useMaster ? 0.1666 : 0.3333;
-
-    final double cMaster = sMaster * wMaster;
-    final double cA = sA * wA;
-    final double cB = sB * wB;
-    final double cC = sC * wC;
-
-    final double matchFinalScore = cMaster + cA + cB + cC;
-
-    // Build fallback average of A/B/C
-    final int dim = storedEmbeddingA.length;
-    final List<double> avgStored = _l2Normalize(
-      List.generate(
-        dim,
-        (i) => (storedEmbeddingA[i] + storedEmbeddingB[i] + storedEmbeddingC[i]) / 3.0,
-      ),
-    );
-
-    // Existing Top-3 matching algorithm logic
-    final List<double> masterScores = [];
-    final List<double> abcMeanScores = [];
-    for (int i = 0; i < liveEmbeddings.length; i++) {
-      final live = liveEmbeddings[i];
-      final double frameA = cosineSimilarity(live, storedEmbeddingA);
-      final double frameB = cosineSimilarity(live, storedEmbeddingB);
-      final double frameC = cosineSimilarity(live, storedEmbeddingC);
-      final double frameAvg = cosineSimilarity(live, avgStored);
-      final double abcMean = (frameA + frameB + frameC + frameAvg) / 4.0;
-      abcMeanScores.add(abcMean);
-
-      final double mScore = useMaster ? cosineSimilarity(live, masterEmbedding) : abcMean;
-      masterScores.add(mScore);
-
-      debugPrint(
-        '[FACE_VER] Frame $i → masterScore=${mScore.toStringAsFixed(4)} '
-        'sA=${frameA.toStringAsFixed(4)} sB=${frameB.toStringAsFixed(4)} '
-        'sC=${frameC.toStringAsFixed(4)} sAvg=${frameAvg.toStringAsFixed(4)} '
-        'abcMean=${abcMean.toStringAsFixed(4)}',
+    // Calculate the simple average of live embeddings
+    final List<double> averagedLive = averageEmbeddings(liveEmbeddings);
+    if (averagedLive.isEmpty) {
+      return const VerificationResult(
+        isMatch: false,
+        score: 0.0,
+        message: 'Failed to process live face',
       );
     }
 
-    final List<double> sorted = List<double>.from(masterScores)..sort((a, b) => b.compareTo(a));
-    final int topN = math.min(3, sorted.length);
-    final double top3Average = sorted.sublist(0, topN).reduce((a, b) => a + b) / topN;
+    // Calculate cosine similarity
+    final double similarity = cosineSimilarity(averagedLive, storedMasterEmbedding);
+    final double margin = similarity - threshold;
+    final bool isMatch = similarity >= threshold;
 
-    final String matchDecision = (top3Average >= effectiveThreshold) ? 'PASS' : 'FAIL';
+    debugPrint('[FACE_LANDMARK] Similarity=${similarity.toStringAsFixed(4)}');
+    debugPrint('[FACE_LANDMARK] Threshold=${threshold.toStringAsFixed(4)}');
+    debugPrint('[FACE_LANDMARK] Margin=${margin.toStringAsFixed(4)}');
+    debugPrint('[FACE_LANDMARK] Decision=${isMatch ? "PASS" : "FAIL"}');
 
-    debugPrint('[FACE_MATCH] ═══ MATCHING DIAGNOSTICS ═══');
-    debugPrint('[FACE_MATCH] Template A | Similarity: ${sA.toStringAsFixed(4)} | Weight: ${wA.toStringAsFixed(4)} | Contribution: ${cA.toStringAsFixed(4)}');
-    debugPrint('[FACE_MATCH] Template B | Similarity: ${sB.toStringAsFixed(4)} | Weight: ${wB.toStringAsFixed(4)} | Contribution: ${cB.toStringAsFixed(4)}');
-    debugPrint('[FACE_MATCH] Template C | Similarity: ${sC.toStringAsFixed(4)} | Weight: ${wC.toStringAsFixed(4)} | Contribution: ${cC.toStringAsFixed(4)}');
-    if (useMaster) {
-      debugPrint('[FACE_MATCH] Master     | Similarity: ${sMaster.toStringAsFixed(4)} | Weight: ${wMaster.toStringAsFixed(4)} | Contribution: ${cMaster.toStringAsFixed(4)}');
-    } else {
-      debugPrint('[FACE_MATCH] Master     | Similarity: N/A | Weight: 0.0000 | Contribution: 0.0000');
-    }
-    debugPrint('[FACE_MATCH] Final Score: ${top3Average.toStringAsFixed(4)} (weighted sum = ${matchFinalScore.toStringAsFixed(4)})');
-    debugPrint('[FACE_MATCH] Threshold  : ${effectiveThreshold.toStringAsFixed(4)}');
-    debugPrint('[FACE_MATCH] Decision   : $matchDecision');
-    debugPrint('[FACE_MATCH] ════════════════════════════');
-
-    // ── 3. Run Embedding Drift Diagnostics (FACE_EMBEDDING) ──
-    final double driftScore = 1.0 - cosineSimilarity(liveEmbeddings.first, liveEmbeddings.last);
-    final bool driftDetected = driftScore > 0.15;
-
-    debugPrint('[FACE_EMBEDDING] Embedding Drift Diagnostics:');
-    debugPrint('[FACE_EMBEDDING]   Similarity to Template A : ${sA.toStringAsFixed(4)}');
-    debugPrint('[FACE_EMBEDDING]   Similarity to Template B : ${sB.toStringAsFixed(4)}');
-    debugPrint('[FACE_EMBEDDING]   Similarity to Template C : ${sC.toStringAsFixed(4)}');
-    if (useMaster) {
-      debugPrint('[FACE_EMBEDDING]   Similarity to Master     : ${sMaster.toStringAsFixed(4)}');
-    } else {
-      debugPrint('[FACE_EMBEDDING]   Similarity to Master     : N/A');
-    }
-    debugPrint('[FACE_EMBEDDING]   Embedding Variance       : ${lastEmbeddingVariance.toStringAsFixed(6)}');
-    debugPrint('[FACE_EMBEDDING]   Avg Intra-frame Sim      : ${lastAverageSimilarity.toStringAsFixed(4)}');
-    debugPrint('[FACE_EMBEDDING]   Drift Score              : ${driftScore.toStringAsFixed(4)}');
-    debugPrint('[FACE_EMBEDDING]   Drift Detected           : ${driftDetected ? "YES" : "NO"}');
-
-    if (top3Average >= effectiveThreshold) {
+    if (isMatch) {
       return VerificationResult(
         isMatch: true,
-        score: top3Average,
+        score: similarity,
         message: 'Verified',
       );
     }
 
-    final String message = top3Average > 0.20
-        ? 'Try in better lighting'
-        : 'Face not recognized';
     return VerificationResult(
       isMatch: false,
-      score: top3Average,
-      message: message,
+      score: similarity,
+      message: 'Face not recognized',
     );
   }
 

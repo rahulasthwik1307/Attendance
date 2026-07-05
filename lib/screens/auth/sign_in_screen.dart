@@ -122,7 +122,7 @@ class _SignInScreenState extends State<SignInScreen>
 
         final data = await Supabase.instance.client
             .from('students')
-            .select('embedding_a, is_approved, is_rejected, face_registered')
+            .select('face_embedding, is_approved, is_rejected, face_registered')
             .eq('id', currentUser.id)
             .maybeSingle();
 
@@ -142,7 +142,7 @@ class _SignInScreenState extends State<SignInScreen>
 
         final bool isApproved = data['is_approved'] == true;
         final bool isRejected = data['is_rejected'] == true;
-        final bool hasFace = data['embedding_a'] != null;
+        final bool hasFace = data['face_embedding'] != null;
 
         // Check must_change_password from users table
         final userData = await Supabase.instance.client
@@ -157,7 +157,7 @@ class _SignInScreenState extends State<SignInScreen>
 
         if (mustChangePassword) {
           // Check if face is still registered — admin may have deleted it
-          final bool faceStillExists = data['embedding_a'] != null;
+          final bool faceStillExists = data['face_embedding'] != null;
           AuthFlowState.instance.passwordSet = true;
           AuthFlowState.instance.faceRegistered = faceStillExists;
           AuthFlowState.instance.isFirstTimeUser = false;
@@ -259,7 +259,7 @@ class _SignInScreenState extends State<SignInScreen>
 
         final data = await Supabase.instance.client
             .from('students')
-            .select('embedding_a, is_approved, is_rejected, face_registered')
+            .select('face_embedding, is_approved, is_rejected, face_registered')
             .eq('id', currentUser.id)
             .maybeSingle();
 
@@ -286,7 +286,7 @@ class _SignInScreenState extends State<SignInScreen>
 
         final bool isApproved = data['is_approved'] == true;
         final bool isRejected = data['is_rejected'] == true;
-        final bool hasFace = data['embedding_a'] != null;
+        final bool hasFace = data['face_embedding'] != null;
 
         // Check must_change_password from users table
         final userData = await Supabase.instance.client
@@ -301,7 +301,7 @@ class _SignInScreenState extends State<SignInScreen>
 
         if (mustChangePassword) {
           // Check if face is still registered — admin may have deleted it
-          final bool faceStillExists = data['embedding_a'] != null;
+          final bool faceStillExists = data['face_embedding'] != null;
           AuthFlowState.instance.passwordSet = true;
           AuthFlowState.instance.faceRegistered = faceStillExists;
           AuthFlowState.instance.isFirstTimeUser = false;

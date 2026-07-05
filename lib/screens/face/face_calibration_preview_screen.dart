@@ -6,7 +6,6 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../utils/app_styles.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
@@ -359,18 +358,6 @@ class _FaceCalibrationPreviewScreenState
 
     setState(() => _isLoading = true);
     try {
-      final prefs = await SharedPreferences.getInstance();
-
-      // Clear embeddings cache so verification loads fresh
-      await prefs.remove('emb_a');
-      await prefs.remove('emb_b');
-      await prefs.remove('emb_c');
-      await prefs.remove('emb_student_id');
-      await prefs.remove('emb_cached_at');
-      debugPrint(
-        '[FACE_CAL_PREVIEW] Embeddings cache cleared',
-      );
-
       if (!context.mounted) return;
       setState(() {
         _isLoading = false;

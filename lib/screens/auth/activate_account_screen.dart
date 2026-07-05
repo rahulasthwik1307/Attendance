@@ -74,7 +74,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
       // Step 3: Check student record
       final data = await supabase
           .from('students')
-          .select('embedding_a, is_approved, is_rejected, face_registered')
+          .select('face_embedding, is_approved, is_rejected, face_registered')
           .eq('id', user.id)
           .maybeSingle();
 
@@ -96,7 +96,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
 
       final bool isApproved = data['is_approved'] == true;
       final bool isRejected = data['is_rejected'] == true;
-      final bool hasFace = data['embedding_a'] != null;
+      final bool hasFace = data['face_embedding'] != null;
 
       // Rejected — embeddings are wiped but is_rejected=true. Must use Sign In.
       if (isRejected) {
@@ -146,7 +146,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
         return;
       }
 
-      // Fresh account — embedding_a is null, not rejected, not approved.
+      // Fresh account — face_embedding is null, not rejected, not approved.
       // This is the only valid path to set new password.
       setState(() {
         _isLoading = false;

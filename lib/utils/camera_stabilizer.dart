@@ -228,10 +228,16 @@ class CameraStabilizer {
     };
   }
 
+  double? _lastLoggedBrightness;
+  double? _lastLoggedContrast;
+  double? _lastLoggedSharpness;
+
   /// Checks if the frame is stable compared to a reference brightness
   bool checkFrameStability(CameraImage image, {double threshold = 25.0}) {
     final stats = computeFrameStats(image);
     final currentBrightness = stats['brightness']!;
+    final currentContrast = stats['contrast']!;
+    final currentSharpness = stats['sharpness']!;
     
     if (_stableBrightness == null) {
       _stableBrightness = currentBrightness;
@@ -239,6 +245,17 @@ class CameraStabilizer {
       frameBrightnessDelta = 0.0;
       exposureDrift = 0.0;
       frameLuminanceVariance = stats['contrast']! * stats['contrast']!;
+      
+      _lastLoggedBrightness = currentBrightness;
+      _lastLoggedContrast = currentContrast;
+      _lastLoggedSharpness = currentSharpness;
+      
+      log('Brightness=${currentBrightness.toStringAsFixed(1)}');
+      log('Contrast=${currentContrast.toStringAsFixed(1)}');
+      log('Sharpness=${currentSharpness.toStringAsFixed(1)}');
+      log('Exposure Drift=0.0');
+      log('Frame Stability=STABLE');
+      
       return true;
     }
 
@@ -247,7 +264,25 @@ class CameraStabilizer {
     frameLuminanceVariance = stats['contrast']! * stats['contrast']!;
     _lastBrightness = currentBrightness;
 
-    if (exposureDrift > threshold) {
+    final bool isRejected = exposureDrift > threshold;
+    
+    final bool brightnessChanged = _lastLoggedBrightness == null || (currentBrightness - _lastLoggedBrightness!).abs() > 15.0;
+    final bool contrastChanged = _lastLoggedContrast == null || (currentContrast - _lastLoggedContrast!).abs() > 10.0;
+    final bool sharpnessChanged = _lastLoggedSharpness == null || (currentSharpness - _lastLoggedSharpness!).abs() > 15.0;
+
+    if (brightnessChanged || contrastChanged || sharpnessChanged || isRejected) {
+      _lastLoggedBrightness = currentBrightness;
+      _lastLoggedContrast = currentContrast;
+      _lastLoggedSharpness = currentSharpness;
+      
+      log('Brightness=${currentBrightness.toStringAsFixed(1)}');
+      log('Contrast=${currentContrast.toStringAsFixed(1)}');
+      log('Sharpness=${currentSharpness.toStringAsFixed(1)}');
+      log('Exposure Drift=${exposureDrift.toStringAsFixed(1)}');
+      log('Frame Stability=${isRejected ? "REJECTED" : "STABLE"}');
+    }
+
+    if (isRejected) {
       log('Rejected: Brightness unstable (current=$currentBrightness, ref=$_stableBrightness, drift=$exposureDrift, threshold=$threshold)');
       return false;
     }

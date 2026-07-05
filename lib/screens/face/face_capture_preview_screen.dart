@@ -55,8 +55,8 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
       final img.Image? decoded = img.decodeJpg(rawBytes);
       if (decoded == null) return;
 
-      debugPrint('[PREVIEW] decoded: ${decoded.width}x${decoded.height}');
-      debugPrint('[PREVIEW] faceBbox: $faceBbox');
+      debugPrint('[FACE_REG] decoded: ${decoded.width}x${decoded.height}');
+      debugPrint('[FACE_REG] faceBbox: $faceBbox');
 
       // The JPEG from _convertYuvToJpegSync is built pixel-by-pixel from
       // YUV planes in landscape orientation (e.g. 1280x720).
@@ -69,7 +69,7 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
 
       // Rotate 90° counter-clockwise for 270° sensor orientation
       final img.Image rotated = img.copyRotate(decoded, angle: -90);
-      debugPrint('[PREVIEW] rotated: ${rotated.width}x${rotated.height}');
+      debugPrint('[FACE_REG] rotated: ${rotated.width}x${rotated.height}');
 
       Uint8List croppedBytes;
 
@@ -96,7 +96,7 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
           rotated.height - cropY,
         );
 
-        debugPrint('[PREVIEW] crop: x=$cropX y=$cropY w=$cropW h=$cropH');
+        debugPrint('[FACE_REG] crop: x=$cropX y=$cropY w=$cropW h=$cropH');
 
         final img.Image cropped = img.copyCrop(
           rotated,
@@ -107,7 +107,7 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
         );
         croppedBytes = Uint8List.fromList(img.encodeJpg(cropped, quality: 90));
       } else {
-        debugPrint('[PREVIEW] No valid bbox — using full rotated image');
+        debugPrint('[FACE_REG] No valid bbox — using full rotated image');
         croppedBytes = Uint8List.fromList(img.encodeJpg(rotated, quality: 90));
       }
 
@@ -326,9 +326,9 @@ class _FaceCapturePreviewScreenState extends State<FaceCapturePreviewScreen>
                               .eq('id', user.id)
                               .select();
 
-                          debugPrint('[PREVIEW] update result: $updateResult');
-                          debugPrint('[PREVIEW] photoUrl: $photoUrl');
-                          debugPrint('[PREVIEW] user.id: ${user.id}');
+                          debugPrint('[FACE_REG] update result: $updateResult');
+                          debugPrint('[FACE_REG] photoUrl: $photoUrl');
+                          debugPrint('[FACE_REG] user.id: ${user.id}');
 
                           if (!context.mounted) return;
 

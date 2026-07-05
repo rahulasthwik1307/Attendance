@@ -34,6 +34,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -75,6 +76,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   final Stopwatch _uploadStopwatch = Stopwatch();
   final Stopwatch _totalStopwatch = Stopwatch();
   int _totalFramesCaptured = 0;
+  int _totalFramesLogged = 0;
+  final List<Map<String, double>> _allFramesStats = [];
 
   // ─── Animation controllers (kept from original UI) ──────────────────────
   late AnimationController _pulseController;
@@ -112,7 +115,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   final List<List<double>> _frontEmbeddings = [];
 
   // How many quality frames to capture (all front)
-  static const int _framesPerPhase = 15;
+  static const int _framesPerPhase = 8;
 
   // New state variables for valid frame counting, camera freeze, and processing overlays
   final List<BatchEmbeddingResult> _validResults = [];
@@ -305,11 +308,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       await _cameraController!.startImageStream(_onCameraFrame);
       _imageStreamRunning = true;
 
-      FaceLogger.separator(_sessionId, 'FACE_REG');
-      FaceLogger.reg(_sessionId, 'Registration Started');
-      FaceLogger.reg(_sessionId, 'Target Frames : $_framesPerPhase');
-      FaceLogger.reg(_sessionId, 'Valid Frames  : 0');
-      FaceLogger.separator(_sessionId, 'FACE_REG');
+      _livenessService.logPrefix = 'FACE_REG';
+      _livenessService.sessionId = _sessionId;
+
+      debugPrint('[FACE_REG][$_sessionId]');
+      debugPrint('Registration Started');
 
       _setPhase(_Phase.liveness);
     } catch (e) {
@@ -421,17 +424,26 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         if (face.trackingId != null && _lastProcessedFace!.trackingId != null) {
           isSame = face.trackingId == _lastProcessedFace!.trackingId;
           if (!isSame) {
-            debugPrint('[FACE_CAMERA] [FACE_REG][$_sessionId] Face tracking ID changed: ${_lastProcessedFace!.trackingId} -> ${face.trackingId}');
+            debugPrint(
+              '[FACE_CAMERA] [FACE_REG][$_sessionId] Face tracking ID changed: ${_lastProcessedFace!.trackingId} -> ${face.trackingId}',
+            );
           }
         } else {
-          final double iou = _calculateIoU(face.boundingBox, _lastProcessedFace!.boundingBox);
+          final double iou = _calculateIoU(
+            face.boundingBox,
+            _lastProcessedFace!.boundingBox,
+          );
           isSame = iou >= 0.5;
           if (!isSame) {
-            debugPrint('[FACE_CAMERA] [FACE_REG][$_sessionId] Face tracking lost via IoU (IoU: ${iou.toStringAsFixed(2)})');
+            debugPrint(
+              '[FACE_CAMERA] [FACE_REG][$_sessionId] Face tracking lost via IoU (IoU: ${iou.toStringAsFixed(2)})',
+            );
           }
         }
         if (!isSame) {
-          debugPrint('[FACE_CAMERA] [FACE_REG][$_sessionId] Face tracking lost — resetting captured frames and buffer');
+          debugPrint(
+            '[FACE_CAMERA] [FACE_REG][$_sessionId] Face tracking lost — resetting captured frames and buffer',
+          );
           _clearSmoothing();
           _frontFrames.clear();
           _frontFramesStats.clear();
@@ -695,7 +707,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     if (_isSubmitting) return;
 
     final now = DateTime.now();
-    if (now.difference(_lastCaptureTime).inMilliseconds < _nextCaptureInterval) return;
+    if (now.difference(_lastCaptureTime).inMilliseconds < _nextCaptureInterval) {
+      return;
+    }
 
     // Validate pose for current phase
     if (!_isPoseCorrect(face, currentPhase)) {
@@ -769,7 +783,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       case _Phase.front:
         _frontFrames.add(jpegBytes);
         final stats = _cameraStabilizer.computeFrameStats(cameraImage);
+        stats['yaw'] = face.headEulerAngleY ?? 0.0;
+        stats['pitch'] = face.headEulerAngleX ?? 0.0;
+        stats['roll'] = face.headEulerAngleZ ?? 0.0;
         _frontFramesStats.add(stats);
+        _allFramesStats.add(stats);
         final int totalSoFar = _validFrameCount + _frontFrames.length;
         final int remaining = _framesPerPhase - totalSoFar;
         setState(() {
@@ -913,16 +931,42 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
       // ── CASE 1: API succeeded — evaluate quality ───────────────────────────
       int batchAccepted = 0;
-      for (final res in batchResults) {
-        if (res.embedding != null && res.qualityPassed) {
+      for (int i = 0; i < batchResults.length; i++) {
+        final res = batchResults[i];
+        final stats = _frontFramesStats[i];
+        _totalFramesLogged++;
+
+        final double brightness = stats['brightness'] ?? 0.0;
+        final double contrast = stats['contrast'] ?? 0.0;
+        final double sharpness = stats['sharpness'] ?? 0.0;
+        final double yaw = stats['yaw'] ?? 0.0;
+        final double pitch = stats['pitch'] ?? 0.0;
+        final double roll = stats['roll'] ?? 0.0;
+
+        final bool accepted = res.embedding != null && res.qualityPassed;
+
+        debugPrint('[FACE_REG][$_sessionId]');
+        debugPrint('Frame #$_totalFramesLogged');
+        if (accepted) {
+          debugPrint('Brightness=${brightness.round()}');
+          debugPrint('Contrast=${contrast.round()}');
+          debugPrint('Sharpness=${sharpness.round()}');
+          debugPrint('FaceDetected=true');
+          debugPrint('FaceInsideCircle=true');
+          debugPrint('Yaw=${yaw.toStringAsFixed(1)}');
+          debugPrint('Pitch=${pitch.toStringAsFixed(1)}');
+          debugPrint('Roll=${roll.toStringAsFixed(1)}');
+          debugPrint('Accepted=true');
+
           _validResults.add(res);
           batchAccepted++;
         } else {
-          FaceLogger.reg(_sessionId, 'Frame Rejected');
-          FaceLogger.reg(
-            _sessionId,
-            '  Reason = ${res.rejectionReason ?? "no_face_detected"}',
-          );
+          debugPrint('Accepted=false');
+          debugPrint('Reason=${res.rejectionReason ?? "no_face_detected"}');
+          debugPrint('Brightness=${brightness.round()}');
+          debugPrint('Sharpness=${sharpness.round()}');
+          debugPrint('Yaw=${yaw.toStringAsFixed(1)}');
+          debugPrint('Pitch=${pitch.toStringAsFixed(1)}');
         }
       }
 
@@ -981,10 +1025,10 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         return;
       }
 
-      // Target reached — rank accepted frames by quality and pick the best 15.
+      // Target reached — rank accepted frames by quality and pick the best 8.
       _validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
 
-      // Use the highest-quality frames only (top 15)
+      // Use the highest-quality frames only (top 8)
       final List<BatchEmbeddingResult> topResults = _validResults.sublist(
         0,
         _framesPerPhase,
@@ -995,55 +1039,15 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           .map((res) => res.embedding!)
           .toList();
 
-      // Split into 3 groups of 5
-      final int third = _framesPerPhase ~/ 3; // 5
-      final List<List<double>> group1 = topEmbeddings.sublist(0, third);
-      final List<List<double>> group2 = topEmbeddings.sublist(third, third * 2);
-      final List<List<double>> group3 = topEmbeddings.sublist(third * 2);
-
-      FaceLogger.reg(_sessionId, 'Group A = ${group1.length}');
-      FaceLogger.reg(_sessionId, 'Group B = ${group2.length}');
-      FaceLogger.reg(_sessionId, 'Group C = ${group3.length}');
-
-      final List<double> embeddingA = _landmarkService.averageEmbeddings(
-        group1,
+      final List<double> masterEmbedding = _landmarkService.averageEmbeddings(
+        topEmbeddings,
       );
-      final List<double> embeddingB = _landmarkService.averageEmbeddings(
-        group2,
-      );
-      final List<double> embeddingC = _landmarkService.averageEmbeddings(
-        group3,
-      );
+      _templateStopwatch.stop();
 
-      if (embeddingA.isEmpty || embeddingB.isEmpty || embeddingC.isEmpty) {
+      if (masterEmbedding.isEmpty) {
         _setError('Could not generate face embeddings. Please try again.');
         return;
       }
-
-      // Quick sanity check — if they're identical, something's wrong
-      bool allIdentical = true;
-      for (int i = 0; i < 5; i++) {
-        if ((embeddingA[i] - embeddingB[i]).abs() > 0.001 ||
-            (embeddingA[i] - embeddingC[i]).abs() > 0.001) {
-          allIdentical = false;
-          break;
-        }
-      }
-      if (allIdentical) {
-        FaceLogger.reg(
-          _sessionId,
-          'WARNING: All three embeddings appear identical!',
-        );
-      }
-
-      // ── Compute master embedding = average(A, B, C) ──
-      FaceLogger.reg(_sessionId, 'Master Embedding Generated');
-      final List<double> masterEmbedding = _landmarkService.averageEmbeddings([
-        embeddingA,
-        embeddingB,
-        embeddingC,
-      ]);
-      _templateStopwatch.stop();
 
       _updateInstruction('Almost done!', subtitle: 'Saving your registration');
       FaceLogger.reg(_sessionId, 'Uploading To Supabase');
@@ -1061,10 +1065,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         await Supabase.instance.client
             .from('students')
             .update({
-              'embedding_a': embeddingA,
-              'embedding_b': embeddingB,
-              'embedding_c': embeddingC,
+              'embedding_a': null,
+              'embedding_b': null,
+              'embedding_c': null,
               'face_embedding': masterEmbedding,
+              'verification_threshold': 0.70, // Fixed global threshold
               'registration_photo_url': photoUrl,
               'face_registered': true,
             })
@@ -1075,84 +1080,53 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         // Compute quality stats for display in summary
         final double avgQuality = _validResults.isEmpty
             ? 0.0
-            : _validResults.map((e) => e.rawQualityScore).reduce((a, b) => a + b) /
-                _validResults.length;
-        final double maxQuality = _validResults.isEmpty
-            ? 0.0
-            : _validResults.map((e) => e.rawQualityScore).reduce((a, b) => math.max(a, b));
-        final double minQuality = _validResults.isEmpty
-            ? 0.0
-            : _validResults.map((e) => e.rawQualityScore).reduce((a, b) => math.min(a, b));
+            : _validResults
+                      .map((e) => e.rawQualityScore)
+                      .reduce((a, b) => a + b) /
+                  _validResults.length;
 
         final int framesAccepted = _validFrameCount;
         final int framesRejected = _totalFramesCaptured - framesAccepted;
 
         final double avgLocalBrightness = _frontFramesStats.isEmpty
             ? 0.0
-            : _frontFramesStats.map((s) => s['brightness'] ?? 0.0).reduce((a, b) => a + b) / _frontFramesStats.length;
-        final double avgLocalContrast = _frontFramesStats.isEmpty
-            ? 0.0
-            : _frontFramesStats.map((s) => s['contrast'] ?? 0.0).reduce((a, b) => a + b) / _frontFramesStats.length;
+            : _frontFramesStats
+                      .map((s) => s['brightness'] ?? 0.0)
+                      .reduce((a, b) => a + b) /
+                  _frontFramesStats.length;
         final double avgLocalSharpness = _frontFramesStats.isEmpty
             ? 0.0
-            : _frontFramesStats.map((s) => s['sharpness'] ?? 0.0).reduce((a, b) => a + b) / _frontFramesStats.length;
+            : _frontFramesStats
+                      .map((s) => s['sharpness'] ?? 0.0)
+                      .reduce((a, b) => a + b) /
+                  _frontFramesStats.length;
 
-        FaceLogger.separator(_sessionId, 'FACE_REG');
-        FaceLogger.reg(_sessionId, 'REGISTRATION SUMMARY');
-        FaceLogger.separator(_sessionId, 'FACE_REG');
-        FaceLogger.reg(_sessionId, '  Frames Captured       : $_totalFramesCaptured');
-        FaceLogger.reg(_sessionId, '  Frames Accepted       : $framesAccepted');
-        FaceLogger.reg(_sessionId, '  Frames Rejected       : $framesRejected');
-        FaceLogger.reg(_sessionId, '  Avg Backend Quality   : ${avgQuality.toStringAsFixed(1)}');
-        FaceLogger.reg(_sessionId, '  Highest Quality       : ${maxQuality.toStringAsFixed(1)}');
-        FaceLogger.reg(_sessionId, '  Lowest Quality        : ${minQuality.toStringAsFixed(1)}');
-        FaceLogger.reg(_sessionId, '  Warm-up Time           : ${_cameraStabilizer.warmUpDurationMs}ms');
-        FaceLogger.reg(_sessionId, '  Focus Stabilize Time  : ${_cameraStabilizer.focusStabilizationDurationMs}ms');
-        FaceLogger.reg(_sessionId, '  Exposure Stabilize Time: ${_cameraStabilizer.exposureStabilizationDurationMs}ms');
-        FaceLogger.reg(_sessionId, '  Avg Local Brightness  : ${avgLocalBrightness.toStringAsFixed(1)}');
-        FaceLogger.reg(_sessionId, '  Avg Local Contrast    : ${avgLocalContrast.toStringAsFixed(1)}');
-        FaceLogger.reg(_sessionId, '  Avg Local Sharpness    : ${avgLocalSharpness.toStringAsFixed(1)}');
+        final double avgYaw = _validResults.isEmpty
+            ? 0.0
+            : _validResults.map((r) => r.yaw).reduce((a, b) => a + b) / _validResults.length;
+        final double avgPitch = _validResults.isEmpty
+            ? 0.0
+            : _validResults.map((r) => r.pitch).reduce((a, b) => a + b) / _validResults.length;
 
-        // ── Embedding Drift Diagnostics ──
-        final double sA = topEmbeddings.isEmpty ? 0.0 : topEmbeddings.map((res) => _landmarkService.cosineSimilarity(res, embeddingA)).reduce((a, b) => a + b) / topEmbeddings.length;
-        final double sB = topEmbeddings.isEmpty ? 0.0 : topEmbeddings.map((res) => _landmarkService.cosineSimilarity(res, embeddingB)).reduce((a, b) => a + b) / topEmbeddings.length;
-        final double sC = topEmbeddings.isEmpty ? 0.0 : topEmbeddings.map((res) => _landmarkService.cosineSimilarity(res, embeddingC)).reduce((a, b) => a + b) / topEmbeddings.length;
-        final double sMaster = topEmbeddings.isEmpty ? 0.0 : topEmbeddings.map((res) => _landmarkService.cosineSimilarity(res, masterEmbedding)).reduce((a, b) => a + b) / topEmbeddings.length;
-        
-        // Temporarily call weightedAverageEmbeddings to calculate variance and intra-frame similarity of the whole session
-        _landmarkService.weightedAverageEmbeddings(topEmbeddings);
-        final double variance = _landmarkService.lastEmbeddingVariance;
-        final double avgIntraSim = _landmarkService.lastAverageSimilarity;
-        final double driftScore = topEmbeddings.isEmpty ? 0.0 : 1.0 - _landmarkService.cosineSimilarity(topEmbeddings.first, topEmbeddings.last);
-        final bool driftDetected = driftScore > 0.15;
+        // Save registration averages to SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setDouble('reg_yaw_$userId', avgYaw);
+        await prefs.setDouble('reg_pitch_$userId', avgPitch);
+        await prefs.setDouble('reg_brightness_$userId', avgLocalBrightness);
 
-        FaceLogger.separator(_sessionId, 'FACE_REG');
-        FaceLogger.reg(_sessionId, 'EMBEDDING DRIFT DIAGNOSTICS');
-        FaceLogger.separator(_sessionId, 'FACE_REG');
-        FaceLogger.reg(_sessionId, '  Similarity to Template A : ${sA.toStringAsFixed(4)}');
-        FaceLogger.reg(_sessionId, '  Similarity to Template B : ${sB.toStringAsFixed(4)}');
-        FaceLogger.reg(_sessionId, '  Similarity to Template C : ${sC.toStringAsFixed(4)}');
-        FaceLogger.reg(_sessionId, '  Similarity to Master     : ${sMaster.toStringAsFixed(4)}');
-        FaceLogger.reg(_sessionId, '  Embedding Variance       : ${variance.toStringAsFixed(6)}');
-        FaceLogger.reg(_sessionId, '  Avg Intra-frame Sim      : ${avgIntraSim.toStringAsFixed(4)}');
-        FaceLogger.reg(_sessionId, '  Drift Score              : ${driftScore.toStringAsFixed(4)}');
-        FaceLogger.reg(_sessionId, '  Drift Detected           : ${driftDetected ? "YES" : "NO"}');
-        FaceLogger.separator(_sessionId, 'FACE_REG');
-
-        FaceLogger.reg(_sessionId, '  Template A Frames     : ${group1.length}');
-        FaceLogger.reg(_sessionId, '  Template B Frames     : ${group2.length}');
-        FaceLogger.reg(_sessionId, '  Template C Frames     : ${group3.length}');
-        FaceLogger.reg(_sessionId, '  Master Embedding      : YES');
-        FaceLogger.reg(_sessionId, '  Capture Time          : ${_captureStopwatch.elapsedMilliseconds}ms');
-        FaceLogger.reg(_sessionId, '  Embedding API Time    : ${_apiStopwatch.elapsedMilliseconds}ms');
-        FaceLogger.reg(_sessionId, '  Template Creation     : ${_templateStopwatch.elapsedMilliseconds}ms');
-        FaceLogger.reg(_sessionId, '  Supabase Upload Time  : ${_uploadStopwatch.elapsedMilliseconds}ms');
-        FaceLogger.reg(_sessionId, '  Total Time            : ${_totalStopwatch.elapsedMilliseconds}ms');
-        FaceLogger.separator(_sessionId, 'FACE_REG');
-        FaceLogger.reg(_sessionId, 'REGISTRATION COMPLETE');
-
-        FaceLogger.reg(_sessionId, 'Registration Complete');
-        FaceLogger.reg(_sessionId, '  User = $userId');
+        debugPrint('[FACE_REG][$_sessionId]');
+        debugPrint('=========================');
+        debugPrint('FACE REGISTRATION SUMMARY');
+        debugPrint('=========================');
+        debugPrint('Frames Captured=$_totalFramesCaptured');
+        debugPrint('Frames Accepted=$framesAccepted');
+        debugPrint('Frames Rejected=$framesRejected');
+        debugPrint('Average Brightness=${avgLocalBrightness.round()}');
+        debugPrint('Average Sharpness=${avgLocalSharpness.round()}');
+        debugPrint('Average Yaw=${avgYaw.round()}');
+        debugPrint('Average Pitch=${avgPitch.round()}');
+        debugPrint('Average Quality=${avgQuality.round()}');
+        debugPrint('=========================');
       } catch (e) {
         _uploadStopwatch.stop();
         _totalStopwatch.stop();
@@ -1295,8 +1269,14 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     final double intersectionX2 = math.min(rect1.right, rect2.right);
     final double intersectionY2 = math.min(rect1.bottom, rect2.bottom);
 
-    final double intersectionWidth = math.max(0.0, intersectionX2 - intersectionX1);
-    final double intersectionHeight = math.max(0.0, intersectionY2 - intersectionY1);
+    final double intersectionWidth = math.max(
+      0.0,
+      intersectionX2 - intersectionX1,
+    );
+    final double intersectionHeight = math.max(
+      0.0,
+      intersectionY2 - intersectionY1,
+    );
     final double intersectionArea = intersectionWidth * intersectionHeight;
 
     final double rect1Area = rect1.width * rect1.height;
@@ -3078,15 +3058,13 @@ class _PulsingCameraLoaderState extends State<_PulsingCameraLoader>
       duration: const Duration(milliseconds: 1200),
     )..repeat(reverse: true);
 
-    _scale = Tween<double>(
-      begin: 0.90,
-      end: 1.05,
-    ).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
+    _scale = Tween<double>(begin: 0.90, end: 1.05).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
 
-    _opacity = Tween<double>(
-      begin: 0.6,
-      end: 0.95,
-    ).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
+    _opacity = Tween<double>(begin: 0.6, end: 0.95).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
 
     _rotateController = AnimationController(
       vsync: this,
@@ -3135,7 +3113,9 @@ class _PulsingCameraLoaderState extends State<_PulsingCameraLoader>
                           color: const Color(0xFF1A73E8),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFF1A73E8).withValues(alpha: 0.3),
+                              color: const Color(
+                                0xFF1A73E8,
+                              ).withValues(alpha: 0.3),
                               blurRadius: 8,
                               spreadRadius: 2,
                             ),
@@ -3198,7 +3178,11 @@ class _OrbitRingsPainter extends CustomPainter {
       ..strokeWidth = 1.5
       ..strokeCap = StrokeCap.round
       ..shader = SweepGradient(
-        colors: [color.withValues(alpha: 0.8), color.withValues(alpha: 0.05), color.withValues(alpha: 0.8)],
+        colors: [
+          color.withValues(alpha: 0.8),
+          color.withValues(alpha: 0.05),
+          color.withValues(alpha: 0.8),
+        ],
         stops: const [0.0, 0.5, 1.0],
       ).createShader(innerRect);
 
@@ -3207,8 +3191,20 @@ class _OrbitRingsPainter extends CustomPainter {
     canvas.rotate(rotation2);
     canvas.translate(-center.dx, -center.dy);
     canvas.drawArc(innerRect, 0, math.pi * 0.4, false, innerPaint);
-    canvas.drawArc(innerRect, math.pi * 2 / 3, math.pi * 0.4, false, innerPaint);
-    canvas.drawArc(innerRect, math.pi * 4 / 3, math.pi * 0.4, false, innerPaint);
+    canvas.drawArc(
+      innerRect,
+      math.pi * 2 / 3,
+      math.pi * 0.4,
+      false,
+      innerPaint,
+    );
+    canvas.drawArc(
+      innerRect,
+      math.pi * 4 / 3,
+      math.pi * 0.4,
+      false,
+      innerPaint,
+    );
     canvas.restore();
   }
 

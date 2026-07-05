@@ -53,7 +53,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   final Stopwatch _apiStopwatch = Stopwatch();
   final Stopwatch _comparisonStopwatch = Stopwatch();
   final Stopwatch _totalStopwatch = Stopwatch();
-  int _totalFramesCaptured = 0;
+  int _totalFramesLogged = 0;
+  final List<Map<String, double>> _allFramesStats = [];
 
   // ─── Animation controllers ──────────────────────────────────────────────
   late AnimationController _pulseController;
@@ -101,7 +102,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   late CameraStabilizer _cameraStabilizer;
   Face? _lastProcessedFace;
   int _nextCaptureInterval = 300;
-  static const int _framesPerPhase = 8;
+  static const int _framesPerPhase = 5;
 
   // New state variables for valid frame counting, camera freeze, and processing overlays
   final List<BatchEmbeddingResult> _validResults = [];
@@ -110,11 +111,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   Uint8List? _lastCapturedFrameBytes;
   bool _isSubmitting = false;
 
-  List<double>? _embeddingA;
-  List<double>? _embeddingB;
-  List<double>? _embeddingC;
   List<double>? _masterEmbedding;
-  double _verificationThreshold = 0.82;
+  double _verificationThreshold = 0.70;
 
   int _attemptCount = 1;
 
@@ -132,32 +130,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // ignore: unused_field
   String? _errorMessage;
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // DYNAMIC THRESHOLD — adjusts threshold based on score consistency
-  // If scores are very consistent (low variance), we can use a slightly
-  // lower threshold since the quality is good.
-  // ─────────────────────────────────────────────────────────────────────────
-  double _calculateDynamicThreshold(List<double> scores) {
-    if (scores.isEmpty) return 0.75;
 
-    // Calculate mean
-    double mean = scores.reduce((a, b) => a + b) / scores.length;
-
-    // Calculate variance (how spread out the scores are)
-    double variance =
-        scores.map((s) => (s - mean) * (s - mean)).reduce((a, b) => a + b) /
-        scores.length;
-
-    // Low variance means scores are very consistent (good quality)
-    // High variance means scores are jumping around (poor quality)
-    if (variance < 0.01) {
-      return 0.75; // Consistent scores = good lighting/pose
-    } else if (variance < 0.05) {
-      return 0.75; // Moderately consistent
-    } else {
-      return 0.75; // Default threshold for inconsistent scores
-    }
-  }
 
   // ─── Face positioning state ─────────────────────────────────────────────
   DateTime? _steadyStartTime;
@@ -433,12 +406,18 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       // Load stored embeddings
       await _loadEmbeddings();
-      if (_embeddingA == null || _embeddingB == null || _embeddingC == null) {
+      if (_masterEmbedding == null) {
         return; // error already set
       }
 
       // Start camera stream for face detection
       await _cameraController!.startImageStream(_onCameraFrame);
+
+      _livenessService.logPrefix = 'FACE_VER';
+      _livenessService.sessionId = _sessionId;
+
+      debugPrint('[FACE_VER][$_sessionId]');
+      debugPrint('Verification Started');
 
       _setPhase(_Phase.positioning);
 
@@ -467,36 +446,22 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           cachedStudentId == user.id &&
           !isExpired &&
           cachedStudentId != null) {
-        final embAJson = prefs.getString('emb_a');
-        final embBJson = prefs.getString('emb_b');
-        final embCJson = prefs.getString('emb_c');
         final embMasterJson = prefs.getString('emb_master');
         final String? thresholdStr = prefs.getString(
           'emb_threshold_${user.id}',
         );
-        if (embAJson != null && embBJson != null && embCJson != null) {
-          _embeddingA = (jsonDecode(embAJson) as List)
+        if (embMasterJson != null) {
+          _masterEmbedding = (jsonDecode(embMasterJson) as List)
               .map((e) => (e as num).toDouble())
               .toList();
-          _embeddingB = (jsonDecode(embBJson) as List)
-              .map((e) => (e as num).toDouble())
-              .toList();
-          _embeddingC = (jsonDecode(embCJson) as List)
-              .map((e) => (e as num).toDouble())
-              .toList();
-          if (embMasterJson != null) {
-            _masterEmbedding = (jsonDecode(embMasterJson) as List)
-                .map((e) => (e as num).toDouble())
-                .toList();
-          }
           _verificationThreshold = thresholdStr != null
-              ? double.tryParse(thresholdStr) ?? 0.82
-              : 0.82;
+              ? double.tryParse(thresholdStr) ?? 0.70
+              : 0.70;
           debugPrint(
             '[FACE_VER] Threshold loaded from cache: $_verificationThreshold',
           );
           debugPrint(
-            '[FACE_VER] Master embedding cached: ${_masterEmbedding != null}',
+            '[FACE_VER] Master embedding loaded from cache',
           );
           return;
         }
@@ -511,40 +476,26 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       final data = await Supabase.instance.client
           .from('students')
           .select(
-            'embedding_a, embedding_b, embedding_c, face_embedding, verification_threshold',
+            'face_embedding, verification_threshold',
           )
           .eq('id', user.id)
           .maybeSingle();
 
-      if (data == null ||
-          data['embedding_a'] == null ||
-          data['embedding_b'] == null ||
-          data['embedding_c'] == null) {
+      if (data == null || data['face_embedding'] == null) {
         _setError('Could not load face profile. Please try again.');
         return;
       }
 
-      _embeddingA = (data['embedding_a'] as List)
+      _masterEmbedding = (data['face_embedding'] as List)
           .map((e) => (e as num).toDouble())
           .toList();
-      _embeddingB = (data['embedding_b'] as List)
-          .map((e) => (e as num).toDouble())
-          .toList();
-      _embeddingC = (data['embedding_c'] as List)
-          .map((e) => (e as num).toDouble())
-          .toList();
-      if (data['face_embedding'] != null) {
-        _masterEmbedding = (data['face_embedding'] as List)
-            .map((e) => (e as num).toDouble())
-            .toList();
-      }
       _verificationThreshold =
-          (data['verification_threshold'] as num?)?.toDouble() ?? 0.82;
+          (data['verification_threshold'] as num?)?.toDouble() ?? 0.70;
       debugPrint(
         '[FACE_VER] Threshold loaded from Supabase: $_verificationThreshold',
       );
       debugPrint(
-        '[FACE_VER] Master embedding loaded: ${_masterEmbedding != null}',
+        '[FACE_VER] Master embedding loaded from Supabase',
       );
 
       // Clear any previous user's cached embeddings first
@@ -554,10 +505,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       await prefs.remove('emb_master');
       await prefs.remove('emb_student_id');
       await prefs.remove('emb_cached_at');
+      
       // Cache for next time
-      await prefs.setString('emb_a', jsonEncode(_embeddingA));
-      await prefs.setString('emb_b', jsonEncode(_embeddingB));
-      await prefs.setString('emb_c', jsonEncode(_embeddingC));
       if (_masterEmbedding != null) {
         await prefs.setString('emb_master', jsonEncode(_masterEmbedding));
       }
@@ -565,13 +514,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         'emb_threshold_${user.id}',
         _verificationThreshold.toString(),
       );
-      debugPrint(
-        '[FACE_VER] Threshold cached for user ${user.id}: $_verificationThreshold',
-      );
       await prefs.setString('emb_student_id', user.id);
       await prefs.setInt('emb_cached_at', now);
       debugPrint(
-        '[FACE_VER] Embeddings A, B, C + master loaded from Supabase and cached',
+        '[FACE_VER] Master embedding loaded from Supabase and cached',
       );
     } catch (e) {
       _setError('Could not load face profile. Please try again.');
@@ -922,7 +868,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
     _capturedVerificationFrames.add(jpegBytes);
     final stats = _cameraStabilizer.computeFrameStats(cameraImage);
+    stats['yaw'] = face.headEulerAngleY ?? 0.0;
+    stats['pitch'] = face.headEulerAngleX ?? 0.0;
+    stats['roll'] = face.headEulerAngleZ ?? 0.0;
     _capturedVerificationFramesStats.add(stats);
+    _allFramesStats.add(stats);
 
     setState(() {
       _captureProgress = _validFrameCount + _capturedVerificationFrames.length;
@@ -982,7 +932,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     _updateInstruction('Analysing…', subtitle: 'Scanning frame 1 of ${_capturedVerificationFrames.length}');
 
     try {
-      _totalFramesCaptured += _capturedVerificationFrames.length;
       FaceLogger.ver(_sessionId, 'Processing Started');
 
       _apiStopwatch.start();
@@ -991,9 +940,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         localStatsList: _capturedVerificationFramesStats,
         sessionId: _sessionId,
         prefix: 'FACE_VER',
-        storedA: _embeddingA,
-        storedB: _embeddingB,
-        storedC: _embeddingC,
         storedMaster: _masterEmbedding,
         threshold: _verificationThreshold,
       );
@@ -1002,12 +948,32 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       FaceLogger.ver(_sessionId, 'Processing Finished');
 
       // Filter and count valid results
-      for (final res in batchResults) {
-        if (res.embedding != null && res.qualityPassed) {
+      for (int i = 0; i < batchResults.length; i++) {
+        final res = batchResults[i];
+        final stats = _capturedVerificationFramesStats[i];
+        _totalFramesLogged++;
+
+        final double brightness = stats['brightness'] ?? 0.0;
+        final double contrast = stats['contrast'] ?? 0.0;
+        final double sharpness = stats['sharpness'] ?? 0.0;
+        final double yaw = stats['yaw'] ?? 0.0;
+        final double pitch = stats['pitch'] ?? 0.0;
+        final double roll = stats['roll'] ?? 0.0;
+
+        final bool accepted = res.embedding != null && res.qualityPassed;
+
+        debugPrint('[FACE_VER][$_sessionId]');
+        debugPrint('Frame #$_totalFramesLogged');
+        debugPrint('Brightness=${brightness.round()}');
+        debugPrint('Contrast=${contrast.round()}');
+        debugPrint('Sharpness=${sharpness.round()}');
+        debugPrint('Yaw=${yaw.round()}');
+        debugPrint('Pitch=${pitch.round()}');
+        debugPrint('Roll=${roll.round()}');
+        debugPrint('Accepted=$accepted');
+
+        if (accepted) {
           _validResults.add(res);
-          FaceLogger.ver(_sessionId, 'Frame Accepted | valid=${_validResults.length}/$_framesPerPhase');
-        } else {
-          FaceLogger.ver(_sessionId, 'Frame Rejected | reason=${res.rejectionReason ?? "No face detected"}');
         }
       }
 
@@ -1053,7 +1019,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       // Rank accepted frames by quality score
       _validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
 
-      // Use the highest-quality frames only (top 8)
+      // Use the highest-quality frames only
       final List<BatchEmbeddingResult> topResults = _validResults.sublist(0, _framesPerPhase);
 
       _liveEmbeddings.clear();
@@ -1061,46 +1027,19 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         _liveEmbeddings.add(res.embedding!);
       }
 
-      // Calculate dynamic threshold based on front scores
-      final List<double> frontScores = _liveEmbeddings
-          .map((e) => _landmarkService.cosineSimilarity(e, _embeddingA!))
-          .toList();
-      final double dynamicThreshold = _calculateDynamicThreshold(frontScores);
-
       FaceLogger.ver(
         _sessionId,
-        'Using personal threshold: $_verificationThreshold',
+        'Using threshold: $_verificationThreshold',
       );
       FaceLogger.ver(
         _sessionId,
         'Master embedding available: ${_masterEmbedding != null}',
       );
 
-      // Per-frame similarity matrix logging
-      for (int i = 0; i < topResults.length; i++) {
-        final res = topResults[i];
-        final double sA = _landmarkService.cosineSimilarity(res.embedding!, _embeddingA!);
-        final double sB = _landmarkService.cosineSimilarity(res.embedding!, _embeddingB!);
-        final double sC = _landmarkService.cosineSimilarity(res.embedding!, _embeddingC!);
-        final double sMaster = _masterEmbedding != null
-            ? _landmarkService.cosineSimilarity(res.embedding!, _masterEmbedding!)
-            : 0.0;
-        final double quality = res.rawQualityScore;
-        FaceLogger.ver(
-          _sessionId,
-          '  Frame ${i + 1} | Quality=${quality.toStringAsFixed(1)} | '
-          'sA=${sA.toStringAsFixed(4)} | sB=${sB.toStringAsFixed(4)} | '
-          'sC=${sC.toStringAsFixed(4)} | sMaster=${sMaster.toStringAsFixed(4)}',
-        );
-      }
-      
       _comparisonStopwatch.start();
       final result = _landmarkService.verifyFace(
         liveEmbeddings: _liveEmbeddings,
-        storedEmbeddingA: _embeddingA!,
-        storedEmbeddingB: _embeddingB!,
-        storedEmbeddingC: _embeddingC!,
-        masterEmbedding: _masterEmbedding,
+        storedMasterEmbedding: _masterEmbedding!,
         threshold: _verificationThreshold,
       );
       _comparisonStopwatch.stop();
@@ -1110,139 +1049,83 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       final double avgQuality = topResults.isEmpty
           ? 0.0
           : topResults.map((e) => e.rawQualityScore).reduce((a, b) => a + b) / topResults.length;
-      final double maxQuality = topResults.isEmpty
-          ? 0.0
-          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => math.max(a, b));
-      final double minQuality = topResults.isEmpty
-          ? 0.0
-          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => math.min(a, b));
 
-      final double overallSimilarityA = topResults.isEmpty
+      final double avgLocalBrightness = _allFramesStats.isEmpty
           ? 0.0
-          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingA!)).reduce((a, b) => a + b) / topResults.length;
-      final double overallSimilarityB = topResults.isEmpty
+          : _allFramesStats.map((s) => s['brightness'] ?? 0.0).reduce((a, b) => a + b) / _allFramesStats.length;
+      final double avgLocalYaw = _validResults.isEmpty
           ? 0.0
-          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingB!)).reduce((a, b) => a + b) / topResults.length;
-      final double overallSimilarityC = topResults.isEmpty
+          : _validResults.map((r) => r.yaw).reduce((a, b) => a + b) / _validResults.length;
+      final double avgLocalPitch = _validResults.isEmpty
           ? 0.0
-          : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _embeddingC!)).reduce((a, b) => a + b) / topResults.length;
-      final double overallSimilarityMaster = _masterEmbedding == null
-          ? 0.0
-          : (topResults.isEmpty
-              ? 0.0
-              : topResults.map((res) => _landmarkService.cosineSimilarity(res.embedding!, _masterEmbedding!)).reduce((a, b) => a + b) / topResults.length);
+          : _validResults.map((r) => r.pitch).reduce((a, b) => a + b) / _validResults.length;
 
-      final int framesAccepted = _validFrameCount;
-      final int framesRejected = _totalFramesCaptured - framesAccepted;
+      // Retrieve cached registration statistics
+      final prefs = await SharedPreferences.getInstance();
+      final user = Supabase.instance.client.auth.currentUser;
+      final double regYaw = user != null ? prefs.getDouble('reg_yaw_${user.id}') ?? 0.0 : 0.0;
+      final double regPitch = user != null ? prefs.getDouble('reg_pitch_${user.id}') ?? 0.0 : 0.0;
+      final double regBrightness = user != null ? prefs.getDouble('reg_brightness_${user.id}') ?? 120.0 : 120.0;
 
-      final double avgLocalBrightness = _capturedVerificationFramesStats.isEmpty
-          ? 0.0
-          : _capturedVerificationFramesStats.map((s) => s['brightness'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
-      final double avgLocalContrast = _capturedVerificationFramesStats.isEmpty
-          ? 0.0
-          : _capturedVerificationFramesStats.map((s) => s['contrast'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
-      final double avgLocalSharpness = _capturedVerificationFramesStats.isEmpty
-          ? 0.0
-          : _capturedVerificationFramesStats.map((s) => s['sharpness'] ?? 0.0).reduce((a, b) => a + b) / _capturedVerificationFramesStats.length;
+      final List<double> averagedLive = _landmarkService.averageEmbeddings(_liveEmbeddings);
+      final double storedNorm = _calculateL2Norm(_masterEmbedding!);
+      final double liveNorm = _calculateL2Norm(averagedLive);
+      final double margin = result.score - _verificationThreshold;
 
-      FaceLogger.separator(_sessionId, 'FACE_VER');
-      FaceLogger.ver(_sessionId, 'VERIFICATION SUMMARY');
-      FaceLogger.separator(_sessionId, 'FACE_VER');
-      FaceLogger.ver(_sessionId, '  Frames Captured       : $_totalFramesCaptured');
-      FaceLogger.ver(_sessionId, '  Frames Accepted       : $framesAccepted');
-      FaceLogger.ver(_sessionId, '  Frames Rejected       : $framesRejected');
-      FaceLogger.ver(_sessionId, '  Avg Backend Quality   : ${avgQuality.toStringAsFixed(1)}');
-      FaceLogger.ver(_sessionId, '  Highest Quality       : ${maxQuality.toStringAsFixed(1)}');
-      FaceLogger.ver(_sessionId, '  Lowest Quality        : ${minQuality.toStringAsFixed(1)}');
-      FaceLogger.ver(_sessionId, '  Warm-up Time           : ${_cameraStabilizer.warmUpDurationMs}ms');
-      FaceLogger.ver(_sessionId, '  Focus Stabilize Time  : ${_cameraStabilizer.focusStabilizationDurationMs}ms');
-      FaceLogger.ver(_sessionId, '  Exposure Stabilize Time: ${_cameraStabilizer.exposureStabilizationDurationMs}ms');
-      FaceLogger.ver(_sessionId, '  Avg Local Brightness  : ${avgLocalBrightness.toStringAsFixed(1)}');
-      FaceLogger.ver(_sessionId, '  Avg Local Contrast    : ${avgLocalContrast.toStringAsFixed(1)}');
-      FaceLogger.ver(_sessionId, '  Avg Local Sharpness    : ${avgLocalSharpness.toStringAsFixed(1)}');
-      FaceLogger.ver(_sessionId, '  Similarity A          : ${overallSimilarityA.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Similarity B          : ${overallSimilarityB.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Similarity C          : ${overallSimilarityC.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Master Similarity     : ${overallSimilarityMaster.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Final Similarity      : ${result.score.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Threshold             : ${_verificationThreshold.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Decision              : ${result.isMatch ? "PASS" : "FAIL"}');
-      FaceLogger.ver(_sessionId, '  Failure Reason        : ${result.isMatch ? "—" : result.message}');
-      FaceLogger.ver(_sessionId, '  Capture Time          : ${_captureStopwatch.elapsedMilliseconds}ms');
-      FaceLogger.ver(_sessionId, '  Embedding API Time    : ${_apiStopwatch.elapsedMilliseconds}ms');
-      FaceLogger.ver(_sessionId, '  Comparison Time       : ${_comparisonStopwatch.elapsedMilliseconds}ms');
-      FaceLogger.ver(_sessionId, '  Total Time            : ${_totalStopwatch.elapsedMilliseconds}ms');
-      FaceLogger.separator(_sessionId, 'FACE_VER');
+      // Heuristics for failure cause
+      String likelyCause = 'Unknown';
+      if (!result.isMatch) {
+        final yawDiff = (regYaw - avgLocalYaw).abs();
+        final pitchDiff = (regPitch - avgLocalPitch).abs();
+        final brightnessDiff = (regBrightness - avgLocalBrightness).abs();
 
-      final double driftScore = _liveEmbeddings.isEmpty ? 0.0 : 1.0 - _landmarkService.cosineSimilarity(_liveEmbeddings.first, _liveEmbeddings.last);
-      final bool driftDetected = driftScore > 0.15;
+        if (yawDiff > 10.0 || pitchDiff > 10.0) {
+          likelyCause = 'Pose Difference';
+        } else if (brightnessDiff > 45.0) {
+          likelyCause = 'Lighting Difference';
+        } else if (avgQuality < 65.0) {
+          likelyCause = 'Poor Quality Frames';
+        } else {
+          likelyCause = 'Low Similarity';
+        }
+      }
 
-      FaceLogger.ver(_sessionId, 'EMBEDDING DRIFT DIAGNOSTICS');
-      FaceLogger.separator(_sessionId, 'FACE_VER');
-      FaceLogger.ver(_sessionId, '  Similarity to Template A : ${overallSimilarityA.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Similarity to Template B : ${overallSimilarityB.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Similarity to Template C : ${overallSimilarityC.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Similarity to Master     : ${overallSimilarityMaster.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Embedding Variance       : ${_landmarkService.lastEmbeddingVariance.toStringAsFixed(6)}');
-      FaceLogger.ver(_sessionId, '  Avg Intra-frame Sim      : ${_landmarkService.lastAverageSimilarity.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Drift Score              : ${driftScore.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Drift Detected           : ${driftDetected ? "YES" : "NO"}');
-      FaceLogger.separator(_sessionId, 'FACE_VER');
+      debugPrint('[FACE_VER][$_sessionId]');
+      debugPrint('Stored Embedding Length=${_masterEmbedding!.length}');
+      debugPrint('Live Embedding Length=${averagedLive.length}');
+      debugPrint('Stored Embedding Norm=${storedNorm.toStringAsFixed(3)}');
+      debugPrint('Live Embedding Norm=${liveNorm.toStringAsFixed(3)}');
+      debugPrint('Similarity=${result.score.toStringAsFixed(4)}');
+      debugPrint('Threshold=${_verificationThreshold.toStringAsFixed(4)}');
+      debugPrint('Margin=${margin.toStringAsFixed(4)}');
+      debugPrint('Decision=${result.isMatch ? "PASS" : "FAIL"}');
 
-      final double effectiveThreshold = math.max(_verificationThreshold, 0.65);
-      final double similarityMargin = result.score - _verificationThreshold;
-      final double decisionMargin = result.score - effectiveThreshold;
-
-      FaceLogger.ver(_sessionId, 'ADAPTIVE THRESHOLD DIAGNOSTICS');
-      FaceLogger.separator(_sessionId, 'FACE_VER');
-      FaceLogger.ver(_sessionId, '  Personal Threshold    : ${_verificationThreshold.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Current Threshold     : ${effectiveThreshold.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Adaptive Threshold    : ${dynamicThreshold.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Similarity Margin     : ${similarityMargin.toStringAsFixed(4)}');
-      FaceLogger.ver(_sessionId, '  Decision Margin       : ${decisionMargin.toStringAsFixed(4)}');
-      FaceLogger.separator(_sessionId, 'FACE_VER');
+      // Most Important Diagnostic Log
+      debugPrint('[FACE_VER][$_sessionId] =========================');
+      debugPrint('[FACE_VER][$_sessionId] FACE VERIFICATION SUMMARY');
+      debugPrint('[FACE_VER][$_sessionId] =========================');
+      debugPrint('[FACE_VER][$_sessionId] Registration Yaw=${regYaw.round()}');
+      debugPrint('[FACE_VER][$_sessionId] Verification Yaw=${avgLocalYaw.round()}');
+      debugPrint('[FACE_VER][$_sessionId] ');
+      debugPrint('[FACE_VER][$_sessionId] Registration Pitch=${regPitch.round()}');
+      debugPrint('[FACE_VER][$_sessionId] Verification Pitch=${avgLocalPitch.round()}');
+      debugPrint('[FACE_VER][$_sessionId] ');
+      debugPrint('[FACE_VER][$_sessionId] Registration Brightness=${regBrightness.round()}');
+      debugPrint('[FACE_VER][$_sessionId] Verification Brightness=${avgLocalBrightness.round()}');
+      debugPrint('[FACE_VER][$_sessionId] ');
+      debugPrint('[FACE_VER][$_sessionId] Similarity=${result.score.toStringAsFixed(4)}');
+      debugPrint('[FACE_VER][$_sessionId] Threshold=${_verificationThreshold.toStringAsFixed(4)}');
+      debugPrint('[FACE_VER][$_sessionId] ');
+      debugPrint('[FACE_VER][$_sessionId] Likely Cause:');
+      debugPrint('[FACE_VER][$_sessionId] $likelyCause');
+      debugPrint('[FACE_VER][$_sessionId] =========================');
 
       FaceLogger.ver(
         _sessionId,
-        'Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length} | DynThreshold: ${dynamicThreshold.toStringAsFixed(4)}',
+        'Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length}',
       );
 
       if (result.isMatch) {
-        // ── Adaptive update: improve master on high-confidence match ──
-        bool adaptiveUpdateApplied = false;
-        if (result.score >= 0.80 && _masterEmbedding != null) {
-          try {
-            // Compute mean live embedding for this session
-            final meanLive = _landmarkService.averageEmbeddings(_liveEmbeddings);
-            // Blend: 0.95 * old master + 0.05 * live mean
-            final int dim = _masterEmbedding!.length;
-            final List<double> blended = List.generate(
-              dim,
-              (i) => 0.95 * _masterEmbedding![i] + 0.05 * meanLive[i],
-            );
-            final newMaster = _landmarkService.l2Normalize(blended);
-
-            final user = Supabase.instance.client.auth.currentUser;
-            if (user != null) {
-              await Supabase.instance.client
-                  .from('students')
-                  .update({'face_embedding': newMaster})
-                  .eq('id', user.id);
-              _masterEmbedding = newMaster;
-              // Update cache
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setString('emb_master', jsonEncode(newMaster));
-              adaptiveUpdateApplied = true;
-              FaceLogger.ver(_sessionId, 'adaptiveUpdateApplied=true (score=${result.score.toStringAsFixed(4)})');
-            }
-          } catch (e) {
-            FaceLogger.ver(_sessionId, 'Adaptive update failed: $e');
-          }
-        }
-        if (!adaptiveUpdateApplied) {
-          FaceLogger.ver(_sessionId, 'adaptiveUpdateApplied=false');
-        }
-
         // ── Success ──
         setState(() => _borderColor = AppStyles.successGreen);
 
@@ -1343,7 +1226,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _apiStopwatch.reset();
           _comparisonStopwatch.reset();
           _totalStopwatch.reset();
-          _totalFramesCaptured = 0;
 
           setState(() => _borderColor = AppStyles.primaryBlue);
 
@@ -1374,6 +1256,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         });
       }
     }
+  }
+
+  double _calculateL2Norm(List<double> embedding) {
+    double sumSquares = 0.0;
+    for (final val in embedding) {
+      sumSquares += val * val;
+    }
+    return math.sqrt(sumSquares);
   }
 
   // ─────────────────────────────────────────────────────────────────────────

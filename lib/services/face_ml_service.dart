@@ -1,4 +1,4 @@
-﻿// lib/services/face_ml_service.dart
+// lib/services/face_ml_service.dart
 //
 // NOW ONLY HANDLES LIVENESS DETECTION (blink challenges)
 // Face recognition moved to face_landmark_service.dart
@@ -113,6 +113,9 @@ class FaceMlService {
 //   • V-shape catches blinks even if the state machine lags by 1 frame
 //
 class ProductionBlinkDetector {
+  String logPrefix = 'FACE_REG';
+  String sessionId = 'SYSTEM';
+
   // ── Calibration state ──────────────────────────────────────────────
   final List<double> _calibrationSamples = [];
   double? _baselineProbability; // mean open-eye prob for THIS user
@@ -169,7 +172,7 @@ class ProductionBlinkDetector {
     if (avgProb > 0.50) {
       _calibrationSamples.add(avgProb);
       debugPrint(
-        '[FACE_REG] Calibration sample ${_calibrationSamples.length}/$_calibrationFrames '
+        '[$logPrefix][$sessionId] Calibration sample ${_calibrationSamples.length}/$_calibrationFrames '
         '| prob=${avgProb.toStringAsFixed(3)}',
       );
     }
@@ -182,7 +185,7 @@ class ProductionBlinkDetector {
       _blinkThreshold = mean * 0.60; // 60% of personal baseline
 
       debugPrint(
-        '[FACE_REG] Baseline Calibrated: ${mean.toStringAsFixed(2)} '
+        '[$logPrefix][$sessionId] Baseline Calibrated: ${mean.toStringAsFixed(2)} '
         '| Threshold Set: ${_blinkThreshold!.toStringAsFixed(2)}',
       );
       return true;
@@ -212,7 +215,7 @@ class ProductionBlinkDetector {
     final double thresh = _blinkThreshold!;
 
     debugPrint(
-      '[FACE_REG] Blink check | '
+      '[$logPrefix][$sessionId] Blink check | '
       'prob=${prob.toStringAsFixed(3)} '
       'baseline=${baseline.toStringAsFixed(3)} '
       'threshold=${thresh.toStringAsFixed(3)} '
@@ -242,7 +245,7 @@ class ProductionBlinkDetector {
       _consecutiveClosedFrames++;
       if (_consecutiveClosedFrames >= 2) {
         debugPrint(
-          '[FACE_REG] Blink candidate (Quick Trigger, 2 frames below threshold)',
+          '[$logPrefix][$sessionId] Blink candidate (Quick Trigger, 2 frames below threshold)',
         );
         _resetState();
         return _registerBlink();
@@ -256,7 +259,7 @@ class ProductionBlinkDetector {
       // Eyes just closed — start timer
       _inBlink = true;
       _eyeClosedStart = DateTime.now();
-      debugPrint('[FACE_REG] Blink state → CLOSED (timer started)');
+      debugPrint('[$logPrefix][$sessionId] Blink state → CLOSED (timer started)');
     } else if (_inBlink) {
       final int elapsedMs = _eyeClosedStart != null
           ? DateTime.now().difference(_eyeClosedStart!).inMilliseconds
@@ -266,20 +269,20 @@ class ProductionBlinkDetector {
         // Eyes reopened — check duration
         if (elapsedMs <= _maxBlinkDurationMs) {
           debugPrint(
-            '[FACE_REG] Blink candidate (state-machine, ${elapsedMs}ms)',
+            '[$logPrefix][$sessionId] Blink candidate (state-machine, ${elapsedMs}ms)',
           );
           _resetState();
           return _registerBlink();
         } else {
           debugPrint(
-            '[FACE_REG] Blink rejected — too long (${elapsedMs}ms > ${_maxBlinkDurationMs}ms)',
+            '[$logPrefix][$sessionId] Blink rejected — too long (${elapsedMs}ms > ${_maxBlinkDurationMs}ms)',
           );
           _resetState();
         }
       } else if (elapsedMs > _maxBlinkDurationMs) {
         // Held eyes closed too long — not a blink
         debugPrint(
-          '[FACE_REG] Blink aborted — eyes held closed ${elapsedMs}ms',
+          '[$logPrefix][$sessionId] Blink aborted — eyes held closed ${elapsedMs}ms',
         );
         _resetState();
       }
@@ -300,7 +303,7 @@ class ProductionBlinkDetector {
     // Enforce cooldown — ignore if last blink was too recent
     if (_lastBlinkTime != null &&
         now.difference(_lastBlinkTime!).inMilliseconds < _cooldownMs) {
-      debugPrint('[FACE_REG] Blink ignored — cooldown active');
+      debugPrint('[$logPrefix][$sessionId] Blink ignored — cooldown active');
       return false;
     }
 
@@ -309,7 +312,7 @@ class ProductionBlinkDetector {
 
     // Check if window has expired — reset if so
     if (now.difference(_firstBlinkTime!).inMilliseconds > _windowMs) {
-      debugPrint('[FACE_REG] Blink window expired — resetting counter');
+      debugPrint('[$logPrefix][$sessionId] Blink window expired — resetting counter');
       _blinkCount = 0;
       _firstBlinkTime = now;
     }
@@ -319,13 +322,13 @@ class ProductionBlinkDetector {
 
     if (_blinkCount < _requiredBlinks) {
       debugPrint(
-        '[FACE_REG] Blink $_blinkCount detected. Waiting for ${_requiredBlinks - _blinkCount} more…',
+        '[$logPrefix][$sessionId] Blink $_blinkCount detected. Waiting for ${_requiredBlinks - _blinkCount} more…',
       );
       return false; // intermediate blink — signal screen but don't complete
     }
 
     // Double blink achieved
-    debugPrint('[FACE_REG] ✓ Double Blink Verified. Proceeding to capture.');
+    debugPrint('[$logPrefix][$sessionId] ✓ Double Blink Verified. Proceeding to capture.');
     // Reset counter so if re-used it starts fresh
     _blinkCount = 0;
     _firstBlinkTime = null;
@@ -422,6 +425,8 @@ class ProductionBlinkDetector {
 class LivenessChallengeService {
   final ChallengeValidator _validator; // kept for head turns
   final ProductionBlinkDetector _blinkDetector = ProductionBlinkDetector();
+  String logPrefix = 'FACE_REG';
+  String sessionId = 'SYSTEM';
 
   LivenessChallengeService()
     : _validator = ChallengeValidator(
@@ -435,22 +440,30 @@ class LivenessChallengeService {
 
   // ── Blink calibration passthrough ──────────────────────────────────
   bool get isBlinkCalibrated => _blinkDetector.isCalibrated;
-  bool calibrateBlink(Face face) => _blinkDetector.calibrate(face);
+  
+  bool calibrateBlink(Face face) {
+    _blinkDetector.logPrefix = logPrefix;
+    _blinkDetector.sessionId = sessionId;
+    return _blinkDetector.calibrate(face);
+  }
+  
   int get blinkCount => _blinkDetector.blinkCount;
 
   /// Detect a natural blink using adaptive production detector.
   bool detectBlink(Face face) {
+    _blinkDetector.logPrefix = logPrefix;
+    _blinkDetector.sessionId = sessionId;
     return _blinkDetector.processFace(face);
   }
 
   /// Detect head currently turned to the left.
   bool detectTurnLeft(Face face) {
     final double yaw = face.headEulerAngleY ?? 0;
-    debugPrint('[FACE_REG] TurnLeft check | yaw: ${yaw.toStringAsFixed(1)}');
+    debugPrint('[$logPrefix][$sessionId] TurnLeft check | yaw: ${yaw.toStringAsFixed(1)}');
     final result = _validator.validateChallenge(face, ChallengeType.turnLeft);
     if (result) {
       debugPrint(
-        '[FACE_REG] ✓ Head turn LEFT VERIFIED (yaw: ${yaw.toStringAsFixed(1)})',
+        '[$logPrefix][$sessionId] ✓ Head turn LEFT VERIFIED (yaw: ${yaw.toStringAsFixed(1)})',
       );
     }
     return result;
@@ -459,11 +472,11 @@ class LivenessChallengeService {
   /// Detect head currently turned to the right.
   bool detectTurnRight(Face face) {
     final double yaw = face.headEulerAngleY ?? 0;
-    debugPrint('[FACE_REG] TurnRight check | yaw: ${yaw.toStringAsFixed(1)}');
+    debugPrint('[$logPrefix][$sessionId] TurnRight check | yaw: ${yaw.toStringAsFixed(1)}');
     final result = _validator.validateChallenge(face, ChallengeType.turnRight);
     if (result) {
       debugPrint(
-        '[FACE_REG] ✓ Head turn RIGHT VERIFIED (yaw: ${yaw.toStringAsFixed(1)})',
+        '[$logPrefix][$sessionId] ✓ Head turn RIGHT VERIFIED (yaw: ${yaw.toStringAsFixed(1)})',
       );
     }
     return result;
