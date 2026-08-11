@@ -905,7 +905,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     );
     final double faceBrightness = stats['brightness'] ?? 0.0;
 
-    if (faceBrightness > 195.0) {
+    if (faceBrightness > 235.0) {
       _updateInstruction(
         'Too bright — move out of direct sunlight',
         subtitle: 'Reduce direct lighting on your face',
@@ -914,7 +914,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _isProcessingFrame = false;
       return;
     }
-    if (faceBrightness < 60.0) {
+    if (faceBrightness < 40.0) {
       _updateInstruction(
         'Too dark — improve the lighting on your face',
         subtitle: 'Face a light source or move to a brighter spot',
@@ -1018,7 +1018,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         if (mounted) {
           _updateInstruction(
             'Analysing…',
-            subtitle: 'Scanning frame ${i + 1} of $totalFramesToScan',
+            subtitle: 'Scanning frames...',
           );
         }
 
@@ -1029,6 +1029,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         );
 
         if (embedding == null) {
+          debugPrint('[FACE_VER] Frame rejected by backend.');
           FaceLogger.ver(_sessionId, 'Frame #${i + 1}: backend quality reject (null)');
           continue;
         }
@@ -1077,7 +1078,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         'Valid Count: $_validFrameCount/$_framesPerPhase',
       );
 
-      if (processedNonNullCount < 3 && framesAboveThresholdCount < 2) {
+      if (_validFrameCount < 3 && framesAboveThresholdCount < 2) {
         _capturedVerificationFrames.clear();
         _capturedVerificationFramesStats.clear();
 

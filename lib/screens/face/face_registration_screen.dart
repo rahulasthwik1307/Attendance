@@ -906,12 +906,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       level = 2;
       sharpnessMin = 1.0;
       brightMin = 30.0;
-      brightMax = 245.0;
+      brightMax = 250.0;
     } else if (rejections >= 3) {
       level = 1;
       sharpnessMin = 1.4;
       brightMin = 35.0;
-      brightMax = 240.0;
+      brightMax = 245.0;
     }
 
     if (_lastRelaxationLevel[currentPhase] != level) {
@@ -2107,8 +2107,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     List<String> rejectionReasons,
     Map<String, double> stats, {
     double sharpnessMin = 2.0,
-    double brightMin = 45.0,
-    double brightMax = 230.0,
+    double brightMin = 30.0,
+    double brightMax = 250.0,
   }) {
     final imgStats = _cameraStabilizer.computeFrameStats(
       image,
