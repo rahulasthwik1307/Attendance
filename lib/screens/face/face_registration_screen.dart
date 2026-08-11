@@ -1414,7 +1414,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
               'embedding_up': upEmbedding,
               'embedding_down': downEmbedding,
               'face_embedding': frontEmbedding, // Frontal fallback only, no master averaging!
-              'verification_threshold': 0.68, // Fixed global threshold
+              'verification_threshold': 0.62, // Fixed global threshold
               'registration_photo_url': photoUrl,
               'face_registered': true,
               'face_template_updated_at':

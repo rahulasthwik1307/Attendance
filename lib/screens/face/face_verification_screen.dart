@@ -459,6 +459,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _verificationThreshold = thresholdStr != null
               ? double.tryParse(thresholdStr) ?? 0.68
               : 0.68;
+          _verificationThreshold = math.min(_verificationThreshold, 0.62);
           debugPrint(
             '[FACE_VER] Threshold loaded from cache: $_verificationThreshold',
           );
@@ -522,6 +523,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _storedTemplates = templatesList;
       _verificationThreshold =
           (data['verification_threshold'] as num?)?.toDouble() ?? 0.68;
+      _verificationThreshold = math.min(_verificationThreshold, 0.62);
       debugPrint(
         '[FACE_VER] Threshold loaded from Supabase: $_verificationThreshold',
       );
@@ -1006,6 +1008,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       FaceLogger.ver(_sessionId, 'Processing Started');
 
       _liveEmbeddings.clear();
+      _validResults.clear();
       const List<String> poseNames = ['left', 'front', 'right', 'up', 'down'];
       int framesAboveThresholdCount = 0;
       double overallBestFrameScore = 0.0;
@@ -1036,6 +1039,21 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
         processedNonNullCount++;
         _liveEmbeddings.add(embedding);
+
+        double qualityScore = 80.0;
+        if (i < _capturedVerificationFramesStats.length) {
+          final stats = _capturedVerificationFramesStats[i];
+          qualityScore = stats['quality'] ?? stats['blur'] ?? 80.0;
+        }
+        _validResults.add(BatchEmbeddingResult(
+          embedding: embedding,
+          qualityPassed: true,
+          blurScore: i < _capturedVerificationFramesStats.length ? (_capturedVerificationFramesStats[i]['blur'] ?? 0.0) : 0.0,
+          faceArea: i < _capturedVerificationFramesStats.length ? (_capturedVerificationFramesStats[i]['face_area'] ?? 0.0) : 0.0,
+          yaw: i < _capturedVerificationFramesStats.length ? (_capturedVerificationFramesStats[i]['yaw'] ?? 0.0) : 0.0,
+          pitch: i < _capturedVerificationFramesStats.length ? (_capturedVerificationFramesStats[i]['pitch'] ?? 0.0) : 0.0,
+          rawQualityScore: qualityScore,
+        ));
 
         double frameMaxScore = -1.0;
         String bestPose = 'unknown';
@@ -1108,8 +1126,29 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         return;
       }
 
-      final bool isMatch = framesAboveThresholdCount >= 2;
-      final double score = overallBestFrameScore;
+      _validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
+      final List<BatchEmbeddingResult> topResults = _validResults.sublist(0, math.min(_framesPerPhase, _validResults.length));
+
+      List<List<double>> top3Embeddings = topResults.take(3).map((r) => r.embedding!).toList();
+      if (top3Embeddings.isEmpty) {
+        top3Embeddings = _liveEmbeddings.take(3).toList();
+      }
+
+      final List<double> avgEmbedding = _landmarkService.averageEmbeddings(top3Embeddings);
+      final List<double> fusedEmbedding = _landmarkService.l2Normalize(avgEmbedding);
+
+      double fusedScore = -1.0;
+      if (_storedTemplates != null && _storedTemplates!.isNotEmpty && fusedEmbedding.isNotEmpty) {
+        for (int t = 0; t < _storedTemplates!.length; t++) {
+          final double sim = _landmarkService.cosineSimilarity(fusedEmbedding, _storedTemplates![t]);
+          if (sim > fusedScore) {
+            fusedScore = sim;
+          }
+        }
+      }
+
+      final double score = math.max(overallBestFrameScore, fusedScore);
+      final bool isMatch = framesAboveThresholdCount >= 2 || fusedScore >= _verificationThreshold;
 
       _comparisonStopwatch.start();
       _comparisonStopwatch.stop();
@@ -1117,7 +1156,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       FaceLogger.ver(_sessionId, 'Per-Frame Multi-Template Decision:');
       FaceLogger.ver(_sessionId, '  FramesAboveThreshold=$framesAboveThresholdCount/${_liveEmbeddings.length}');
-      FaceLogger.ver(_sessionId, '  bestFrameScore = ${score.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  bestFrameScore = ${overallBestFrameScore.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  fusedScore = ${fusedScore.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  finalScore = ${score.toStringAsFixed(4)}');
       FaceLogger.ver(_sessionId, '  threshold = ${_verificationThreshold.toStringAsFixed(4)}');
       FaceLogger.ver(_sessionId, '  final decision = ${isMatch ? "PASS" : "FAIL"}');
 
@@ -1170,6 +1211,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       debugPrint('[FACE_VER][$_sessionId]');
       debugPrint('Backend Score=${score.toStringAsFixed(4)}');
+      debugPrint('Fused Score=${fusedScore.toStringAsFixed(4)}');
       debugPrint('Threshold=${_verificationThreshold.toStringAsFixed(4)}');
       debugPrint('Decision=${isMatch ? "PASS" : "FAIL"}');
 
@@ -1201,6 +1243,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         '[FACE_VER][$_sessionId] Backend Score=${score.toStringAsFixed(4)}',
       );
       debugPrint(
+        '[FACE_VER][$_sessionId] Fused Score=${fusedScore.toStringAsFixed(4)}',
+      );
+      debugPrint(
         '[FACE_VER][$_sessionId] Threshold=${_verificationThreshold.toStringAsFixed(4)}',
       );
       debugPrint('[FACE_VER][$_sessionId] ');
@@ -1210,7 +1255,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       FaceLogger.ver(
         _sessionId,
-        'Backend Decision | Score: ${score.toStringAsFixed(4)} | Match: $isMatch | LiveFrames: ${_liveEmbeddings.length}',
+        'Backend Decision | Score: ${score.toStringAsFixed(4)} | FusedScore: ${fusedScore.toStringAsFixed(4)} | Match: $isMatch | LiveFrames: ${_liveEmbeddings.length}',
       );
 
       if (isMatch) {
@@ -1277,13 +1322,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         );
 
         bool hasSeverePoseWarning = _capturedVerificationFramesStats.any((s) => ((s['yaw'] ?? 0.0).abs() > 20.0 || (s['pitch'] ?? 0.0).abs() > 15.0));
-        bool meetsRetryConditions = score >= (_verificationThreshold - 0.03) &&
-            score < _verificationThreshold &&
-            avgQuality >= 65.0 &&
-            !hasSeverePoseWarning;
+        FaceLogger.ver(_sessionId, 'Verification failed (attempt $_attemptCount). Pose warning: $hasSeverePoseWarning.');
 
-        if (_attemptCount < 2 && meetsRetryConditions) {
-          FaceLogger.ver(_sessionId, 'Retry conditions met: score=${score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, pose=OK. Triggering retry.');
+        if (!isMatch && _attemptCount < 2) {
+          FaceLogger.ver(_sessionId, 'Attempt $_attemptCount failed. Triggering full flow retry.');
           await Future.delayed(const Duration(milliseconds: 1200));
           if (!mounted) return;
 
@@ -1306,6 +1348,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _isFaceReady = false;
           _lastKnownBlinkCount = 0;
 
+          _secondsRemaining = 60;
+
           _captureStopwatch.reset();
           _apiStopwatch.reset();
           _comparisonStopwatch.reset();
@@ -1320,9 +1364,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _setPhase(_Phase.positioning);
           _startCountdownTimer();
         } else {
-          if (!meetsRetryConditions) {
-            FaceLogger.ver(_sessionId, 'Retry conditions not met: score=${score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, poseWarning=$hasSeverePoseWarning. Rejecting verification.');
-          }
+          FaceLogger.ver(_sessionId, 'Attempt $_attemptCount failed. Max retries reached. Navigating to attendance_failed.');
           await Future.delayed(const Duration(milliseconds: 600));
           if (mounted) {
             Navigator.of(context).pushReplacementNamed('/attendance_failed');
