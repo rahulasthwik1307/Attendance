@@ -1084,7 +1084,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           animate: true,
         );
 
-        Future.delayed(const Duration(milliseconds: 500), () {
+        Future.delayed(const Duration(milliseconds: 150), () {
           if (mounted) {
             _setPhase(_Phase.processing);
             _processAndUpload();
