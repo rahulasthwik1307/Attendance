@@ -53,7 +53,11 @@ import '../../utils/camera_stabilizer.dart';
 enum _Phase {
   initializing, // Camera starting up
   liveness, // Blink verification (looking straight) — first gate
-  front, // Capture 9 front frames
+  left, // Pose Capture Stage 1: Left
+  front, // Pose Capture Stage 2: Front
+  right, // Pose Capture Stage 3: Right
+  up, // Pose Capture Stage 4: Up
+  down, // Pose Capture Stage 5: Down
   processing, // Running embeddings + uploading to Supabase
   done, // Complete — navigating away
   error, // Something went wrong
@@ -77,7 +81,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   final Stopwatch _totalStopwatch = Stopwatch();
   int _totalFramesCaptured = 0;
   int _totalFramesLogged = 0;
-  final List<Map<String, double>> _allFramesStats = [];
 
   // ─── Animation controllers (kept from original UI) ──────────────────────
   late AnimationController _pulseController;
@@ -103,19 +106,78 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // ─── Registration state ───────────────────────────────────────────────────
   _Phase _phase = _Phase.initializing;
 
-  // Captured frame bytes (JPEG)
+  // Captured frame bytes (JPEG) per pose
+  final List<Uint8List> _leftFrames = [];
+  final List<Map<String, double>> _leftFramesStats = [];
+
   final List<Uint8List> _frontFrames = [];
   final List<Map<String, double>> _frontFramesStats = [];
+
+  final List<Uint8List> _rightFrames = [];
+  final List<Map<String, double>> _rightFramesStats = [];
+
+  final List<Uint8List> _upFrames = [];
+  final List<Map<String, double>> _upFramesStats = [];
+
+  final List<Uint8List> _downFrames = [];
+  final List<Map<String, double>> _downFramesStats = [];
+
+  // Selected best frames per pose
+  final Map<_Phase, Uint8List> _bestFrames = {};
+  final Map<_Phase, Map<String, double>> _bestFramesStats = {};
+
+  // Adaptive quality gate and pending poses state
+  final Map<_Phase, int> _consecutiveRejections = {};
+  final Map<_Phase, bool> _hintShown = {};
+  final Map<_Phase, int> _lastRelaxationLevel = {};
+  List<_Phase> _pendingPoses = [
+    _Phase.left,
+    _Phase.front,
+    _Phase.right,
+    _Phase.up,
+    _Phase.down,
+  ];
+
+  void _showHintOnce(_Phase phase, String hint) {
+    if (_hintShown[phase] == true) return;
+    _hintShown[phase] = true;
+    if (!mounted) return;
+    setState(() {
+      _instructionSubtitle = hint;
+    });
+  }
+
+  // Client-rejected frames list (reasons + stats)
+  final List<Map<String, dynamic>> _clientRejectedLogs = [];
+
+  // Attempts tracking (each captured/evaluated frame is an attempt)
+  int _leftAttempts = 0;
+  int _frontAttempts = 0;
+  int _rightAttempts = 0;
+  int _upAttempts = 0;
+  int _downAttempts = 0;
 
   // First front frame saved as registration photo
   Uint8List? _registrationPhotoBytes;
   Rect? _registrationPhotoBbox;
 
-  // Embeddings
-  final List<List<double>> _frontEmbeddings = [];
+  // Target accepted frames per pose
+  int targetFramesForPose(_Phase phase) {
+    switch (phase) {
+      case _Phase.up:
+      case _Phase.down:
+        return 3;
+      case _Phase.left:
+      case _Phase.front:
+      case _Phase.right:
+      default:
+        return 3;
+    }
+  }
 
-  // How many quality frames to capture (all front)
-  static const int _framesPerPhase = 8;
+  static const int _totalTargetFrames = 15;
+  // ignore: unused_field
+  static const int _maxAttemptsPerPose = 5;
 
   // New state variables for valid frame counting, camera freeze, and processing overlays
   final List<BatchEmbeddingResult> _validResults = [];
@@ -123,6 +185,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   bool _cameraFrozen = false;
   Uint8List? _lastCapturedFrameBytes;
   bool _isSubmitting = false;
+
+  // Exposure adjustment throttle timestamp
+  DateTime _lastExposureAdjustTime = DateTime.fromMillisecondsSinceEpoch(0);
 
   // Problem 2: one-shot capture completion lock — prevents duplicate _processAndUpload calls.
   // Set to true the moment we decide to stop capturing; reset only in _onRetry.
@@ -145,7 +210,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   int _lastKnownBlinkCount = 0;
 
   // Progress: which step out of total (for display)
-  int _captureProgress = 0; // 0-9 total frames
+  int _captureProgress = 0; // 0-15 total frames
   String _progressLabel = '';
 
   // ignore: unused_field
@@ -154,6 +219,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   // ─── Face positioning state ────────────────────────────────────────────
   DateTime? _steadyStartTime;
   bool _isFaceReady = false;
+  DateTime? _poseSteadyStartTime;
+  _Phase? _poseSteadyPhase; // tracks which phase the steady timer belongs to
+  static const int _poseSteadyDurationMs = 550;
   Timer? _instructionDebounceTimer;
 
   // ── Flash effect ──
@@ -197,6 +265,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     "Move slightly Right": "Shift yourself slightly to the right",
     "Move slightly Down": "Lower your face a bit",
     "Move slightly Up": "Raise your face a bit",
+    "Look slightly up": "Look slightly up and hold still",
+    "Look slightly down": "Look slightly down and hold still",
+    "Reduce head movement slightly": "Keep pose within normal tilt",
     "Hold still…": "Almost ready, stay steady",
     "Blink to verify": "Blink naturally to confirm you are present",
     "Blink your eyes 2-3 times":
@@ -206,6 +277,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     "Look straight ahead": "Getting your front profile",
     "Turn slightly left": "Shift your position slightly to the left",
     "Turn slightly right": "Shift your position slightly to the right",
+    "Too bright — move out of direct sunlight": "Reduce direct lighting on your face",
+    "Too dark — improve the lighting on your face": "Face a light source or move to a brighter spot",
+    "All poses captured": "Great! Processing your face profile…",
     "Processing…": "Generating your face profile",
     "Almost done!": "Saving your registration",
     "Registration complete!": "Your face has been registered",
@@ -464,6 +538,19 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       // Push raw face metrics into smoothing buffer for moving average
       _pushSmoothing(face);
 
+      // Adapt camera exposure to face region (throttled to 600ms)
+      final frameStats = _cameraStabilizer.computeFrameStats(
+        cameraImage,
+        faceBoundingBox: face.boundingBox,
+        sensorOrientation: _cameraController!.description.sensorOrientation,
+      );
+      final double faceBrightness = frameStats['brightness'] ?? 0.0;
+      final nowAdjust = DateTime.now();
+      if (nowAdjust.difference(_lastExposureAdjustTime).inMilliseconds >= 600) {
+        _lastExposureAdjustTime = nowAdjust;
+        _cameraStabilizer.adjustFaceExposure(faceBrightness);
+      }
+
       // ── Pre-liveness positioning gate ──────────────────────────────────
       // Only applies during liveness phase (before initial blink).
       // Once _challengeVerified is true, capture phases skip this entirely.
@@ -533,16 +620,28 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           if (!_challengeVerified) {
             await _handleLivenessChallenge(face, ChallengeType.blink);
           } else {
-            // Blink verified — transition to front capture phase
+            // Blink verified — transition to left capture phase
             debugPrint(
-              '[FACE_REG] Liveness verified — moving directly to front capture phase',
+              '[FACE_REG] Liveness verified — moving directly to left capture phase',
             );
             await Future.delayed(const Duration(milliseconds: 500));
-            if (mounted) _setPhase(_Phase.front);
+            if (mounted) _setPhase(_Phase.left);
           }
+          break;
+        case _Phase.left:
+          await _handleCapture(face, cameraImage, _Phase.left);
           break;
         case _Phase.front:
           await _handleCapture(face, cameraImage, _Phase.front);
+          break;
+        case _Phase.right:
+          await _handleCapture(face, cameraImage, _Phase.right);
+          break;
+        case _Phase.up:
+          await _handleCapture(face, cameraImage, _Phase.up);
+          break;
+        case _Phase.down:
+          await _handleCapture(face, cameraImage, _Phase.down);
           break;
         default:
           break;
@@ -707,17 +806,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     if (_isSubmitting) return;
 
     final now = DateTime.now();
-    if (now.difference(_lastCaptureTime).inMilliseconds < _nextCaptureInterval) {
+    if (now.difference(_lastCaptureTime).inMilliseconds <
+        _nextCaptureInterval) {
       return;
     }
 
-    // Validate pose for current phase
-    if (!_isPoseCorrect(face, currentPhase)) {
-      _updateInstruction(_getPoseInstruction(currentPhase), animate: false);
-      return;
-    }
-
-    // Quality + centering check (phase-aware: relaxed offset for side turns)
+    // Centering + size + boundary check
     if (!_isFaceAcceptable(face, cameraImage, currentPhase)) {
       _updateInstruction(
         _getFacingInstruction(face, cameraImage),
@@ -726,8 +820,149 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       return;
     }
 
-    // Stable frame selection check
-    if (!_cameraStabilizer.checkFrameStability(cameraImage)) {
+    final double? yawRaw = face.headEulerAngleY;
+    final double? pitch = face.headEulerAngleX;
+    final double yaw = yawRaw != null ? -yawRaw : 0.0;
+
+    if (currentPhase == _Phase.up || currentPhase == _Phase.down) {
+      debugPrint('[POSE_DEBUG] Phase: ${currentPhase.name} | Yaw: ${yaw.toStringAsFixed(1)} | Pitch: ${pitch?.toStringAsFixed(1)}');
+    }
+
+    // Validate pose for current phase
+    if (!_isPoseCorrect(face, currentPhase)) {
+      _poseSteadyStartTime = null;
+      final feedback =
+          _getGentlePoseFeedback(face, currentPhase) ??
+          _getPoseInstruction(currentPhase);
+      _updateInstruction(feedback, animate: false);
+      return;
+    }
+
+    if (_poseSteadyStartTime == null || _poseSteadyPhase != currentPhase) {
+      _poseSteadyStartTime = DateTime.now();
+      _poseSteadyPhase = currentPhase;
+      _updateInstruction(
+        'Hold still…',
+        subtitle: 'Almost there, stay steady',
+        animate: false,
+      );
+      return;
+    }
+
+    final int steadyMs = DateTime.now()
+        .difference(_poseSteadyStartTime!)
+        .inMilliseconds;
+    final int requiredSteadyMs = (currentPhase == _Phase.up || currentPhase == _Phase.down) ? 800 : _poseSteadyDurationMs;
+    if (steadyMs < requiredSteadyMs) {
+      _updateInstruction(
+        'Hold still…',
+        subtitle: 'Almost there, stay steady',
+        animate: false,
+      );
+      return;
+    }
+
+    // Increment attempts for this phase
+    int currentAttempts = 0;
+    int currentAccepted = 0;
+    List<Uint8List> phaseFrames;
+    List<Map<String, double>> phaseStats;
+
+    if (currentPhase == _Phase.left) {
+      _leftAttempts++;
+      currentAttempts = _leftAttempts;
+      phaseFrames = _leftFrames;
+      phaseStats = _leftFramesStats;
+    } else if (currentPhase == _Phase.front) {
+      _frontAttempts++;
+      currentAttempts = _frontAttempts;
+      phaseFrames = _frontFrames;
+      phaseStats = _frontFramesStats;
+    } else if (currentPhase == _Phase.right) {
+      _rightAttempts++;
+      currentAttempts = _rightAttempts;
+      phaseFrames = _rightFrames;
+      phaseStats = _rightFramesStats;
+    } else if (currentPhase == _Phase.up) {
+      _upAttempts++;
+      currentAttempts = _upAttempts;
+      phaseFrames = _upFrames;
+      phaseStats = _upFramesStats;
+    } else {
+      _downAttempts++;
+      currentAttempts = _downAttempts;
+      phaseFrames = _downFrames;
+      phaseStats = _downFramesStats;
+    }
+
+    // Compute relaxation level based on consecutive rejections
+    final int rejections = _consecutiveRejections[currentPhase] ?? 0;
+    int level = 0;
+    double sharpnessMin = 2.0;
+    double brightMin = 45.0;
+    double brightMax = 230.0;
+
+    if (rejections >= 6) {
+      level = 2;
+      sharpnessMin = 1.0;
+      brightMin = 30.0;
+      brightMax = 245.0;
+    } else if (rejections >= 3) {
+      level = 1;
+      sharpnessMin = 1.4;
+      brightMin = 35.0;
+      brightMax = 240.0;
+    }
+
+    if (_lastRelaxationLevel[currentPhase] != level) {
+      _lastRelaxationLevel[currentPhase] = level;
+      debugPrint(
+        '[FACE_REG] Quality gate relaxed to level $level for ${currentPhase.name} (rejections: $rejections)',
+      );
+    }
+
+    // Now validate quality (sharpness, brightness, size, centering)
+    final List<String> rejectionReasons = [];
+    final Map<String, double> stats = {};
+    final bool isQualityPassed = _validateFrameQuality(
+      face,
+      cameraImage,
+      currentPhase,
+      rejectionReasons,
+      stats,
+      sharpnessMin: sharpnessMin,
+      brightMin: brightMin,
+      brightMax: brightMax,
+    );
+
+    if (!isQualityPassed) {
+      _consecutiveRejections[currentPhase] = rejections + 1;
+      if (rejections + 1 >= 3) {
+        _showHintOnce(
+          currentPhase,
+          'Tip: face a light source if possible — capture continues…',
+        );
+      }
+
+      // Discard immediately - log the rejection locally
+      _clientRejectedLogs.add({
+        'phase': currentPhase.name,
+        'attempt': currentAttempts,
+        'reasons': rejectionReasons,
+        'stats': stats,
+        'timestamp': DateTime.now().toIso8601String(),
+      });
+      debugPrint(
+        '[FACE_REG] Frame rejected. Attempt $currentAttempts. Reasons: $rejectionReasons',
+      );
+      return;
+    }
+
+    // Reset consecutive rejections on quality pass
+    _consecutiveRejections[currentPhase] = 0;
+
+    // Stable frame selection check with relaxed threshold
+    if (!_cameraStabilizer.checkFrameStability(cameraImage, threshold: 35.0)) {
       _isProcessingFrame = false;
       return;
     }
@@ -738,8 +973,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     final Uint8List? jpegBytes = await _captureCurrentFrame();
     if (jpegBytes == null) return;
 
-    // Re-check locks after the async captureCurrentFrame — a concurrent callback
-    // may have already completed the capture while we were awaiting.
+    // Re-check locks after the async captureCurrentFrame
     if (_captureCompleted) return;
     if (_cameraFrozen) return;
 
@@ -778,92 +1012,87 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       }
     });
 
-    // Store JPEG bytes for batch processing later.
-    switch (currentPhase) {
-      case _Phase.front:
-        _frontFrames.add(jpegBytes);
-        final stats = _cameraStabilizer.computeFrameStats(cameraImage);
-        stats['yaw'] = face.headEulerAngleY ?? 0.0;
-        stats['pitch'] = face.headEulerAngleX ?? 0.0;
-        stats['roll'] = face.headEulerAngleZ ?? 0.0;
-        _frontFramesStats.add(stats);
-        _allFramesStats.add(stats);
-        final int totalSoFar = _validFrameCount + _frontFrames.length;
-        final int remaining = _framesPerPhase - totalSoFar;
-        setState(() {
-          _captureProgress = totalSoFar;
-          _progressLabel = '$totalSoFar / $_framesPerPhase';
-          _borderColor = AppStyles.successGreen;
-        });
-        HapticFeedback.lightImpact();
-        debugPrint('[FACE_REG] Frame Captured');
-        debugPrint('[FACE_REG]   Current Batch = ${_frontFrames.length}');
-        debugPrint(
-          '[FACE_REG]   Total Valid   = $_validFrameCount (pre-batch)',
-        );
-        debugPrint(
-          '[FACE_REG]   Remaining     = ${remaining < 0 ? 0 : remaining}',
-        );
-        break;
-      default:
-        break;
-    }
+    // Store JPEG bytes
+    phaseFrames.add(jpegBytes);
+    phaseStats.add(stats);
+    currentAccepted = phaseFrames.length;
+
+    _captureProgress = (_leftFrames.length +
+        _frontFrames.length +
+        _rightFrames.length +
+        _upFrames.length +
+        _downFrames.length);
+    _progressLabel =
+        'Accepted: $currentAccepted / ${targetFramesForPose(currentPhase)}';
+
+    setState(() {
+      _borderColor = AppStyles.successGreen;
+    });
+    HapticFeedback.lightImpact();
+    debugPrint('[FACE_REG] Frame Captured for ${currentPhase.name}');
+    debugPrint('[FACE_REG]   Current Batch = ${phaseFrames.length}');
+    debugPrint('[FACE_REG]   Attempts = $currentAttempts');
 
     _lastCaptureTime = DateTime.now();
-    _nextCaptureInterval = 250 + math.Random().nextInt(100);
+    _nextCaptureInterval = 400 + math.Random().nextInt(100);
 
-    // Problem 1: compare against total valid count, not just current batch size.
-    // needed = how many MORE frames we still need from this and future batches.
-    final int needed = _framesPerPhase - _validFrameCount;
-    if (currentPhase == _Phase.front && _frontFrames.length >= needed) {
-      // Problem 2: atomic lock — set BEFORE stopImageStream so no queued
-      // callback can slip through and trigger another processing cycle.
-      if (_captureCompleted) return;
-      _captureCompleted = true;
-
-      _captureStopwatch.stop();
-
-      FaceLogger.reg(_sessionId, 'Target Reached');
-      FaceLogger.reg(
-        _sessionId,
-        '  Total Valid    = ${_validFrameCount + _frontFrames.length}',
-      );
-      FaceLogger.reg(_sessionId, '  Stopping Camera');
-      FaceLogger.reg(_sessionId, '  Starting Processing');
-
-      // Stop camera FIRST — after setting _captureCompleted so late callbacks bail
-      try {
-        await _cameraController?.stopImageStream();
-      } catch (_) {}
-      _imageStreamRunning = false;
-
-      // Freeze camera and ignore future frames
-      setState(() {
-        _cameraFrozen = true;
-        _isProcessingFrame = true;
+    // If we reached the target accepted frames for this pose
+    if (currentAccepted >= targetFramesForPose(currentPhase)) {
+      // Pick the best frame out of the accepted ones
+      final List<int> indices = List.generate(phaseFrames.length, (i) => i);
+      indices.sort((a, b) {
+        final double scoreA =
+            (phaseStats[a]['sharpness'] ?? 0.0) *
+            (phaseStats[a]['contrast'] ?? 0.0);
+        final double scoreB =
+            (phaseStats[b]['sharpness'] ?? 0.0) *
+            (phaseStats[b]['contrast'] ?? 0.0);
+        return scoreB.compareTo(scoreA); // descending order
       });
+      final int bestIndex = indices.first;
+      _bestFrames[currentPhase] = phaseFrames[bestIndex];
+      _bestFramesStats[currentPhase] = phaseStats[bestIndex];
 
-      _updateInstruction(
-        'Creating Face Profile',
-        subtitle: 'Please wait while we securely process your face.',
-        animate: false,
+      debugPrint(
+        '[FACE_REG] Completed pose ${currentPhase.name}. Best frame selected (index $bestIndex).',
       );
-      HapticFeedback.mediumImpact();
-      await Future.delayed(const Duration(milliseconds: 500));
-      _setPhase(_Phase.processing);
 
-      Future.delayed(const Duration(milliseconds: 800), () {
-        if (mounted) {
-          _pulseController.stop();
-          _successBounceController.forward(from: 0.0).then((_) {
-            _successBounceController.reverse();
-          });
-        }
-      });
+      _pendingPoses.remove(currentPhase);
+      if (_pendingPoses.isEmpty) {
+        if (_captureCompleted) return;
+        _captureCompleted = true;
 
-      // Delay to let processing UI show up before heavy synchronous math
-      await Future.delayed(const Duration(milliseconds: 50));
-      await _processAndUpload();
+        _captureStopwatch.stop();
+
+        FaceLogger.reg(_sessionId, 'Target Reached for all poses');
+        FaceLogger.reg(_sessionId, '  Stopping Camera');
+        FaceLogger.reg(_sessionId, '  Starting Processing');
+
+        try {
+          await _cameraController?.stopImageStream();
+        } catch (_) {}
+        _imageStreamRunning = false;
+
+        setState(() {
+          _cameraFrozen = true;
+          _borderColor = AppStyles.successGreen;
+        });
+
+        _updateInstruction(
+          'All poses captured',
+          subtitle: 'Great! Processing your face profile…',
+          animate: true,
+        );
+
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            _setPhase(_Phase.processing);
+            _processAndUpload();
+          }
+        });
+      } else {
+        _setPhase(_pendingPoses.first);
+      }
     }
   }
 
@@ -884,22 +1113,38 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _updateInstruction('Processing…', subtitle: 'Generating your face profile');
 
     try {
-      _totalFramesCaptured += _frontFrames.length;
+      final List<Uint8List> bestFramesList = [
+        _bestFrames[_Phase.left]!,
+        _bestFrames[_Phase.front]!,
+        _bestFrames[_Phase.right]!,
+        _bestFrames[_Phase.up]!,
+        _bestFrames[_Phase.down]!,
+      ];
+      final List<Map<String, double>> bestStatsList = [
+        _bestFramesStats[_Phase.left]!,
+        _bestFramesStats[_Phase.front]!,
+        _bestFramesStats[_Phase.right]!,
+        _bestFramesStats[_Phase.up]!,
+        _bestFramesStats[_Phase.down]!,
+      ];
+
+      _totalFramesCaptured += bestFramesList.length;
       FaceLogger.reg(_sessionId, 'Embedding Generation Started');
-      FaceLogger.reg(_sessionId, '  Batch size = ${_frontFrames.length}');
+      FaceLogger.reg(_sessionId, '  Batch size = ${bestFramesList.length}');
 
       _apiStopwatch.start();
       final List<BatchEmbeddingResult> batchResults = await _landmarkService
           .generateEmbeddingBatch(
-            jpegBytesList: _frontFrames,
-            localStatsList: _frontFramesStats,
+            jpegBytesList: bestFramesList,
+            localStatsList: bestStatsList,
             sessionId: _sessionId,
             prefix: 'FACE_REG',
+            clientRejectedLogs: _clientRejectedLogs,
           );
       _apiStopwatch.stop();
 
       FaceLogger.reg(_sessionId, 'Batch Finished');
-      FaceLogger.reg(_sessionId, '  Captured = ${_frontFrames.length}');
+      FaceLogger.reg(_sessionId, '  Captured = ${bestFramesList.length}');
 
       // ── CASE 2: API / network failure ─────────────────────────────────────
       final bool apiFailed =
@@ -933,7 +1178,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       int batchAccepted = 0;
       for (int i = 0; i < batchResults.length; i++) {
         final res = batchResults[i];
-        final stats = _frontFramesStats[i];
+        final stats = bestStatsList[i];
         _totalFramesLogged++;
 
         final double brightness = stats['brightness'] ?? 0.0;
@@ -974,80 +1219,165 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       _validFrameCount = _validResults.length;
       FaceLogger.reg(_sessionId, '  Backend Accepted = $batchAccepted');
       FaceLogger.reg(_sessionId, '  Total Valid      = $_validFrameCount');
-      FaceLogger.reg(
-        _sessionId,
-        '  Need More        = ${(_framesPerPhase - _validFrameCount).clamp(0, _framesPerPhase)}',
-      );
 
-      if (_validFrameCount < _framesPerPhase) {
-        // Quality retry — API succeeded but not enough high-quality frames yet.
-        final int remaining = _framesPerPhase - _validFrameCount;
-        FaceLogger.reg(_sessionId, 'Quality Retry');
-        FaceLogger.reg(_sessionId, '  Accepted    = $batchAccepted');
-        FaceLogger.reg(_sessionId, '  Need More   = $remaining');
-        FaceLogger.reg(_sessionId, '  Restarting Camera');
+      final List<_Phase> allPosesInOrder = [
+        _Phase.left,
+        _Phase.front,
+        _Phase.right,
+        _Phase.up,
+        _Phase.down,
+      ];
+      final List<_Phase> failedPoses = [];
 
-        _frontFrames.clear();
-        _frontFramesStats.clear();
-
-        // Reset _captureCompleted so _handleCapture can collect the remaining frames.
-        _captureCompleted = false;
-
-        setState(() {
-          _cameraFrozen = false;
-          _isProcessingFrame = false;
-          _captureProgress = _validFrameCount;
-          _progressLabel = '$_validFrameCount / $_framesPerPhase';
-          _isSubmitting = false;
-        });
-
-        // Resume capture timer
-        _captureStopwatch.start();
-
-        _setPhase(_Phase.front);
-
-        // Only restart the image stream if it is not already running.
-        if (!_imageStreamRunning) {
-          try {
-            await _cameraController?.startImageStream(_onCameraFrame);
-            _imageStreamRunning = true;
-          } catch (e) {
-            _setError('Camera could not start. Please try again.');
-            return;
-          }
+      for (int i = 0; i < batchResults.length; i++) {
+        final res = batchResults[i];
+        final pose = i < allPosesInOrder.length ? allPosesInOrder[i] : _Phase.left;
+        final bool accepted = res.embedding != null && res.qualityPassed;
+        if (!accepted) {
+          failedPoses.add(pose);
         }
-
-        _updateInstruction(
-          'Need clearer frames',
-          subtitle:
-              'Please hold still in good lighting. Capturing $remaining more...',
-        );
-        return;
       }
 
-      // Target reached — rank accepted frames by quality and pick the best 8.
-      _validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
+      if (failedPoses.isNotEmpty) {
+        if (failedPoses.length == 5 || _validFrameCount < 1) {
+          FaceLogger.reg(_sessionId, 'Full Quality Retry (All frames rejected)');
+          _leftFrames.clear();
+          _leftFramesStats.clear();
+          _frontFrames.clear();
+          _frontFramesStats.clear();
+          _rightFrames.clear();
+          _rightFramesStats.clear();
+          _upFrames.clear();
+          _upFramesStats.clear();
+          _downFrames.clear();
+          _downFramesStats.clear();
+          _bestFrames.clear();
+          _bestFramesStats.clear();
+          _leftAttempts = 0;
+          _frontAttempts = 0;
+          _rightAttempts = 0;
+          _upAttempts = 0;
+          _downAttempts = 0;
+          _captureCompleted = false;
+          _pendingPoses = List.from(allPosesInOrder);
 
-      // Use the highest-quality frames only (top 8)
-      final List<BatchEmbeddingResult> topResults = _validResults.sublist(
-        0,
-        _framesPerPhase,
-      );
+          setState(() {
+            _cameraFrozen = false;
+            _isProcessingFrame = false;
+            _captureProgress = 0;
+            _progressLabel = '0 / $_totalTargetFrames';
+            _isSubmitting = false;
+          });
+
+          _captureStopwatch.start();
+          _setPhase(_Phase.left);
+
+          if (!_imageStreamRunning) {
+            try {
+              await _cameraController?.startImageStream(_onCameraFrame);
+              _imageStreamRunning = true;
+            } catch (e) {
+              _setError('Camera could not start. Please try again.');
+              return;
+            }
+          }
+
+          _updateInstruction(
+            'Need clearer frames',
+            subtitle: 'Please hold still in good lighting.',
+          );
+          return;
+        } else {
+          FaceLogger.reg(
+            _sessionId,
+            'Partial Quality Retake for failed poses: ${failedPoses.map((p) => p.name).join(", ")}',
+          );
+          debugPrint(
+            '[FACE_REG] Partial retake triggered for failed poses: ${failedPoses.map((p) => p.name).join(", ")}',
+          );
+
+          for (final pose in failedPoses) {
+            _bestFrames.remove(pose);
+            _bestFramesStats.remove(pose);
+
+            if (pose == _Phase.left) {
+              _leftFrames.clear();
+              _leftFramesStats.clear();
+              _leftAttempts = 0;
+            } else if (pose == _Phase.front) {
+              _frontFrames.clear();
+              _frontFramesStats.clear();
+              _frontAttempts = 0;
+            } else if (pose == _Phase.right) {
+              _rightFrames.clear();
+              _rightFramesStats.clear();
+              _rightAttempts = 0;
+            } else if (pose == _Phase.up) {
+              _upFrames.clear();
+              _upFramesStats.clear();
+              _upAttempts = 0;
+            } else if (pose == _Phase.down) {
+              _downFrames.clear();
+              _downFramesStats.clear();
+              _downAttempts = 0;
+            }
+          }
+
+          _pendingPoses = allPosesInOrder.where((p) => failedPoses.contains(p)).toList();
+          _captureCompleted = false;
+
+          setState(() {
+            _cameraFrozen = false;
+            _isProcessingFrame = false;
+            _captureProgress =
+                _leftFrames.length +
+                _frontFrames.length +
+                _rightFrames.length +
+                _upFrames.length +
+                _downFrames.length;
+            _progressLabel = '$_captureProgress / $_totalTargetFrames';
+            _isSubmitting = false;
+          });
+
+          _captureStopwatch.start();
+
+          final _Phase firstFailedPose = _pendingPoses.first;
+          _showHintOnce(
+            firstFailedPose,
+            'Retaking ${firstFailedPose.name} for better quality…',
+          );
+          _setPhase(firstFailedPose);
+
+          if (!_imageStreamRunning) {
+            try {
+              await _cameraController?.startImageStream(_onCameraFrame);
+              _imageStreamRunning = true;
+            } catch (e) {
+              _setError('Camera could not start. Please try again.');
+              return;
+            }
+          }
+          return;
+        }
+      }
 
       _templateStopwatch.start();
-      final List<List<double>> topEmbeddings = topResults
-          .map((res) => res.embedding!)
-          .toList();
+      final List<double>? leftEmbedding = batchResults[0].embedding;
+      final List<double>? frontEmbedding = batchResults[1].embedding;
+      final List<double>? rightEmbedding = batchResults[2].embedding;
+      final List<double>? upEmbedding = batchResults[3].embedding;
+      final List<double>? downEmbedding = batchResults[4].embedding;
 
-      final List<double> masterEmbedding = _landmarkService.averageEmbeddings(
-        topEmbeddings,
-      );
-      _templateStopwatch.stop();
-
-      if (masterEmbedding.isEmpty) {
+      if (leftEmbedding == null ||
+          frontEmbedding == null ||
+          rightEmbedding == null ||
+          upEmbedding == null ||
+          downEmbedding == null) {
         _setError('Could not generate face embeddings. Please try again.');
         return;
       }
+
+      _templateStopwatch.stop();
 
       _updateInstruction('Almost done!', subtitle: 'Saving your registration');
       FaceLogger.reg(_sessionId, 'Uploading To Supabase');
@@ -1061,17 +1391,38 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       if (user == null) throw Exception('User not logged in');
       final userId = user.id;
 
+      final studentData = await Supabase.instance.client
+          .from('students')
+          .select('face_template_version, face_registered')
+          .eq('id', userId)
+          .maybeSingle();
+
+      final bool isAlreadyRegistered =
+          studentData?['face_registered'] as bool? ?? false;
+      final int existingVersion =
+          (studentData?['face_template_version'] as num?)?.toInt() ?? 0;
+      final int newTemplateVersion =
+          isAlreadyRegistered ? (existingVersion + 1) : 1;
+
       try {
         await Supabase.instance.client
             .from('students')
             .update({
-              'embedding_a': null,
-              'embedding_b': null,
-              'embedding_c': null,
-              'face_embedding': masterEmbedding,
-              'verification_threshold': 0.70, // Fixed global threshold
+              'embedding_a': leftEmbedding,
+              'embedding_b': frontEmbedding,
+              'embedding_c': rightEmbedding,
+              'embedding_up': upEmbedding,
+              'embedding_down': downEmbedding,
+              'face_embedding': frontEmbedding, // Frontal fallback only, no master averaging!
+              'verification_threshold': 0.68, // Fixed global threshold
               'registration_photo_url': photoUrl,
               'face_registered': true,
+              'face_template_updated_at':
+                  DateTime.now().toUtc().toIso8601String(),
+              'face_template_version': newTemplateVersion,
+              'embedding_model_name': 'insightface_buffalo_l',
+              'embedding_model_version': 'v1',
+              'embedding_dimension': 512,
             })
             .eq('id', userId);
         _uploadStopwatch.stop();
@@ -1103,10 +1454,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
         final double avgYaw = _validResults.isEmpty
             ? 0.0
-            : _validResults.map((r) => r.yaw).reduce((a, b) => a + b) / _validResults.length;
+            : _validResults.map((r) => r.yaw).reduce((a, b) => a + b) /
+                  _validResults.length;
         final double avgPitch = _validResults.isEmpty
             ? 0.0
-            : _validResults.map((r) => r.pitch).reduce((a, b) => a + b) / _validResults.length;
+            : _validResults.map((r) => r.pitch).reduce((a, b) => a + b) /
+                  _validResults.length;
 
         // Save registration averages to SharedPreferences
         final prefs = await SharedPreferences.getInstance();
@@ -1301,6 +1654,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       });
 
     final Face biggest = sorted.first;
+    final double biggestArea =
+        biggest.boundingBox.width * biggest.boundingBox.height;
 
     // Verify the biggest face is reasonably centered horizontally
     final double centerX =
@@ -1316,10 +1671,21 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       return null;
     }
 
-    if (faces.length > 1) {
+    if (sorted.length > 1) {
+      final double secondArea =
+          sorted[1].boundingBox.width * sorted[1].boundingBox.height;
+      if (secondArea > 0.50 * biggestArea) {
+        if (offsetX > 0.20) {
+          debugPrint(
+            '[FACE_REG] Second face present (>50% area) and largest face offsetX (${offsetX.toStringAsFixed(3)}) > 0.20 — requiring main person centered',
+          );
+          return null;
+        }
+      }
+
       debugPrint(
         '[FACE_REG] Biggest face filter: ${faces.length} faces detected, '
-        'selected largest (area=${(biggest.boundingBox.width * biggest.boundingBox.height).toStringAsFixed(0)}), '
+        'selected largest (area=${biggestArea.toStringAsFixed(0)}), '
         'ignored ${faces.length - 1} background face(s)',
       );
     }
@@ -1604,7 +1970,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     }
 
     // Phase-dependent centering tolerance
-    final double maxOffset = 0.25;
+    final double maxOffset = (phase == _Phase.left || phase == _Phase.right)
+        ? 0.40
+        : 0.25;
 
     final double centerX = face.boundingBox.left + face.boundingBox.width / 2;
     final double imageCenterX = image.width / 2;
@@ -1639,18 +2007,198 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     final double yaw = -yawRaw;
 
+    final double? pitch = face.headEulerAngleX;
+    final double? roll = face.headEulerAngleZ;
+    final double tolerance = (phase == _Phase.left || phase == _Phase.right)
+        ? 20
+        : 15;
+    if (roll != null && roll.abs() > tolerance) return false;
+
     switch (phase) {
+      case _Phase.left:
+        if (pitch != null && pitch.abs() > tolerance) return false;
+        return yaw >= -25 && yaw <= -10;
       case _Phase.front:
-        return yaw.abs() <= 15; // ±15° for front
+        if (pitch != null && pitch.abs() > tolerance) return false;
+        return yaw.abs() <= 5;
+      case _Phase.right:
+        if (pitch != null && pitch.abs() > tolerance) return false;
+        return yaw >= 10 && yaw <= 25;
+      case _Phase.up:
+        if (yaw.abs() > 10.0) return false;
+        if (pitch == null) return false;
+        // Strictly require looking UP (positive pitch)
+        return pitch > 5.0 && pitch < 30.0;
+      case _Phase.down:
+        if (yaw.abs() > 10.0) return false;
+        if (pitch == null) return false;
+        // Strictly require looking DOWN (negative pitch)
+        return pitch < -5.0 && pitch > -30.0;
       default:
         return true;
     }
   }
 
+  String? _getGentlePoseFeedback(Face face, _Phase phase) {
+    final double? yawRaw = face.headEulerAngleY;
+    if (yawRaw == null) return null;
+    final double yaw = -yawRaw;
+
+    final double? pitch = face.headEulerAngleX;
+    final double? roll = face.headEulerAngleZ;
+    final double tolerance = (phase == _Phase.left || phase == _Phase.right)
+        ? 20
+        : 15;
+    if (roll != null && roll.abs() > tolerance) {
+      return 'Do not tilt your head';
+    }
+
+    if (phase == _Phase.up || phase == _Phase.down) {
+      if (yaw.abs() > 10.0) {
+        return 'Look straight ahead';
+      }
+      if (phase == _Phase.up) {
+        if (pitch != null && pitch < 5.0) return 'Look slightly up';
+        if (pitch != null && pitch > 30.0) return 'Reduce head movement slightly';
+      }
+      if (phase == _Phase.down) {
+        if (pitch != null && pitch > -5.0) return 'Look slightly down';
+        if (pitch != null && pitch < -30.0) return 'Reduce head movement slightly';
+      }
+      return null;
+    }
+
+    if (pitch != null && pitch.abs() > tolerance) {
+      return 'Hold your head level';
+    }
+
+    switch (phase) {
+      case _Phase.left:
+        if (yaw > -10.0 && yaw <= -5.0) {
+          return 'Turn a bit more left';
+        }
+        if (yaw < -25.0 && yaw >= -30.0) {
+          return 'Turn slightly right';
+        }
+        break;
+      case _Phase.right:
+        if (yaw < 10.0 && yaw >= 5.0) {
+          return 'Turn a bit more right';
+        }
+        if (yaw > 25.0 && yaw <= 30.0) {
+          return 'Turn slightly left';
+        }
+        break;
+      case _Phase.front:
+        if ((yaw > -10.0 && yaw <= -5.0) || (yaw >= 5.0 && yaw < 10.0)) {
+          return 'Look straight at the camera';
+        }
+        break;
+      default:
+        break;
+    }
+    return null;
+  }
+
+  bool _validateFrameQuality(
+    Face face,
+    CameraImage image,
+    _Phase phase,
+    List<String> rejectionReasons,
+    Map<String, double> stats, {
+    double sharpnessMin = 2.0,
+    double brightMin = 45.0,
+    double brightMax = 230.0,
+  }) {
+    final imgStats = _cameraStabilizer.computeFrameStats(
+      image,
+      faceBoundingBox: face.boundingBox,
+      sensorOrientation: _cameraController!.description.sensorOrientation,
+    );
+    final double sharpness = imgStats['sharpness'] ?? 0.0;
+    final double brightness = imgStats['brightness'] ?? 0.0;
+    final double contrast = imgStats['contrast'] ?? 0.0;
+
+    stats['sharpness'] = sharpness;
+    stats['brightness'] = brightness;
+    stats['contrast'] = contrast;
+    stats['yaw'] = face.headEulerAngleY != null ? -face.headEulerAngleY! : 0.0;
+    stats['pitch'] = face.headEulerAngleX ?? 0.0;
+    stats['roll'] = face.headEulerAngleZ ?? 0.0;
+
+    final double yaw = stats['yaw']!;
+    final double pitch = stats['pitch']!;
+    final double roll = stats['roll']!;
+
+    final double pitchRollTolerance =
+        (phase == _Phase.left || phase == _Phase.right) ? 20.0 : 15.0;
+
+    if (phase == _Phase.up) {
+      if (yaw.abs() > 10.0) rejectionReasons.add("yaw_out_of_range");
+      if (pitch <= 5.0 || pitch >= 30.0) rejectionReasons.add("pitch_out_of_range_up");
+    } else if (phase == _Phase.down) {
+      if (yaw.abs() > 10.0) rejectionReasons.add("yaw_out_of_range");
+      if (pitch >= -5.0 || pitch <= -30.0) rejectionReasons.add("pitch_out_of_range_down");
+    } else {
+      if (pitch.abs() > pitchRollTolerance) {
+        rejectionReasons.add("pitch_out_of_range");
+      }
+      if (roll.abs() > pitchRollTolerance) {
+        rejectionReasons.add("roll_out_of_range");
+      }
+
+      switch (phase) {
+        case _Phase.left:
+          if (yaw < -25.0 || yaw > -10.0) {
+            rejectionReasons.add("yaw_out_of_range");
+          }
+          break;
+        case _Phase.front:
+          if (yaw.abs() > 5.0) {
+            rejectionReasons.add("yaw_out_of_range");
+          }
+          break;
+        case _Phase.right:
+          if (yaw < 10.0 || yaw > 25.0) {
+            rejectionReasons.add("yaw_out_of_range");
+          }
+          break;
+        default:
+          break;
+      }
+    }
+
+    if (sharpness < sharpnessMin) {
+      rejectionReasons.add("blur");
+    }
+
+    if (brightness > brightMax) {
+      rejectionReasons.add("face_overexposed");
+    } else if (brightness < brightMin) {
+      rejectionReasons.add("face_underexposed");
+    }
+
+    final double widthRatio = face.boundingBox.width / image.width;
+    stats['width_ratio'] = widthRatio;
+    if (widthRatio < 0.20 || widthRatio > 0.80) {
+      rejectionReasons.add("face_size_incorrect");
+    }
+
+    return rejectionReasons.isEmpty;
+  }
+
   String _getPoseInstruction(_Phase phase) {
     switch (phase) {
+      case _Phase.left:
+        return 'Turn slightly left and hold still.';
       case _Phase.front:
-        return 'Look straight ahead';
+        return 'Look straight at the camera.';
+      case _Phase.right:
+        return 'Turn slightly right and hold still.';
+      case _Phase.up:
+        return 'Look slightly up and hold still.';
+      case _Phase.down:
+        return 'Look slightly down and hold still.';
       default:
         return 'Hold still…';
     }
@@ -1761,6 +2309,15 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       _clearSmoothing();
     }
 
+    if (newPhase == _Phase.left ||
+        newPhase == _Phase.front ||
+        newPhase == _Phase.right ||
+        newPhase == _Phase.up ||
+        newPhase == _Phase.down) {
+      _poseSteadyStartTime = null;
+      _poseSteadyPhase = null;
+    }
+
     // Update instruction text for new phase
     switch (newPhase) {
       case _Phase.liveness:
@@ -1770,10 +2327,34 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           subtitle: 'Centre your face and hold steady to begin',
         );
         break;
+      case _Phase.left:
+        _updateInstruction(
+          'Turn slightly left',
+          subtitle: 'Turn slightly left and hold still',
+        );
+        break;
       case _Phase.front:
         _updateInstruction(
-          'Hold still…',
-          subtitle: 'Scanning your face silently',
+          'Look straight ahead',
+          subtitle: 'Getting your front profile',
+        );
+        break;
+      case _Phase.right:
+        _updateInstruction(
+          'Turn slightly right',
+          subtitle: 'Turn slightly right and hold still',
+        );
+        break;
+      case _Phase.up:
+        _updateInstruction(
+          'Look slightly up',
+          subtitle: 'Look slightly up and hold still',
+        );
+        break;
+      case _Phase.down:
+        _updateInstruction(
+          'Look slightly down',
+          subtitle: 'Look slightly down and hold still',
         );
         break;
       case _Phase.processing:
@@ -1827,7 +2408,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                 lower.contains('move slightly up') ||
                 lower.contains('move slightly down') ||
                 lower.contains('move to the center') ||
-                lower.contains('move slightly backward')) {
+                lower.contains('move slightly backward') ||
+                lower.contains('too bright') ||
+                lower.contains('too dark')) {
               _borderColor = Colors.orangeAccent;
             } else if (_phase != _Phase.error &&
                 _borderColor != AppStyles.successGreen) {
@@ -1852,7 +2435,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
               lower.contains('move slightly up') ||
               lower.contains('move slightly down') ||
               lower.contains('move to the center') ||
-              lower.contains('move slightly backward')) {
+              lower.contains('move slightly backward') ||
+              lower.contains('too bright') ||
+              lower.contains('too dark')) {
             _borderColor = Colors.orangeAccent;
           } else if (_phase != _Phase.error &&
               _borderColor != AppStyles.successGreen) {
@@ -1918,6 +2503,247 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     _mlService.faceDetector.close();
     super.dispose();
+  }
+
+  bool _isPoseStageCompleted(_Phase pose) {
+    if (pose == _Phase.left) {
+      return _leftFrames.length >= targetFramesForPose(_Phase.left) ||
+          _bestFrames.containsKey(_Phase.left);
+    } else if (pose == _Phase.front) {
+      return _frontFrames.length >= targetFramesForPose(_Phase.front) ||
+          _bestFrames.containsKey(_Phase.front);
+    } else if (pose == _Phase.right) {
+      return _rightFrames.length >= targetFramesForPose(_Phase.right) ||
+          _bestFrames.containsKey(_Phase.right);
+    } else if (pose == _Phase.up) {
+      return _upFrames.length >= targetFramesForPose(_Phase.up) ||
+          _bestFrames.containsKey(_Phase.up);
+    } else if (pose == _Phase.down) {
+      return _downFrames.length >= targetFramesForPose(_Phase.down) ||
+          _bestFrames.containsKey(_Phase.down);
+    }
+    return false;
+  }
+
+  Widget _buildStageNode(String label, _Phase pose) {
+    final bool isCompleted = _isPoseStageCompleted(pose);
+    final bool isActive = _phase == pose;
+
+    Color circleBgColor;
+    Border circleBorder;
+    List<BoxShadow>? circleShadow;
+    Widget circleChild;
+    Color labelColor;
+
+    if (isCompleted) {
+      circleBgColor = const Color(0xFF2ECC71); // Emerald Green
+      circleBorder = Border.all(color: const Color(0xFF2ECC71), width: 1.5);
+      circleShadow = null;
+      circleChild = const Icon(Icons.check, color: Colors.white, size: 14);
+      labelColor = const Color(0xFF2ECC71);
+    } else if (isActive) {
+      circleBgColor = Colors.white;
+      circleBorder = Border.all(color: AppStyles.primaryBlue, width: 2.0);
+      circleShadow = [
+        BoxShadow(
+          color: AppStyles.primaryBlue.withValues(alpha: 0.20),
+          blurRadius: 6,
+          spreadRadius: 1,
+        ),
+      ];
+      circleChild = Container(
+        width: 8,
+        height: 8,
+        decoration: const BoxDecoration(
+          color: AppStyles.primaryBlue,
+          shape: BoxShape.circle,
+        ),
+      );
+      labelColor = AppStyles.primaryBlue;
+    } else {
+      circleBgColor = Colors.white;
+      circleBorder = Border.all(color: const Color(0xFFD1D5DB), width: 1.5);
+      circleShadow = null;
+      circleChild = Container(
+        width: 6,
+        height: 6,
+        decoration: const BoxDecoration(
+          color: Color(0xFF9CA3AF),
+          shape: BoxShape.circle,
+        ),
+      );
+      labelColor = const Color(0xFF6B7280);
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          width: 26,
+          height: 26,
+          decoration: BoxDecoration(
+            color: circleBgColor,
+            shape: BoxShape.circle,
+            border: circleBorder,
+            boxShadow: circleShadow,
+          ),
+          child: Center(child: circleChild),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: labelColor,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStageConnector(bool isLeftCompleted) {
+    return Container(
+      margin: const EdgeInsets.only(top: 12, left: 2, right: 2),
+      height: 2,
+      color: isLeftCompleted ? const Color(0xFF2ECC71) : const Color(0xFFD1D5DB),
+    );
+  }
+
+  Widget _buildStageIndicators() {
+    final bool leftDone = _isPoseStageCompleted(_Phase.left);
+    final bool frontDone = _isPoseStageCompleted(_Phase.front);
+    final bool rightDone = _isPoseStageCompleted(_Phase.right);
+    final bool upDone = _isPoseStageCompleted(_Phase.up);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
+      child: Row(
+        mainAxisSize: MainAxisSize.max,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildStageNode('Left', _Phase.left),
+          Expanded(child: _buildStageConnector(leftDone)),
+          _buildStageNode('Front', _Phase.front),
+          Expanded(child: _buildStageConnector(frontDone)),
+          _buildStageNode('Right', _Phase.right),
+          Expanded(child: _buildStageConnector(rightDone)),
+          _buildStageNode('Up', _Phase.up),
+          Expanded(child: _buildStageConnector(upDone)),
+          _buildStageNode('Down', _Phase.down),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCardContent() {
+    final bool isPoseCapture =
+        _phase == _Phase.left ||
+        _phase == _Phase.front ||
+        _phase == _Phase.right ||
+        _phase == _Phase.up ||
+        _phase == _Phase.down;
+
+    if (isPoseCapture) {
+      int currentAccepted = 0;
+      if (_phase == _Phase.left) {
+        currentAccepted = _leftFrames.length;
+      } else if (_phase == _Phase.front) {
+        currentAccepted = _frontFrames.length;
+      } else if (_phase == _Phase.right) {
+        currentAccepted = _rightFrames.length;
+      } else if (_phase == _Phase.up) {
+        currentAccepted = _upFrames.length;
+      } else if (_phase == _Phase.down) {
+        currentAccepted = _downFrames.length;
+      }
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Pose Capture',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF1A202C),
+              letterSpacing: -0.3,
+            ),
+          ),
+          _buildStageIndicators(),
+          const SizedBox(height: 8),
+          Text(
+            _instructionTitle,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: AppStyles.primaryBlue,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Accepted: $currentAccepted / ${targetFramesForPose(_phase)}',
+            style: const TextStyle(
+              fontSize: 13,
+              color: Colors.grey,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Default instruction card content (Blink, Processing, Error, Done)
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          _instructionTitle,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+            color: _phase == _Phase.error
+                ? AppStyles.errorRed
+                : AppStyles.primaryBlue,
+          ),
+        ),
+        _instructionTitle == 'Move to the center of the circle'
+            ? const SizedBox.shrink()
+            : const SizedBox(height: 2),
+        Text(
+          _instructionSubtitle,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 14,
+            color: Colors.grey,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        if (_phase == _Phase.processing) ...[
+          const SizedBox(height: 16),
+          const CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(AppStyles.primaryBlue),
+          ),
+        ],
+        if (_phase == _Phase.error) ...[
+          const SizedBox(height: 16),
+          TextButton(
+            onPressed: _onRetry,
+            child: const Text(
+              'Try Again',
+              style: TextStyle(
+                color: AppStyles.primaryBlue,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -2091,7 +2917,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                                     child: TweenAnimationBuilder<double>(
                                       tween: Tween<double>(
                                         begin: 0.0,
-                                        end: _captureProgress / _framesPerPhase,
+                                        end: _captureProgress / _totalTargetFrames.toDouble(),
                                       ),
                                       duration: const Duration(
                                         milliseconds: 800,
@@ -2363,6 +3189,28 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                                         child: AnimatedBuilder(
                                           animation: _pulseController,
                                           builder: (context, _) {
+                                            final bool isPoseActive =
+                                                _phase == _Phase.left ||
+                                                _phase == _Phase.front ||
+                                                _phase == _Phase.right ||
+                                                _phase == _Phase.up ||
+                                                _phase == _Phase.down;
+                                            final bool isPoseDone =
+                                                _bestFrames.containsKey(
+                                                  _Phase.left,
+                                                ) &&
+                                                _bestFrames.containsKey(
+                                                  _Phase.front,
+                                                ) &&
+                                                _bestFrames.containsKey(
+                                                  _Phase.right,
+                                                ) &&
+                                                _bestFrames.containsKey(
+                                                  _Phase.up,
+                                                ) &&
+                                                _bestFrames.containsKey(
+                                                  _Phase.down,
+                                                );
                                             return Row(
                                               mainAxisAlignment:
                                                   MainAxisAlignment
@@ -2378,18 +3226,15 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                                                 ),
                                                 _ShimmerLine(
                                                   isDone:
-                                                      _frontEmbeddings.length >=
-                                                      _framesPerPhase,
+                                                      isPoseActive ||
+                                                      isPoseDone,
                                                   pulseController:
                                                       _pulseController,
                                                 ),
                                                 _NeonChip(
-                                                  label: 'Front',
-                                                  isActive:
-                                                      _phase == _Phase.front,
-                                                  isDone:
-                                                      _frontEmbeddings.length >=
-                                                      _framesPerPhase,
+                                                  label: 'Pose Capture',
+                                                  isActive: isPoseActive,
+                                                  isDone: isPoseDone,
                                                   pulseValue:
                                                       _pulseController.value,
                                                 ),
@@ -2433,94 +3278,39 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
                                       ),
                                   child: FadeTransition(
                                     opacity: _textFadeController,
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(
-                                          color: _phase == _Phase.error
-                                              ? AppStyles.errorRed.withValues(
-                                                  alpha: 0.3,
-                                                )
-                                              : AppStyles.primaryBlue
-                                                    .withValues(alpha: 0.1),
-                                          width: 1.5,
-                                        ),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: Colors.black.withValues(
-                                              alpha: 0.05,
-                                            ),
-                                            blurRadius: 10,
-                                            offset: const Offset(0, 4),
-                                          ),
-                                        ],
+                                    child: AnimatedSize(
+                                      duration: const Duration(
+                                        milliseconds: 300,
                                       ),
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical:
-                                            _instructionTitle ==
-                                                'Move to the center of the circle'
-                                            ? 6
-                                            : 10,
-                                      ),
-                                      child: Column(
-                                        mainAxisSize:
-                                            MainAxisSize.min, // Fix alignment
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          Text(
-                                            _instructionTitle,
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                              fontSize: 20,
-                                              fontWeight: FontWeight.w700,
-                                              color: _phase == _Phase.error
-                                                  ? AppStyles.errorRed
-                                                  : AppStyles.primaryBlue,
-                                            ),
+                                      curve: Curves.easeInOut,
+                                      child: Container(
+                                        width: double.infinity,
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(
+                                            16,
                                           ),
-                                          _instructionTitle ==
-                                                  'Move to the center of the circle'
-                                              ? const SizedBox.shrink()
-                                              : const SizedBox(height: 2),
-                                          Text(
-                                            _instructionSubtitle,
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.grey.shade600,
-                                              fontWeight: FontWeight.w500,
-                                            ),
+                                          border: Border.all(
+                                            color: _phase == _Phase.error
+                                                ? AppStyles.errorRed.withValues(
+                                                    alpha: 0.3,
+                                                  )
+                                                : AppStyles.primaryBlue
+                                                      .withValues(alpha: 0.1),
+                                            width: 1.5,
                                           ),
-
-                                          if (_phase == _Phase.processing) ...[
-                                            const SizedBox(height: 16),
-
-                                            const CircularProgressIndicator(
-                                              valueColor:
-                                                  AlwaysStoppedAnimation<Color>(
-                                                    AppStyles.primaryBlue,
-                                                  ),
-                                            ),
-                                          ],
-
-                                          // Retry button on error
-                                          if (_phase == _Phase.error) ...[
-                                            const SizedBox(height: 16),
-                                            TextButton(
-                                              onPressed: _onRetry,
-                                              child: const Text(
-                                                'Try Again',
-                                                style: TextStyle(
-                                                  color: AppStyles.primaryBlue,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withValues(
+                                                alpha: 0.05,
                                               ),
+                                              blurRadius: 10,
+                                              offset: const Offset(0, 4),
                                             ),
                                           ],
-                                        ],
+                                        ),
+                                        padding: const EdgeInsets.all(16),
+                                        child: _buildCardContent(),
                                       ),
                                     ),
                                   ),
@@ -2603,8 +3393,25 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   void _onRetry() {
     // Reset all state and try again
     _livenessService.reset();
-    _frontEmbeddings.clear();
+    _leftFrames.clear();
+    _leftFramesStats.clear();
     _frontFrames.clear();
+    _frontFramesStats.clear();
+    _rightFrames.clear();
+    _rightFramesStats.clear();
+    _upFrames.clear();
+    _upFramesStats.clear();
+    _downFrames.clear();
+    _downFramesStats.clear();
+    _bestFrames.clear();
+    _bestFramesStats.clear();
+    _clientRejectedLogs.clear();
+    _leftAttempts = 0;
+    _frontAttempts = 0;
+    _rightAttempts = 0;
+    _upAttempts = 0;
+    _downAttempts = 0;
+
     _validResults.clear();
     _validFrameCount = 0;
     _cameraFrozen = false;
@@ -2623,6 +3430,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _blinkCountdownController.reset();
     _steadyStartTime = null;
     _isFaceReady = false;
+    _poseSteadyStartTime = null;
+    _poseSteadyPhase = null;
     _clearSmoothing();
 
     setState(() {
@@ -2632,7 +3441,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     debugPrint('[FACE_REG] =================================');
     debugPrint('[FACE_REG] Registration Started (Retry)');
-    debugPrint('[FACE_REG] Target Frames : $_framesPerPhase');
+    debugPrint('[FACE_REG] Target Frames : $_totalTargetFrames total');
     debugPrint('[FACE_REG] Valid Frames  : 0');
     debugPrint('[FACE_REG] =================================');
 

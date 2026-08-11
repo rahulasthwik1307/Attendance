@@ -259,18 +259,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(
-                          Icons.lock_outline_rounded,
-                          size: 13,
-                          color: subtitleColor.withValues(alpha: 0.6),
-                        ),
-                        const SizedBox(width: 5),
-                        Text(
-                          'Secure face & location-based attendance',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: subtitleColor.withValues(alpha: 0.6),
-                            fontWeight: FontWeight.w500,
+                        Flexible(
+                          child: Text(
+                            'Secure face & location-based attendance',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: subtitleColor.withValues(alpha: 0.6),
+                              fontWeight: FontWeight.w500,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],

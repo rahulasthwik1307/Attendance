@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 
@@ -47,12 +48,19 @@ class CameraStabilizer {
 
   /// Reset stabilization state so [stabilize] can be safely called again.
   /// Must be called before re-using the stabilizer after [cancel].
+  double _currentExposureOffset = 0.0;
+  DateTime? _lastExposureAdjustmentTime;
+  bool _isAdjustingExposure = false;
+
   void resetForRestart() {
     _cancelled = false;
     _isStabilizing = false;
     _isStable = false;
     _stableBrightness = null;
     _lastBrightness = null;
+    _currentExposureOffset = 0.0;
+    _lastExposureAdjustmentTime = null;
+    _isAdjustingExposure = false;
   }
 
   /// Resets frame stability references while keeping the stabilizer marked as stable.
@@ -142,14 +150,14 @@ class CameraStabilizer {
     exposureStabilizationDurationMs = exposureStopwatch.elapsedMilliseconds;
     log('Exposure Stable');
 
-    // Attempt exposure offset (e.g. compensation +0.3)
+    // Attempt exposure offset (start with 0.0)
     bool exposureCompSupported = false;
     try {
       double minOffset = await controller.getMinExposureOffset();
       if (_cancelled) { _isStabilizing = false; return; }
       double maxOffset = await controller.getMaxExposureOffset();
       if (_cancelled) { _isStabilizing = false; return; }
-      double targetOffset = 0.3;
+      double targetOffset = 0.0;
       exposureCompSupported = minOffset != maxOffset;
       if (exposureCompSupported) {
         log('Exposure Compensation: Supported (Range: [$minOffset, $maxOffset])');
@@ -157,9 +165,10 @@ class CameraStabilizer {
           await controller.setExposureOffset(targetOffset);
           if (_cancelled) { _isStabilizing = false; return; }
           exposureCompensationValue = targetOffset;
-          log('Exposure Compensation Set: +0.3');
+          _currentExposureOffset = targetOffset;
+          log('Exposure Compensation Set: 0.0');
         } else {
-          log('Exposure Compensation Target +0.3 out of bounds [$minOffset, $maxOffset]');
+          log('Exposure Compensation Target 0.0 out of bounds [$minOffset, $maxOffset]');
         }
       } else {
         log('Exposure Compensation: Unsupported (Range: [$minOffset, $maxOffset])');
@@ -169,35 +178,123 @@ class CameraStabilizer {
       log('Exposure Compensation Unsupported. Reason: $e');
     }
 
-    // Lock Exposure if supported
-    bool exposureLockSupported = false;
-    try {
-      await controller.setExposureMode(ExposureMode.locked);
-      if (_cancelled) { _isStabilizing = false; return; }
-      exposureState = 'Locked';
-      exposureLockSupported = true;
-      log('Exposure Lock: Supported & Locked');
-    } catch (e) {
-      if (_cancelled) { _isStabilizing = false; return; }
-      exposureState = focusAutoSupported ? 'Auto' : 'Default';
-      log('Exposure Lock Unsupported (Using Auto Exposure if supported). Reason: $e');
-    }
+    // Keep exposure in AUTO mode for the whole session (never lock exposure)
+    exposureState = 'Auto';
+    log('Exposure Mode: Auto (Adapting)');
 
     overallStopwatch.stop();
     _isStable = true;
     _isStabilizing = false;
-    log('Camera capabilities: FocusAuto=$focusAutoSupported, FocusLock=$focusLockSupported, ExposureAuto=$exposureAutoSupported, ExposureLock=$exposureLockSupported, ExposureComp=$exposureCompSupported');
+    log('Camera capabilities: FocusAuto=$focusAutoSupported, FocusLock=$focusLockSupported, ExposureAuto=$exposureAutoSupported, ExposureLock=Disabled(Auto), ExposureComp=$exposureCompSupported');
     log('Warm-up duration: ${warmUpDurationMs}ms, Focus stabilize: ${focusStabilizationDurationMs}ms, Exposure stabilize: ${exposureStabilizationDurationMs}ms');
     log('Stabilization result: Success');
     log('Capture Begins');
   }
 
   /// Calculates stats for a camera frame (subsampled for speed)
-  Map<String, double> computeFrameStats(CameraImage image) {
+  Map<String, double> computeFrameStats(
+    CameraImage image, {
+    Rect? faceBoundingBox,
+    int? sensorOrientation,
+  }) {
     final yPlane = image.planes[0];
     final bytes = yPlane.bytes;
     final len = bytes.length;
     if (len == 0) return {'brightness': 0.0, 'contrast': 0.0, 'sharpness': 0.0};
+
+    if (faceBoundingBox != null && sensorOrientation != null) {
+      double rawX = 0;
+      double rawY = 0;
+      double rawWidth = 0;
+      double rawHeight = 0;
+
+      if (sensorOrientation == 90) {
+        rawX = faceBoundingBox.top;
+        rawY = image.height - faceBoundingBox.right;
+        rawWidth = faceBoundingBox.height;
+        rawHeight = faceBoundingBox.width;
+      } else if (sensorOrientation == 270) {
+        rawX = image.width - faceBoundingBox.bottom;
+        rawY = faceBoundingBox.left;
+        rawWidth = faceBoundingBox.height;
+        rawHeight = faceBoundingBox.width;
+      } else if (sensorOrientation == 180) {
+        rawX = image.width - faceBoundingBox.right;
+        rawY = image.height - faceBoundingBox.bottom;
+        rawWidth = faceBoundingBox.width;
+        rawHeight = faceBoundingBox.height;
+      } else {
+        rawX = faceBoundingBox.left;
+        rawY = faceBoundingBox.top;
+        rawWidth = faceBoundingBox.width;
+        rawHeight = faceBoundingBox.height;
+      }
+
+      // Clamp initial coordinates to image bounds
+      double cropLeft = rawX.clamp(0.0, image.width.toDouble());
+      double cropTop = rawY.clamp(0.0, image.height.toDouble());
+      double cropRight = (rawX + rawWidth).clamp(0.0, image.width.toDouble());
+      double cropBottom = (rawY + rawHeight).clamp(0.0, image.height.toDouble());
+
+      // Add a small safety margin: expand by ~15% on each side
+      final double marginW = rawWidth * 0.15;
+      final double marginH = rawHeight * 0.15;
+
+      cropLeft = (cropLeft - marginW).clamp(0.0, image.width.toDouble());
+      cropRight = (cropRight + marginW).clamp(0.0, image.width.toDouble());
+      cropTop = (cropTop - marginH).clamp(0.0, image.height.toDouble());
+      cropBottom = (cropBottom + marginH).clamp(0.0, image.height.toDouble());
+
+      final double cropW = cropRight - cropLeft;
+      final double cropH = cropBottom - cropTop;
+
+      if (cropW >= 20 && cropH >= 20) {
+        final int totalCropPixels = cropW.toInt() * cropH.toInt();
+        final int step = (totalCropPixels / 1000).floor().clamp(1, 10000);
+        int count = 0;
+        int sum = 0;
+
+        for (int i = 0; i < totalCropPixels; i += step) {
+          final int localX = i % cropW.toInt();
+          final int localY = i ~/ cropW.toInt();
+          final int x = cropLeft.toInt() + localX;
+          final int y = cropTop.toInt() + localY;
+          final int index = y * yPlane.bytesPerRow + x;
+          sum += bytes[index];
+          count++;
+        }
+        final double mean = sum / count;
+
+        double sumSquares = 0.0;
+        double diffSum = 0.0;
+        for (int i = 0; i < totalCropPixels; i += step) {
+          final int localX = i % cropW.toInt();
+          final int localY = i ~/ cropW.toInt();
+          final int x = cropLeft.toInt() + localX;
+          final int y = cropTop.toInt() + localY;
+          final int index = y * yPlane.bytesPerRow + x;
+
+          final double val = bytes[index].toDouble();
+          sumSquares += (val - mean) * (val - mean);
+          if (index > 0) {
+            diffSum += (bytes[index] - bytes[index - 1]).abs();
+          }
+        }
+
+        final double stdDev = math.sqrt(sumSquares / count);
+        final double sharpness = diffSum / count;
+
+        debugPrint(
+          '[FACE_REG] Cropped sharpness region: rawX=${rawX.toStringAsFixed(1)}, rawY=${rawY.toStringAsFixed(1)}, rawWidth=${rawWidth.toStringAsFixed(1)}, rawHeight=${rawHeight.toStringAsFixed(1)}, sharpness=${sharpness.toStringAsFixed(2)}',
+        );
+
+        return {
+          'brightness': mean,
+          'contrast': stdDev,
+          'sharpness': sharpness,
+        };
+      }
+    }
 
     // Subsample to avoid performance issues
     int sum = 0;
@@ -228,12 +325,72 @@ class CameraStabilizer {
     };
   }
 
+  /// Adapts exposure offset based on face region brightness:
+  /// Target band: 90 to 170.
+  /// If faceBrightness > 180: decrease offset by 0.3 (or 0.5 if >200) (clamped to min offset).
+  /// If faceBrightness < 80: increase offset by 0.3 (or 0.5 if <60) (clamped to max offset).
+  /// Hysteresis: do nothing inside 90-170 or buffer zones.
+  /// Records a settle timestamp; checkFrameStability returns false for 250ms after a change.
+  Future<void> adjustFaceExposure(double faceBrightness) async {
+    if (_isAdjustingExposure || _cancelled) return;
+
+    if (faceBrightness >= 90.0 && faceBrightness <= 170.0) {
+      return; // Do nothing inside 90-170 target band
+    }
+
+    double delta = 0.0;
+    if (faceBrightness > 180.0) {
+      delta = faceBrightness > 200.0 ? -0.5 : -0.3;
+    } else if (faceBrightness < 80.0) {
+      delta = faceBrightness < 60.0 ? 0.5 : 0.3;
+    } else {
+      return; // Inside 80-90 or 170-180 buffer zones — no adjustment to avoid hunting
+    }
+
+    try {
+      double minOffset = await controller.getMinExposureOffset();
+      if (_cancelled) return;
+      double maxOffset = await controller.getMaxExposureOffset();
+      if (_cancelled) return;
+
+      if (minOffset == maxOffset) return; // Exposure offset unsupported
+
+      double targetOffset = (_currentExposureOffset + delta).clamp(minOffset, maxOffset);
+      if ((targetOffset - _currentExposureOffset).abs() < 0.01) {
+        return; // Already at min or max offset limit
+      }
+
+      _isAdjustingExposure = true;
+      await controller.setExposureOffset(targetOffset);
+      _currentExposureOffset = targetOffset;
+      exposureCompensationValue = targetOffset;
+      _lastExposureAdjustmentTime = DateTime.now();
+      log('Face exposure adjusted: offset=${targetOffset.toStringAsFixed(2)} (faceBrightness=${faceBrightness.toStringAsFixed(1)})');
+    } catch (e) {
+      log('Error adjusting face exposure: $e');
+    } finally {
+      _isAdjustingExposure = false;
+    }
+  }
+
   double? _lastLoggedBrightness;
   double? _lastLoggedContrast;
   double? _lastLoggedSharpness;
 
   /// Checks if the frame is stable compared to a reference brightness
   bool checkFrameStability(CameraImage image, {double threshold = 25.0}) {
+    if (_isAdjustingExposure) {
+      log('Rejected: Exposure currently adjusting');
+      return false;
+    }
+    if (_lastExposureAdjustmentTime != null) {
+      final elapsed = DateTime.now().difference(_lastExposureAdjustmentTime!).inMilliseconds;
+      if (elapsed < 250) {
+        log('Rejected: Exposure adjusting (settling ${elapsed}ms / 250ms)');
+        return false;
+      }
+    }
+
     final stats = computeFrameStats(image);
     final currentBrightness = stats['brightness']!;
     final currentContrast = stats['contrast']!;
@@ -288,7 +445,7 @@ class CameraStabilizer {
     }
 
     // Slowly update reference brightness
-    _stableBrightness = _stableBrightness! * 0.95 + currentBrightness * 0.05;
+    _stableBrightness = _stableBrightness! * 0.90 + currentBrightness * 0.10;
     return true;
   }
 }

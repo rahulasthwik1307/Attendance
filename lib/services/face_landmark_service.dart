@@ -177,7 +177,9 @@ class FaceLandmarkService {
     List<double>? storedB,
     List<double>? storedC,
     List<double>? storedMaster,
+    List<List<double>>? storedTemplates,
     double? threshold,
+    List<Map<String, dynamic>>? clientRejectedLogs,
   }) async {
     if (!_isInitialized) await initialize();
 
@@ -218,7 +220,11 @@ class FaceLandmarkService {
       if (storedB != null) request.fields['stored_b'] = jsonEncode(storedB);
       if (storedC != null) request.fields['stored_c'] = jsonEncode(storedC);
       if (storedMaster != null) request.fields['stored_master'] = jsonEncode(storedMaster);
+      if (storedTemplates != null) request.fields['stored_templates'] = jsonEncode(storedTemplates);
       if (threshold != null) request.fields['threshold'] = threshold.toString();
+      if (clientRejectedLogs != null) {
+        request.fields['client_rejected_logs'] = jsonEncode(clientRejectedLogs);
+      }
 
       final streamedResponse = await request.send().timeout(
         const Duration(seconds: 60),
@@ -251,6 +257,8 @@ class FaceLandmarkService {
       final Map<String, dynamic> json = jsonDecode(response.body);
       final List<dynamic> embeddings = json['embeddings'];
       final List<dynamic>? qualityList = json['quality'] as List<dynamic>?;
+      final bool? backendMatch = json['match'] as bool?;
+      final double? backendFinalScore = (json['final_score'] as num?)?.toDouble();
 
       final List<BatchEmbeddingResult> result = [];
       for (int i = 0; i < embeddings.length; i++) {
@@ -304,6 +312,8 @@ class FaceLandmarkService {
             yaw: yaw,
             pitch: pitch,
             rawQualityScore: rawQualityScore,
+            match: backendMatch,
+            finalScore: backendFinalScore,
           ),
         );
 
@@ -384,6 +394,15 @@ class FaceLandmarkService {
     } catch (e) {
       debugPrint('[FACE_LANDMARK] Backend ping failed (non-fatal): $e');
     }
+  }
+
+  /// Combines frontal, left, and right embeddings into a 3-element list for multi-pose registration storage.
+  List<List<double>> createMultiEmbeddingArray({
+    required List<double> front,
+    required List<double> left,
+    required List<double> right,
+  }) {
+    return [front, left, right];
   }
 
   // ─── AVERAGE EMBEDDINGS ─────────────────────────────────────────────────
@@ -469,6 +488,66 @@ class FaceLandmarkService {
     );
   }
 
+  // ─── VERIFY MULTI-TEMPLATE FACE ───────────────────────────────────────
+  // Compares averaged live embedding against all stored pose templates.
+  // ────────────────────────────────────────────────────────────────────────
+  MultiTemplateVerificationResult verifyMultiTemplate({
+    required List<List<double>> liveEmbeddings,
+    required Map<String, List<double>> storedPoseTemplates,
+    double threshold = 0.70,
+  }) {
+    if (liveEmbeddings.isEmpty || storedPoseTemplates.isEmpty) {
+      return const MultiTemplateVerificationResult(
+        isMatch: false,
+        bestScore: 0.0,
+        bestPose: 'none',
+        scores: {},
+      );
+    }
+
+    final List<double> averagedLive = averageEmbeddings(liveEmbeddings);
+    if (averagedLive.isEmpty) {
+      return const MultiTemplateVerificationResult(
+        isMatch: false,
+        bestScore: 0.0,
+        bestPose: 'none',
+        scores: {},
+      );
+    }
+
+    double bestScore = -1.0;
+    String bestPose = 'none';
+    final Map<String, double> scores = {};
+
+    storedPoseTemplates.forEach((poseKey, storedVec) {
+      final double score = cosineSimilarity(averagedLive, storedVec);
+      scores[poseKey] = score;
+      if (score > bestScore) {
+        bestScore = score;
+        bestPose = poseKey;
+      }
+    });
+
+    final bool isMatch = bestScore >= threshold;
+
+    debugPrint('[FACE_LANDMARK] Multi-Template Matching Results:');
+    debugPrint('  Live Vector Length: ${averagedLive.length}');
+    scores.forEach((poseKey, score) {
+      final int vecLen = storedPoseTemplates[poseKey]?.length ?? 0;
+      debugPrint('  $poseKey score: ${score.toStringAsFixed(4)} (length: $vecLen)');
+    });
+    debugPrint('  Best Score: ${bestScore.toStringAsFixed(4)} ($bestPose)');
+    debugPrint('  Threshold: ${threshold.toStringAsFixed(4)}');
+    debugPrint('  Decision: ${isMatch ? "PASS" : "FAIL"}');
+
+    return MultiTemplateVerificationResult(
+      isMatch: isMatch,
+      bestScore: bestScore,
+      bestPose: bestPose,
+      scores: scores,
+    );
+  }
+
   // ─── L2 NORMALIZE (public for screen-level adaptive updates) ────────────
   List<double> l2Normalize(List<double> embedding) => _l2Normalize(embedding);
 
@@ -488,7 +567,11 @@ class FaceLandmarkService {
     await prefs.remove('emb_a');
     await prefs.remove('emb_b');
     await prefs.remove('emb_c');
+    await prefs.remove('emb_up');
+    await prefs.remove('emb_down');
     await prefs.remove('emb_master');
+    await prefs.remove('emb_stored_templates');
+    await prefs.remove('emb_pose_templates');
     await prefs.remove('emb_student_id');
     await prefs.remove('emb_cached_at');
     debugPrint('[FACE_LANDMARK] Cleared embeddings cache');
@@ -528,6 +611,20 @@ class VerificationResult {
   });
 }
 
+class MultiTemplateVerificationResult {
+  final bool isMatch;
+  final double bestScore;
+  final String bestPose;
+  final Map<String, double> scores;
+
+  const MultiTemplateVerificationResult({
+    required this.isMatch,
+    required this.bestScore,
+    required this.bestPose,
+    required this.scores,
+  });
+}
+
 class BatchEmbeddingResult {
   final List<double>? embedding;
   final bool qualityPassed;
@@ -543,6 +640,8 @@ class BatchEmbeddingResult {
   /// The registration screen uses this to distinguish network failures from
   /// quality failures — only quality failures should restart camera capture.
   final bool apiFailed;
+  final bool? match;
+  final double? finalScore;
 
   double get qualityScore => rawQualityScore;
 
@@ -557,6 +656,8 @@ class BatchEmbeddingResult {
     required this.rawQualityScore,
     this.apiFailed =
         false, // defaults false — normal quality results are never API failures
+    this.match,
+    this.finalScore,
   });
 }
 

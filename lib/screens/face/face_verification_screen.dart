@@ -111,8 +111,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   Uint8List? _lastCapturedFrameBytes;
   bool _isSubmitting = false;
 
-  List<double>? _masterEmbedding;
-  double _verificationThreshold = 0.70;
+  List<List<double>>? _storedTemplates;
+  double _verificationThreshold = 0.68;
 
   int _attemptCount = 1;
 
@@ -130,7 +130,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // ignore: unused_field
   String? _errorMessage;
 
-
+  DateTime _lastExposureAdjustTime = DateTime.fromMillisecondsSinceEpoch(0);
 
   // ─── Face positioning state ─────────────────────────────────────────────
   DateTime? _steadyStartTime;
@@ -174,6 +174,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     "Capturing 3/5": "Hold still, scanning your face",
     "Capturing 4/5": "Hold still, scanning your face",
     "Capturing 5/5": "Almost done",
+    "Too bright — move out of direct sunlight": "Reduce direct lighting on your face",
+    "Too dark — improve the lighting on your face": "Face a light source or move to a brighter spot",
     "Processing…": "Comparing your face",
     "Verified!": "Face matched successfully",
     "Verification Failed": "Face did not match",
@@ -406,7 +408,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       // Load stored embeddings
       await _loadEmbeddings();
-      if (_masterEmbedding == null) {
+      if (_storedTemplates == null || _storedTemplates!.isEmpty) {
         return; // error already set
       }
 
@@ -446,22 +448,23 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           cachedStudentId == user.id &&
           !isExpired &&
           cachedStudentId != null) {
-        final embMasterJson = prefs.getString('emb_master');
+        final cachedTemplatesJson = prefs.getString('emb_stored_templates');
         final String? thresholdStr = prefs.getString(
           'emb_threshold_${user.id}',
         );
-        if (embMasterJson != null) {
-          _masterEmbedding = (jsonDecode(embMasterJson) as List)
-              .map((e) => (e as num).toDouble())
+        if (cachedTemplatesJson != null) {
+          final List<dynamic> decoded = jsonDecode(cachedTemplatesJson);
+          _storedTemplates = decoded
+              .map((item) => (item as List).map((e) => (e as num).toDouble()).toList())
               .toList();
           _verificationThreshold = thresholdStr != null
-              ? double.tryParse(thresholdStr) ?? 0.70
-              : 0.70;
+              ? double.tryParse(thresholdStr) ?? 0.68
+              : 0.68;
           debugPrint(
             '[FACE_VER] Threshold loaded from cache: $_verificationThreshold',
           );
           debugPrint(
-            '[FACE_VER] Master embedding loaded from cache',
+            '[FACE_VER] Stored templates loaded from cache: ${_storedTemplates?.length} vector(s)',
           );
           return;
         }
@@ -476,26 +479,55 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       final data = await Supabase.instance.client
           .from('students')
           .select(
-            'face_embedding, verification_threshold',
+            'embedding_a, embedding_b, embedding_c, embedding_up, embedding_down, face_embedding, verification_threshold',
           )
           .eq('id', user.id)
           .maybeSingle();
 
-      if (data == null || data['face_embedding'] == null) {
+      if (data == null) {
         _setError('Could not load face profile. Please try again.');
         return;
       }
 
-      _masterEmbedding = (data['face_embedding'] as List)
-          .map((e) => (e as num).toDouble())
-          .toList();
+      final List<List<double>> templatesList = [];
+
+      void addIfValid(dynamic rawVal) {
+        if (rawVal != null && rawVal is List && rawVal.isNotEmpty) {
+          templatesList.add(rawVal.map((e) => (e as num).toDouble()).toList());
+        }
+      }
+
+      addIfValid(data['embedding_a']);
+      addIfValid(data['embedding_b']);
+      addIfValid(data['embedding_c']);
+      addIfValid(data['embedding_up']);
+      addIfValid(data['embedding_down']);
+
+      // Fallback to face_embedding if no pose templates exist
+      if (templatesList.isEmpty && data['face_embedding'] != null) {
+        final rawList = data['face_embedding'] as List;
+        if (rawList.isNotEmpty && rawList[0] is List) {
+          for (final item in rawList) {
+            templatesList.add((item as List).map((e) => (e as num).toDouble()).toList());
+          }
+        } else if (rawList.isNotEmpty) {
+          templatesList.add(rawList.map((e) => (e as num).toDouble()).toList());
+        }
+      }
+
+      if (templatesList.isEmpty) {
+        _setError('Could not load face profile. Please try again.');
+        return;
+      }
+
+      _storedTemplates = templatesList;
       _verificationThreshold =
-          (data['verification_threshold'] as num?)?.toDouble() ?? 0.70;
+          (data['verification_threshold'] as num?)?.toDouble() ?? 0.68;
       debugPrint(
         '[FACE_VER] Threshold loaded from Supabase: $_verificationThreshold',
       );
       debugPrint(
-        '[FACE_VER] Master embedding loaded from Supabase',
+        '[FACE_VER] Stored templates loaded from Supabase: ${_storedTemplates?.length} vector(s)',
       );
 
       // Clear any previous user's cached embeddings first
@@ -503,12 +535,15 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       await prefs.remove('emb_b');
       await prefs.remove('emb_c');
       await prefs.remove('emb_master');
+      await prefs.remove('emb_stored_templates');
       await prefs.remove('emb_student_id');
       await prefs.remove('emb_cached_at');
-      
-      // Cache for next time
-      if (_masterEmbedding != null) {
-        await prefs.setString('emb_master', jsonEncode(_masterEmbedding));
+
+      if (_storedTemplates != null) {
+        await prefs.setString(
+          'emb_stored_templates',
+          jsonEncode(_storedTemplates),
+        );
       }
       await prefs.setString(
         'emb_threshold_${user.id}',
@@ -517,7 +552,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       await prefs.setString('emb_student_id', user.id);
       await prefs.setInt('emb_cached_at', now);
       debugPrint(
-        '[FACE_VER] Master embedding loaded from Supabase and cached',
+        '[FACE_VER] Stored templates loaded from Supabase and cached',
       );
     } catch (e) {
       _setError('Could not load face profile. Please try again.');
@@ -629,6 +664,19 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _lastProcessedFace = face;
 
       _pushSmoothing(face);
+
+      // Adapt camera exposure to face region (throttled to 600ms)
+      final frameStats = _cameraStabilizer.computeFrameStats(
+        cameraImage,
+        faceBoundingBox: face.boundingBox,
+        sensorOrientation: _cameraController!.description.sensorOrientation,
+      );
+      final double faceBrightness = frameStats['brightness'] ?? 0.0;
+      final nowAdjust = DateTime.now();
+      if (nowAdjust.difference(_lastExposureAdjustTime).inMilliseconds >= 600) {
+        _lastExposureAdjustTime = nowAdjust;
+        _cameraStabilizer.adjustFaceExposure(faceBrightness);
+      }
 
       // ── Positioning gate (positioning + liveness before blink verified) ──
       if ((_phase == _Phase.positioning || _phase == _Phase.liveness) &&
@@ -850,8 +898,35 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       return;
     }
 
+    // Compute stats for face region
+    final stats = _cameraStabilizer.computeFrameStats(
+      cameraImage,
+      faceBoundingBox: face.boundingBox,
+      sensorOrientation: _cameraController!.description.sensorOrientation,
+    );
+    final double faceBrightness = stats['brightness'] ?? 0.0;
+
+    if (faceBrightness > 195.0) {
+      _updateInstruction(
+        'Too bright — move out of direct sunlight',
+        subtitle: 'Reduce direct lighting on your face',
+        animate: false,
+      );
+      _isProcessingFrame = false;
+      return;
+    }
+    if (faceBrightness < 60.0) {
+      _updateInstruction(
+        'Too dark — improve the lighting on your face',
+        subtitle: 'Face a light source or move to a brighter spot',
+        animate: false,
+      );
+      _isProcessingFrame = false;
+      return;
+    }
+
     // Stable frame selection check
-    if (!_cameraStabilizer.checkFrameStability(cameraImage)) {
+    if (!_cameraStabilizer.checkFrameStability(cameraImage, threshold: 35.0)) {
       _isProcessingFrame = false;
       return;
     }
@@ -867,7 +942,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     );
 
     _capturedVerificationFrames.add(jpegBytes);
-    final stats = _cameraStabilizer.computeFrameStats(cameraImage);
     stats['yaw'] = face.headEulerAngleY ?? 0.0;
     stats['pitch'] = face.headEulerAngleX ?? 0.0;
     stats['roll'] = face.headEulerAngleZ ?? 0.0;
@@ -935,12 +1009,13 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       FaceLogger.ver(_sessionId, 'Processing Started');
 
       _apiStopwatch.start();
-      final List<BatchEmbeddingResult> batchResults = await _landmarkService.generateEmbeddingBatch(
+      final List<BatchEmbeddingResult> batchResults =
+          await _landmarkService.generateEmbeddingBatch(
         jpegBytesList: _capturedVerificationFrames,
         localStatsList: _capturedVerificationFramesStats,
         sessionId: _sessionId,
         prefix: 'FACE_VER',
-        storedMaster: _masterEmbedding,
+        storedTemplates: _storedTemplates,
         threshold: _verificationThreshold,
       );
       _apiStopwatch.stop();
@@ -978,7 +1053,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       }
 
       _validFrameCount = _validResults.length;
-      FaceLogger.ver(_sessionId, 'Valid Count: $_validFrameCount/$_framesPerPhase');
+      FaceLogger.ver(
+        _sessionId,
+        'Valid Count: $_validFrameCount/$_framesPerPhase',
+      );
 
       if (_validFrameCount < _framesPerPhase) {
         // Not enough valid frames! Clear current batch and continue capturing
@@ -1010,7 +1088,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
         _updateInstruction(
           'Need clearer frames',
-          subtitle: 'Please hold still in good lighting. Capturing ${_framesPerPhase - _validFrameCount} more...',
+          subtitle:
+              'Please hold still in good lighting. Capturing ${_framesPerPhase - _validFrameCount} more...',
         );
         return;
       }
@@ -1020,61 +1099,101 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
 
       // Use the highest-quality frames only
-      final List<BatchEmbeddingResult> topResults = _validResults.sublist(0, _framesPerPhase);
+      final List<BatchEmbeddingResult> topResults = _validResults.sublist(
+        0,
+        _framesPerPhase,
+      );
 
       _liveEmbeddings.clear();
       for (final res in topResults) {
-        _liveEmbeddings.add(res.embedding!);
+        if (res.embedding != null) {
+          _liveEmbeddings.add(res.embedding!);
+        }
       }
 
-      FaceLogger.ver(
-        _sessionId,
-        'Using threshold: $_verificationThreshold',
-      );
-      FaceLogger.ver(
-        _sessionId,
-        'Master embedding available: ${_masterEmbedding != null}',
-      );
-
       _comparisonStopwatch.start();
-      final result = _landmarkService.verifyFace(
-        liveEmbeddings: _liveEmbeddings,
-        storedMasterEmbedding: _masterEmbedding!,
-        threshold: _verificationThreshold,
-      );
+
+      // Per-frame multi-template evaluation
+      const List<String> poseNames = ['left', 'front', 'right', 'up', 'down'];
+      int framesAboveThresholdCount = 0;
+      double overallBestFrameScore = 0.0;
+
+      for (int i = 0; i < _liveEmbeddings.length; i++) {
+        final liveEmb = _liveEmbeddings[i];
+        double frameMaxScore = -1.0;
+        String bestPose = 'unknown';
+
+        if (_storedTemplates != null && _storedTemplates!.isNotEmpty) {
+          for (int t = 0; t < _storedTemplates!.length; t++) {
+            final storedVec = _storedTemplates![t];
+            final double sim = _landmarkService.cosineSimilarity(liveEmb, storedVec);
+            if (sim > frameMaxScore) {
+              frameMaxScore = sim;
+              bestPose = t < poseNames.length ? poseNames[t] : 'pose_$t';
+            }
+          }
+        }
+
+        if (frameMaxScore >= _verificationThreshold) {
+          framesAboveThresholdCount++;
+        }
+        if (frameMaxScore > overallBestFrameScore) {
+          overallBestFrameScore = frameMaxScore;
+        }
+
+        FaceLogger.ver(
+          _sessionId,
+          'Frame #${i + 1}: maxScore=${frameMaxScore.toStringAsFixed(4)} ($bestPose)',
+        );
+      }
+
+      final bool isMatch = framesAboveThresholdCount >= 2;
+      final double score = overallBestFrameScore;
+
       _comparisonStopwatch.stop();
       _totalStopwatch.stop();
+
+      FaceLogger.ver(_sessionId, 'Per-Frame Multi-Template Decision:');
+      FaceLogger.ver(_sessionId, '  FramesAboveThreshold=$framesAboveThresholdCount/${_liveEmbeddings.length}');
+      FaceLogger.ver(_sessionId, '  bestFrameScore = ${score.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  threshold = ${_verificationThreshold.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  final decision = ${isMatch ? "PASS" : "FAIL"}');
 
       // Compute statistics for the session summary
       final double avgQuality = topResults.isEmpty
           ? 0.0
-          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => a + b) / topResults.length;
+          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => a + b) /
+              topResults.length;
 
       final double avgLocalBrightness = _allFramesStats.isEmpty
           ? 0.0
-          : _allFramesStats.map((s) => s['brightness'] ?? 0.0).reduce((a, b) => a + b) / _allFramesStats.length;
+          : _allFramesStats
+                  .map((s) => s['brightness'] ?? 0.0)
+                  .reduce((a, b) => a + b) /
+              _allFramesStats.length;
       final double avgLocalYaw = _validResults.isEmpty
           ? 0.0
-          : _validResults.map((r) => r.yaw).reduce((a, b) => a + b) / _validResults.length;
+          : _validResults.map((r) => r.yaw).reduce((a, b) => a + b) /
+              _validResults.length;
       final double avgLocalPitch = _validResults.isEmpty
           ? 0.0
-          : _validResults.map((r) => r.pitch).reduce((a, b) => a + b) / _validResults.length;
+          : _validResults.map((r) => r.pitch).reduce((a, b) => a + b) /
+              _validResults.length;
 
       // Retrieve cached registration statistics
       final prefs = await SharedPreferences.getInstance();
       final user = Supabase.instance.client.auth.currentUser;
-      final double regYaw = user != null ? prefs.getDouble('reg_yaw_${user.id}') ?? 0.0 : 0.0;
-      final double regPitch = user != null ? prefs.getDouble('reg_pitch_${user.id}') ?? 0.0 : 0.0;
-      final double regBrightness = user != null ? prefs.getDouble('reg_brightness_${user.id}') ?? 120.0 : 120.0;
-
-      final List<double> averagedLive = _landmarkService.averageEmbeddings(_liveEmbeddings);
-      final double storedNorm = _calculateL2Norm(_masterEmbedding!);
-      final double liveNorm = _calculateL2Norm(averagedLive);
-      final double margin = result.score - _verificationThreshold;
+      final double regYaw =
+          user != null ? prefs.getDouble('reg_yaw_${user.id}') ?? 0.0 : 0.0;
+      final double regPitch =
+          user != null ? prefs.getDouble('reg_pitch_${user.id}') ?? 0.0 : 0.0;
+      final double regBrightness = user != null
+          ? prefs.getDouble('reg_brightness_${user.id}') ?? 120.0
+          : 120.0;
 
       // Heuristics for failure cause
       String likelyCause = 'Unknown';
-      if (!result.isMatch) {
+      if (!isMatch) {
         final yawDiff = (regYaw - avgLocalYaw).abs();
         final pitchDiff = (regPitch - avgLocalPitch).abs();
         final brightnessDiff = (regBrightness - avgLocalBrightness).abs();
@@ -1091,30 +1210,41 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       }
 
       debugPrint('[FACE_VER][$_sessionId]');
-      debugPrint('Stored Embedding Length=${_masterEmbedding!.length}');
-      debugPrint('Live Embedding Length=${averagedLive.length}');
-      debugPrint('Stored Embedding Norm=${storedNorm.toStringAsFixed(3)}');
-      debugPrint('Live Embedding Norm=${liveNorm.toStringAsFixed(3)}');
-      debugPrint('Similarity=${result.score.toStringAsFixed(4)}');
+      debugPrint('Backend Score=${score.toStringAsFixed(4)}');
       debugPrint('Threshold=${_verificationThreshold.toStringAsFixed(4)}');
-      debugPrint('Margin=${margin.toStringAsFixed(4)}');
-      debugPrint('Decision=${result.isMatch ? "PASS" : "FAIL"}');
+      debugPrint('Decision=${isMatch ? "PASS" : "FAIL"}');
 
       // Most Important Diagnostic Log
       debugPrint('[FACE_VER][$_sessionId] =========================');
       debugPrint('[FACE_VER][$_sessionId] FACE VERIFICATION SUMMARY');
       debugPrint('[FACE_VER][$_sessionId] =========================');
-      debugPrint('[FACE_VER][$_sessionId] Registration Yaw=${regYaw.round()}');
-      debugPrint('[FACE_VER][$_sessionId] Verification Yaw=${avgLocalYaw.round()}');
+      debugPrint(
+        '[FACE_VER][$_sessionId] Registration Yaw=${regYaw.round()}',
+      );
+      debugPrint(
+        '[FACE_VER][$_sessionId] Verification Yaw=${avgLocalYaw.round()}',
+      );
       debugPrint('[FACE_VER][$_sessionId] ');
-      debugPrint('[FACE_VER][$_sessionId] Registration Pitch=${regPitch.round()}');
-      debugPrint('[FACE_VER][$_sessionId] Verification Pitch=${avgLocalPitch.round()}');
+      debugPrint(
+        '[FACE_VER][$_sessionId] Registration Pitch=${regPitch.round()}',
+      );
+      debugPrint(
+        '[FACE_VER][$_sessionId] Verification Pitch=${avgLocalPitch.round()}',
+      );
       debugPrint('[FACE_VER][$_sessionId] ');
-      debugPrint('[FACE_VER][$_sessionId] Registration Brightness=${regBrightness.round()}');
-      debugPrint('[FACE_VER][$_sessionId] Verification Brightness=${avgLocalBrightness.round()}');
+      debugPrint(
+        '[FACE_VER][$_sessionId] Registration Brightness=${regBrightness.round()}',
+      );
+      debugPrint(
+        '[FACE_VER][$_sessionId] Verification Brightness=${avgLocalBrightness.round()}',
+      );
       debugPrint('[FACE_VER][$_sessionId] ');
-      debugPrint('[FACE_VER][$_sessionId] Similarity=${result.score.toStringAsFixed(4)}');
-      debugPrint('[FACE_VER][$_sessionId] Threshold=${_verificationThreshold.toStringAsFixed(4)}');
+      debugPrint(
+        '[FACE_VER][$_sessionId] Backend Score=${score.toStringAsFixed(4)}',
+      );
+      debugPrint(
+        '[FACE_VER][$_sessionId] Threshold=${_verificationThreshold.toStringAsFixed(4)}',
+      );
       debugPrint('[FACE_VER][$_sessionId] ');
       debugPrint('[FACE_VER][$_sessionId] Likely Cause:');
       debugPrint('[FACE_VER][$_sessionId] $likelyCause');
@@ -1122,10 +1252,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       FaceLogger.ver(
         _sessionId,
-        'Score: ${result.score.toStringAsFixed(4)} | Match: ${result.isMatch} | Message: ${result.message} | LiveFrames: ${_liveEmbeddings.length}',
+        'Backend Decision | Score: ${score.toStringAsFixed(4)} | Match: $isMatch | LiveFrames: ${_liveEmbeddings.length}',
       );
 
-      if (result.isMatch) {
+      if (isMatch) {
         // ── Success ──
         setState(() => _borderColor = AppStyles.successGreen);
 
@@ -1192,13 +1322,13 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         );
 
         bool hasSeverePoseWarning = topResults.any((r) => r.yaw.abs() > 20.0 || r.pitch.abs() > 15.0);
-        bool meetsRetryConditions = result.score >= (_verificationThreshold - 0.03) &&
-            result.score < _verificationThreshold &&
+        bool meetsRetryConditions = score >= (_verificationThreshold - 0.03) &&
+            score < _verificationThreshold &&
             avgQuality >= 65.0 &&
             !hasSeverePoseWarning;
 
         if (_attemptCount < 2 && meetsRetryConditions) {
-          FaceLogger.ver(_sessionId, 'Retry conditions met: score=${result.score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, pose=OK. Triggering retry.');
+          FaceLogger.ver(_sessionId, 'Retry conditions met: score=${score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, pose=OK. Triggering retry.');
           await Future.delayed(const Duration(milliseconds: 1200));
           if (!mounted) return;
 
@@ -1239,7 +1369,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         } else {
           // No more retries allowed or retry conditions not met
           if (!meetsRetryConditions) {
-            FaceLogger.ver(_sessionId, 'Retry conditions not met: score=${result.score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, poseWarning=$hasSeverePoseWarning. Rejecting verification.');
+            FaceLogger.ver(_sessionId, 'Retry conditions not met: score=${score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, poseWarning=$hasSeverePoseWarning. Rejecting verification.');
           }
           await Future.delayed(const Duration(milliseconds: 600));
           if (mounted) {
@@ -1256,14 +1386,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         });
       }
     }
-  }
-
-  double _calculateL2Norm(List<double> embedding) {
-    double sumSquares = 0.0;
-    for (final val in embedding) {
-      sumSquares += val * val;
-    }
-    return math.sqrt(sumSquares);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1372,6 +1494,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       });
 
     final Face biggest = sorted.first;
+    final double biggestArea =
+        biggest.boundingBox.width * biggest.boundingBox.height;
 
     final double centerX =
         biggest.boundingBox.left + biggest.boundingBox.width / 2;
@@ -1379,6 +1503,19 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     final double offsetX = (centerX - imageCenterX).abs() / image.width;
 
     if (offsetX > 0.30) return null;
+
+    if (sorted.length > 1) {
+      final double secondArea =
+          sorted[1].boundingBox.width * sorted[1].boundingBox.height;
+      if (secondArea > 0.50 * biggestArea) {
+        if (offsetX > 0.20) {
+          debugPrint(
+            '[FACE_VER] Second face present (>50% area) and largest face offsetX (${offsetX.toStringAsFixed(3)}) > 0.20 — requiring main person centered',
+          );
+          return null;
+        }
+      }
+    }
 
     return biggest;
   }
@@ -1726,7 +1863,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                 lower.contains('move slightly up') ||
                 lower.contains('move slightly down') ||
                 lower.contains('move to the center') ||
-                lower.contains('move slightly backward')) {
+                lower.contains('move slightly backward') ||
+                lower.contains('too bright') ||
+                lower.contains('too dark')) {
               _borderColor = Colors.orangeAccent;
             } else if (_phase != _Phase.error &&
                 _borderColor != AppStyles.successGreen) {
@@ -1750,7 +1889,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
               lower.contains('move slightly up') ||
               lower.contains('move slightly down') ||
               lower.contains('move to the center') ||
-              lower.contains('move slightly backward')) {
+              lower.contains('move slightly backward') ||
+              lower.contains('too bright') ||
+              lower.contains('too dark')) {
             _borderColor = Colors.orangeAccent;
           } else if (_phase != _Phase.error &&
               _borderColor != AppStyles.successGreen) {
