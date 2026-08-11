@@ -109,6 +109,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   bool _cameraFrozen = false;
   Uint8List? _lastCapturedFrameBytes;
   bool _isSubmitting = false;
+  bool _meteringApplied = false;
+  int _stabilityRejectCount = 0;
 
   List<List<double>>? _storedTemplates;
   double _verificationThreshold = 0.68;
@@ -666,7 +668,40 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       _pushSmoothing(face);
 
-      // Adapt camera exposure to face region (throttled to 600ms)
+      if (!_meteringApplied) {
+        final String? posInstructionCheck = _getPositioningInstruction(
+          face,
+          cameraImage,
+          strict: !_isFaceReady,
+        );
+        if (posInstructionCheck == null) {
+          final int sensorOrientation = _cameraController?.description.sensorOrientation ?? 90;
+          double rawCX;
+          double rawCY;
+
+          if (sensorOrientation == 90) {
+            rawCX = face.boundingBox.top + face.boundingBox.height / 2.0;
+            rawCY = cameraImage.height - (face.boundingBox.left + face.boundingBox.width / 2.0);
+          } else if (sensorOrientation == 270) {
+            rawCX = cameraImage.width - (face.boundingBox.top + face.boundingBox.height / 2.0);
+            rawCY = face.boundingBox.left + face.boundingBox.width / 2.0;
+          } else if (sensorOrientation == 180) {
+            rawCX = cameraImage.width - (face.boundingBox.left + face.boundingBox.width / 2.0);
+            rawCY = cameraImage.height - (face.boundingBox.top + face.boundingBox.height / 2.0);
+          } else {
+            rawCX = face.boundingBox.left + face.boundingBox.width / 2.0;
+            rawCY = face.boundingBox.top + face.boundingBox.height / 2.0;
+          }
+
+          final double normX = (rawCX / cameraImage.width).clamp(0.0, 1.0);
+          final double normY = (rawCY / cameraImage.height).clamp(0.0, 1.0);
+
+          _cameraStabilizer.applyFaceMetering(normX, normY);
+          _meteringApplied = true;
+        }
+      }
+
+      // Adapt camera exposure to face region (throttled to 1000ms)
       final frameStats = _cameraStabilizer.computeFrameStats(
         cameraImage,
         faceBoundingBox: face.boundingBox,
@@ -674,7 +709,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       );
       final double faceBrightness = frameStats['brightness'] ?? 0.0;
       final nowAdjust = DateTime.now();
-      if (nowAdjust.difference(_lastExposureAdjustTime).inMilliseconds >= 600) {
+      if (nowAdjust.difference(_lastExposureAdjustTime).inMilliseconds >= 1000) {
         _lastExposureAdjustTime = nowAdjust;
         _cameraStabilizer.adjustFaceExposure(faceBrightness);
       }
@@ -907,7 +942,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     );
     final double faceBrightness = stats['brightness'] ?? 0.0;
 
-    if (faceBrightness > 235.0) {
+    if (faceBrightness > 245.0) {
       _updateInstruction(
         'Too bright — move out of direct sunlight',
         subtitle: 'Reduce direct lighting on your face',
@@ -926,15 +961,22 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       return;
     }
 
-    // Stable frame selection check
+    // Stable frame selection check with anti-stuck override
     if (!_cameraStabilizer.checkFrameStability(cameraImage, threshold: 35.0)) {
-      _isProcessingFrame = false;
-      return;
+      _stabilityRejectCount++;
+      if (_stabilityRejectCount < 8) {
+        _isProcessingFrame = false;
+        return;
+      }
+      _stabilityRejectCount = 0;
+      debugPrint('[FACE_VER] Force-bypassing frame stability check after 8 consecutive rejections');
     }
 
     // Grab frame
     final Uint8List? jpegBytes = await _captureCurrentFrame();
     if (jpegBytes == null) return;
+
+    _stabilityRejectCount = 0;
 
     _lastCapturedFrameBytes = jpegBytes; // Store for freeze preview
 
@@ -2778,6 +2820,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   void _onRetry() {
     debugPrint('[CAPTURE] Started | screen=verification target=$_framesPerPhase');
+    _cameraStabilizer.resetStabilityOnly();
+    _meteringApplied = false;
+    _stabilityRejectCount = 0;
     _livenessService.resetCalibration();
     _liveEmbeddings.clear();
     _capturedVerificationFrames.clear();

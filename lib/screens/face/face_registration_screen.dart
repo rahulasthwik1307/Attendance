@@ -185,6 +185,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   bool _cameraFrozen = false;
   Uint8List? _lastCapturedFrameBytes;
   bool _isSubmitting = false;
+  bool _meteringApplied = false;
+  int _stabilityRejectCount = 0;
 
   // Exposure adjustment throttle timestamp
   DateTime _lastExposureAdjustTime = DateTime.fromMillisecondsSinceEpoch(0);
@@ -531,6 +533,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           _challengeStartTime = null;
           _blinkCountdownController.stop();
           _blinkCountdownController.reset();
+          _meteringApplied = false;
+          _stabilityRejectCount = 0;
         }
       }
       _lastProcessedFace = face;
@@ -538,7 +542,43 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       // Push raw face metrics into smoothing buffer for moving average
       _pushSmoothing(face);
 
-      // Adapt camera exposure to face region (throttled to 600ms)
+      final bool isCapturePhase = (
+        _phase == _Phase.left ||
+        _phase == _Phase.front ||
+        _phase == _Phase.right ||
+        _phase == _Phase.up ||
+        _phase == _Phase.down
+      );
+
+      if (isCapturePhase && !_meteringApplied) {
+        if (_isPoseCorrect(face, _phase)) {
+          final int sensorOrientation = _cameraController?.description.sensorOrientation ?? 90;
+          double rawCX;
+          double rawCY;
+
+          if (sensorOrientation == 90) {
+            rawCX = face.boundingBox.top + face.boundingBox.height / 2.0;
+            rawCY = cameraImage.height - (face.boundingBox.left + face.boundingBox.width / 2.0);
+          } else if (sensorOrientation == 270) {
+            rawCX = cameraImage.width - (face.boundingBox.top + face.boundingBox.height / 2.0);
+            rawCY = face.boundingBox.left + face.boundingBox.width / 2.0;
+          } else if (sensorOrientation == 180) {
+            rawCX = cameraImage.width - (face.boundingBox.left + face.boundingBox.width / 2.0);
+            rawCY = cameraImage.height - (face.boundingBox.top + face.boundingBox.height / 2.0);
+          } else {
+            rawCX = face.boundingBox.left + face.boundingBox.width / 2.0;
+            rawCY = face.boundingBox.top + face.boundingBox.height / 2.0;
+          }
+
+          final double normX = (rawCX / cameraImage.width).clamp(0.0, 1.0);
+          final double normY = (rawCY / cameraImage.height).clamp(0.0, 1.0);
+
+          _cameraStabilizer.applyFaceMetering(normX, normY);
+          _meteringApplied = true;
+        }
+      }
+
+      // Adapt camera exposure to face region (throttled to 1000ms)
       final frameStats = _cameraStabilizer.computeFrameStats(
         cameraImage,
         faceBoundingBox: face.boundingBox,
@@ -546,7 +586,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       );
       final double faceBrightness = frameStats['brightness'] ?? 0.0;
       final nowAdjust = DateTime.now();
-      if (nowAdjust.difference(_lastExposureAdjustTime).inMilliseconds >= 600) {
+      if (nowAdjust.difference(_lastExposureAdjustTime).inMilliseconds >= 1000) {
         _lastExposureAdjustTime = nowAdjust;
         _cameraStabilizer.adjustFaceExposure(faceBrightness);
       }
@@ -961,10 +1001,15 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     // Reset consecutive rejections on quality pass
     _consecutiveRejections[currentPhase] = 0;
 
-    // Stable frame selection check with relaxed threshold
+    // Stable frame selection check with relaxed threshold and anti-stuck override
     if (!_cameraStabilizer.checkFrameStability(cameraImage, threshold: 35.0)) {
-      _isProcessingFrame = false;
-      return;
+      _stabilityRejectCount++;
+      if (_stabilityRejectCount < 8) {
+        _isProcessingFrame = false;
+        return;
+      }
+      _stabilityRejectCount = 0;
+      debugPrint('[FACE_REG] Force-bypassing frame stability check after 8 consecutive rejections');
     }
 
     _updateInstruction('Hold still…', subtitle: 'Almost done, stay steady');
@@ -972,6 +1017,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     // Grab the current frame as JPEG
     final Uint8List? jpegBytes = await _captureCurrentFrame();
     if (jpegBytes == null) return;
+
+    _stabilityRejectCount = 0;
 
     // Re-check locks after the async captureCurrentFrame
     if (_captureCompleted) return;
@@ -3417,6 +3464,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _cameraFrozen = false;
     _lastCapturedFrameBytes = null;
     _isSubmitting = false;
+    _cameraStabilizer.resetStabilityOnly();
+    _meteringApplied = false;
+    _stabilityRejectCount = 0;
 
     // Problem 2 & 3: reset both new flags for a fresh registration attempt
     _captureCompleted = false;

@@ -14,6 +14,8 @@ class CameraStabilizer {
   bool _cancelled = false;
   double? _stableBrightness;
   double? _lastBrightness;
+  int _consecutiveDriftRejections = 0;
+  bool _isMetering = false;
 
   // Diagnostic values
   double exposureDrift = 0.0;
@@ -58,6 +60,8 @@ class CameraStabilizer {
     _isStable = false;
     _stableBrightness = null;
     _lastBrightness = null;
+    _consecutiveDriftRejections = 0;
+    _isMetering = false;
     _currentExposureOffset = 0.0;
     _lastExposureAdjustmentTime = null;
     _isAdjustingExposure = false;
@@ -71,6 +75,20 @@ class CameraStabilizer {
     _isStable = true;
     _stableBrightness = null;
     _lastBrightness = null;
+    _consecutiveDriftRejections = 0;
+  }
+
+  Future<void> applyFaceMetering(double faceCenterXNorm, double faceCenterYNorm) async {
+    if (_isMetering || _cancelled) return;
+    _isMetering = true;
+    try {
+      await controller.setExposurePoint(Offset(faceCenterXNorm, faceCenterYNorm));
+      await controller.setFocusPoint(Offset(faceCenterXNorm, faceCenterYNorm));
+    } catch (_) {
+      // Ignore UnsupportedError/PlatformException
+    } finally {
+      _isMetering = false;
+    }
   }
 
   Future<void> stabilize() async {
@@ -326,26 +344,19 @@ class CameraStabilizer {
   }
 
   /// Adapts exposure offset based on face region brightness:
-  /// Target band: 90 to 170.
-  /// If faceBrightness > 180: decrease offset by 0.3 (or 0.5 if >200) (clamped to min offset).
-  /// If faceBrightness < 80: increase offset by 0.3 (or 0.5 if <60) (clamped to max offset).
-  /// Hysteresis: do nothing inside 90-170 or buffer zones.
+  /// Target band: 70 to 190.
+  /// If faceBrightness > 190: decrease offset by 0.2 (clamped to min offset).
+  /// If faceBrightness < 70: increase offset by 0.2 (clamped to max offset).
+  /// Hysteresis: do nothing inside 70-190 target band.
   /// Records a settle timestamp; checkFrameStability returns false for 250ms after a change.
   Future<void> adjustFaceExposure(double faceBrightness) async {
     if (_isAdjustingExposure || _cancelled) return;
 
-    if (faceBrightness >= 90.0 && faceBrightness <= 170.0) {
-      return; // Do nothing inside 90-170 target band
+    if (faceBrightness >= 70.0 && faceBrightness <= 190.0) {
+      return; // Do nothing inside 70-190 target band
     }
 
-    double delta = 0.0;
-    if (faceBrightness > 180.0) {
-      delta = faceBrightness > 200.0 ? -0.5 : -0.3;
-    } else if (faceBrightness < 80.0) {
-      delta = faceBrightness < 60.0 ? 0.5 : 0.3;
-    } else {
-      return; // Inside 80-90 or 170-180 buffer zones — no adjustment to avoid hunting
-    }
+    final double delta = faceBrightness > 190.0 ? -0.2 : 0.2;
 
     try {
       double minOffset = await controller.getMinExposureOffset();
@@ -365,6 +376,7 @@ class CameraStabilizer {
       _currentExposureOffset = targetOffset;
       exposureCompensationValue = targetOffset;
       _lastExposureAdjustmentTime = DateTime.now();
+      _stableBrightness = null;
       log('Face exposure adjusted: offset=${targetOffset.toStringAsFixed(2)} (faceBrightness=${faceBrightness.toStringAsFixed(1)})');
     } catch (e) {
       log('Error adjusting face exposure: $e');
@@ -399,6 +411,7 @@ class CameraStabilizer {
     if (_stableBrightness == null) {
       _stableBrightness = currentBrightness;
       _lastBrightness = currentBrightness;
+      _consecutiveDriftRejections = 0;
       frameBrightnessDelta = 0.0;
       exposureDrift = 0.0;
       frameLuminanceVariance = stats['contrast']! * stats['contrast']!;
@@ -440,12 +453,18 @@ class CameraStabilizer {
     }
 
     if (isRejected) {
+      _stableBrightness = _stableBrightness! * 0.7 + currentBrightness * 0.3;
+      _consecutiveDriftRejections++;
+      if (_consecutiveDriftRejections >= 3) {
+        _consecutiveDriftRejections = 0;
+        return true;
+      }
       log('Rejected: Brightness unstable (current=$currentBrightness, ref=$_stableBrightness, drift=$exposureDrift, threshold=$threshold)');
       return false;
     }
 
-    // Slowly update reference brightness
-    _stableBrightness = _stableBrightness! * 0.90 + currentBrightness * 0.10;
+    _consecutiveDriftRejections = 0;
+    _stableBrightness = _stableBrightness! * 0.95 + currentBrightness * 0.05;
     return true;
   }
 }
