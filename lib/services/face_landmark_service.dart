@@ -259,6 +259,7 @@ class FaceLandmarkService {
       final List<dynamic>? qualityList = json['quality'] as List<dynamic>?;
       final bool? backendMatch = json['match'] as bool?;
       final double? backendFinalScore = (json['final_score'] as num?)?.toDouble();
+      final bool livenessPassed = json['liveness_passed'] as bool? ?? true;
 
       final List<BatchEmbeddingResult> result = [];
       for (int i = 0; i < embeddings.length; i++) {
@@ -314,6 +315,7 @@ class FaceLandmarkService {
             rawQualityScore: rawQualityScore,
             match: backendMatch,
             finalScore: backendFinalScore,
+            livenessPassed: livenessPassed,
           ),
         );
 
@@ -642,6 +644,7 @@ class BatchEmbeddingResult {
   final bool apiFailed;
   final bool? match;
   final double? finalScore;
+  final bool livenessPassed;
 
   double get qualityScore => rawQualityScore;
 
@@ -658,6 +661,7 @@ class BatchEmbeddingResult {
         false, // defaults false — normal quality results are never API failures
     this.match,
     this.finalScore,
+    this.livenessPassed = true,
   });
 }
 

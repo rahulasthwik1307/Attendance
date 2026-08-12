@@ -112,6 +112,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   bool _meteringApplied = false;
   int _stabilityRejectCount = 0;
 
+  String _livenessPlan = 'blink_only';
+  bool _blinkDone = false;
+  bool _turnDone = false;
+  DateTime? _turnStartTime;
+
   List<List<double>>? _storedTemplates;
   double _verificationThreshold = 0.68;
 
@@ -419,8 +424,18 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _livenessService.logPrefix = 'FACE_VER';
       _livenessService.sessionId = _sessionId;
 
-      debugPrint('[FACE_VER][$_sessionId]');
-      debugPrint('Verification Started');
+      final double rPlan = math.Random().nextDouble();
+      if (rPlan < 0.40) {
+        _livenessPlan = 'blink_only';
+      } else if (rPlan < 0.70) {
+        _livenessPlan = 'blink_left';
+      } else {
+        _livenessPlan = 'blink_right';
+      }
+      _blinkDone = false;
+      _turnDone = false;
+      _turnStartTime = null;
+      debugPrint('[FACE_VER] Selected liveness plan: $_livenessPlan');
 
       _setPhase(_Phase.positioning);
 
@@ -660,6 +675,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _isFaceReady = false;
           _livenessService.resetCalibration();
           _challengeStartTime = null;
+          _turnStartTime = null;
+          _blinkDone = false;
+          _turnDone = false;
           _blinkCountdownController.stop();
           _blinkCountdownController.reset();
         }
@@ -801,6 +819,60 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     Face face,
     ChallengeType challenge,
   ) async {
+    if (_livenessPlan != 'blink_only' && _blinkDone && !_turnDone) {
+      _turnStartTime ??= DateTime.now();
+      final int elapsed = DateTime.now().difference(_turnStartTime!).inMilliseconds;
+      const int turnTimeout = 5000;
+
+      final bool isLeft = _livenessPlan == 'blink_left';
+      final String turnInstruction = isLeft ? 'Turn slightly left' : 'Turn slightly right';
+
+      if (elapsed > turnTimeout) {
+        _livenessService.reset();
+        _turnStartTime = DateTime.now();
+        _updateInstruction(
+          'No turn detected',
+          subtitle: 'Hold still while we confirm',
+          animate: false,
+        );
+        await Future.delayed(const Duration(milliseconds: 800));
+        if (!mounted) return;
+        _updateInstruction(
+          turnInstruction,
+          subtitle: 'Hold still while we confirm',
+          animate: false,
+        );
+        return;
+      }
+
+      final bool turnDetected = isLeft
+          ? _livenessService.detectTurnLeft(face)
+          : _livenessService.detectTurnRight(face);
+
+      if (turnDetected) {
+        FaceLogger.ver(_sessionId, 'Turn challenge VERIFIED ✓');
+        _turnDone = true;
+        _challengeVerified = true;
+        _livenessService.reset();
+        _turnStartTime = null;
+
+        _captureStopwatch.start();
+
+        if (mounted) {
+          setState(() {
+            _borderColor = AppStyles.successGreen;
+          });
+          HapticFeedback.lightImpact();
+        }
+        _updateInstruction(
+          'Turn verified!',
+          subtitle: 'Preparing capture…',
+          animate: false,
+        );
+      }
+      return;
+    }
+
     _challengeStartTime ??= DateTime.now();
 
     final int elapsed = DateTime.now()
@@ -869,7 +941,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
             setState(() => _borderColor = AppStyles.successGreen);
           }
           await Future.delayed(const Duration(milliseconds: 250));
-          if (mounted && !_challengeVerified) {
+          if (mounted && !_challengeVerified && !_blinkDone) {
             setState(() => _borderColor = AppStyles.primaryBlue);
           }
         }
@@ -880,25 +952,47 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
     if (detected) {
       FaceLogger.ver(_sessionId, 'Blink challenge VERIFIED ✓');
-      _challengeVerified = true;
-      _livenessService.reset();
+      _blinkDone = true;
       _challengeStartTime = null;
       _blinkCountdownController.stop();
 
-      // Start capture timer
-      _captureStopwatch.start();
+      if (_livenessPlan == 'blink_only') {
+        _challengeVerified = true;
+        _livenessService.reset();
+        _captureStopwatch.start();
 
-      if (mounted) {
-        setState(() {
-          _borderColor = AppStyles.successGreen;
+        if (mounted) {
+          setState(() {
+            _borderColor = AppStyles.successGreen;
+          });
+          HapticFeedback.lightImpact();
+        }
+        _updateInstruction(
+          'Blink verified!',
+          subtitle: 'Preparing capture…',
+          animate: false,
+        );
+      } else {
+        _livenessService.reset();
+        if (mounted) {
+          setState(() {
+            _borderColor = AppStyles.successGreen;
+          });
+          HapticFeedback.lightImpact();
+        }
+        final String turnInstruction = _livenessPlan == 'blink_left' ? 'Turn slightly left' : 'Turn slightly right';
+        _updateInstruction(
+          turnInstruction,
+          subtitle: 'Hold still while we confirm',
+          animate: false,
+        );
+        _turnStartTime = DateTime.now();
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted && !_challengeVerified) {
+            setState(() => _borderColor = AppStyles.primaryBlue);
+          }
         });
-        HapticFeedback.lightImpact();
       }
-      _updateInstruction(
-        'Blink verified!',
-        subtitle: 'Preparing capture…',
-        animate: false,
-      );
     }
   }
 
@@ -1057,79 +1151,99 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       int processedNonNullCount = 0;
 
       _apiStopwatch.start();
-      final int totalFramesToScan = _capturedVerificationFrames.length;
+      final List<BatchEmbeddingResult> batchResults = await _landmarkService.generateEmbeddingBatch(
+        jpegBytesList: _capturedVerificationFrames,
+        localStatsList: _capturedVerificationFramesStats,
+        sessionId: _sessionId,
+        prefix: 'FACE_VER',
+        storedTemplates: _storedTemplates,
+        threshold: _verificationThreshold,
+      );
+      _apiStopwatch.stop();
 
-      for (int i = 0; i < totalFramesToScan; i++) {
-        if (mounted) {
-          _updateInstruction(
-            'Analysing…',
-            subtitle: 'Scanning frames...',
-          );
-        }
+      final bool livenessPassed = batchResults.isNotEmpty ? batchResults.first.livenessPassed : true;
+      final bool apiFailed = batchResults.isNotEmpty && batchResults.first.apiFailed;
 
-        final Uint8List frame = _capturedVerificationFrames[i];
-        final List<double>? embedding = await _landmarkService.generateEmbedding(
-          jpegBytes: frame,
-          face: null,
+      if (apiFailed) {
+        FaceLogger.ver(_sessionId, 'API FAILED');
+        setState(() {
+          _isSubmitting = false;
+        });
+        _updateInstruction(
+          'Connection failed',
+          subtitle:
+              'Unable to connect to the face server. Please check your connection and try again.',
+          animate: false,
         );
+        return;
+      }
 
-        if (embedding == null) {
-          debugPrint('[FACE_VER] Frame rejected by backend.');
-          FaceLogger.ver(_sessionId, 'Frame #${i + 1}: backend quality reject (null)');
-          continue;
+      bool spoofDetected = false;
+
+      for (int i = 0; i < batchResults.length; i++) {
+        final res = batchResults[i];
+
+        // 🔴 CRITICAL: Check Anti-Spoofing result from backend
+        if (!res.livenessPassed) {
+          spoofDetected = true;
+          FaceLogger.ver(_sessionId, '🚨 SPOOF DETECTED on Frame #${i + 1} by backend!');
         }
 
-        processedNonNullCount++;
-        _liveEmbeddings.add(embedding);
+        // Only accept if embedding exists, quality is good, AND it's a real face
+        final bool accepted = res.embedding != null && res.qualityPassed && res.livenessPassed;
 
-        double qualityScore = 80.0;
-        if (i < _capturedVerificationFramesStats.length) {
-          final stats = _capturedVerificationFramesStats[i];
-          qualityScore = stats['quality'] ?? stats['blur'] ?? 80.0;
-        }
-        _validResults.add(BatchEmbeddingResult(
-          embedding: embedding,
-          qualityPassed: true,
-          blurScore: i < _capturedVerificationFramesStats.length ? (_capturedVerificationFramesStats[i]['blur'] ?? 0.0) : 0.0,
-          faceArea: i < _capturedVerificationFramesStats.length ? (_capturedVerificationFramesStats[i]['face_area'] ?? 0.0) : 0.0,
-          yaw: i < _capturedVerificationFramesStats.length ? (_capturedVerificationFramesStats[i]['yaw'] ?? 0.0) : 0.0,
-          pitch: i < _capturedVerificationFramesStats.length ? (_capturedVerificationFramesStats[i]['pitch'] ?? 0.0) : 0.0,
-          rawQualityScore: qualityScore,
-        ));
+        if (accepted) {
+          processedNonNullCount++;
+          _liveEmbeddings.add(res.embedding!);
+          _validResults.add(res);
 
-        double frameMaxScore = -1.0;
-        String bestPose = 'unknown';
+          double frameMaxScore = -1.0;
+          String bestPose = 'unknown';
 
-        if (_storedTemplates != null && _storedTemplates!.isNotEmpty) {
-          for (int t = 0; t < _storedTemplates!.length; t++) {
-            final storedVec = _storedTemplates![t];
-            final double sim = _landmarkService.cosineSimilarity(embedding, storedVec);
-            if (sim > frameMaxScore) {
-              frameMaxScore = sim;
-              bestPose = t < poseNames.length ? poseNames[t] : 'pose_$t';
+          if (_storedTemplates != null && _storedTemplates!.isNotEmpty) {
+            for (int t = 0; t < _storedTemplates!.length; t++) {
+              final storedVec = _storedTemplates![t];
+              final double sim = _landmarkService.cosineSimilarity(res.embedding!, storedVec);
+              if (sim > frameMaxScore) {
+                frameMaxScore = sim;
+                bestPose = t < poseNames.length ? poseNames[t] : 'pose_$t';
+              }
             }
           }
-        }
 
-        if (frameMaxScore >= _verificationThreshold) {
-          framesAboveThresholdCount++;
-        }
-        if (frameMaxScore > overallBestFrameScore) {
-          overallBestFrameScore = frameMaxScore;
-        }
+          if (frameMaxScore >= _verificationThreshold) {
+            framesAboveThresholdCount++;
+          }
+          if (frameMaxScore > overallBestFrameScore) {
+            overallBestFrameScore = frameMaxScore;
+          }
 
-        FaceLogger.ver(
-          _sessionId,
-          'Frame #${i + 1}: maxScore=${frameMaxScore.toStringAsFixed(4)} ($bestPose)',
-        );
+          FaceLogger.ver(
+            _sessionId,
+            'Frame #${i + 1}: maxScore=${frameMaxScore.toStringAsFixed(4)} ($bestPose)',
+          );
 
-        if (framesAboveThresholdCount >= 2) {
-          FaceLogger.ver(_sessionId, 'Early exit triggered: 2 frames above threshold reached at frame #${i + 1}');
-          break;
+          if (framesAboveThresholdCount >= 2) {
+            FaceLogger.ver(_sessionId, 'Early exit triggered: 2 frames above threshold reached at frame #${i + 1}');
+            break;
+          }
+        } else {
+          debugPrint('[FACE_VER] Frame rejected by backend.');
+          FaceLogger.ver(_sessionId, 'Frame #${i + 1}: backend quality reject (${res.rejectionReason ?? "null"})');
         }
       }
 
-      _apiStopwatch.stop();
+      // 🚨 Handle Spoofing Attempt
+      if (spoofDetected) {
+        FaceLogger.ver(_sessionId, 'Verification aborted due to Anti-Spoofing failure.');
+        setState(() => _borderColor = AppStyles.errorRed);
+        _updateInstruction('Liveness check failed', subtitle: 'Please present a real face');
+
+        await Future.delayed(const Duration(seconds: 2));
+        if (mounted) _onRetry(); // Restart the camera and try again
+        return;
+      }
+
       FaceLogger.ver(_sessionId, 'Processing Finished');
 
       _validFrameCount = processedNonNullCount;
@@ -1190,7 +1304,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       }
 
       final double score = math.max(overallBestFrameScore, fusedScore);
-      final bool isMatch = framesAboveThresholdCount >= 2 || fusedScore >= _verificationThreshold;
+      final bool rawMatch = (batchResults.isNotEmpty && batchResults.first.match != null)
+          ? batchResults.first.match!
+          : (framesAboveThresholdCount >= 2 || fusedScore >= _verificationThreshold);
+      final bool isMatch = livenessPassed && rawMatch;
 
       _comparisonStopwatch.start();
       _comparisonStopwatch.stop();
@@ -1202,6 +1319,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       FaceLogger.ver(_sessionId, '  fusedScore = ${fusedScore.toStringAsFixed(4)}');
       FaceLogger.ver(_sessionId, '  finalScore = ${score.toStringAsFixed(4)}');
       FaceLogger.ver(_sessionId, '  threshold = ${_verificationThreshold.toStringAsFixed(4)}');
+      FaceLogger.ver(_sessionId, '  livenessPassed = $livenessPassed');
       FaceLogger.ver(_sessionId, '  final decision = ${isMatch ? "PASS" : "FAIL"}');
 
       final double avgQuality = 80.0;
@@ -1236,18 +1354,22 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       String likelyCause = 'Unknown';
       if (!isMatch) {
-        final yawDiff = (regYaw - avgLocalYaw).abs();
-        final pitchDiff = (regPitch - avgLocalPitch).abs();
-        final brightnessDiff = (regBrightness - avgLocalBrightness).abs();
-
-        if (yawDiff > 10.0 || pitchDiff > 10.0) {
-          likelyCause = 'Pose Difference';
-        } else if (brightnessDiff > 45.0) {
-          likelyCause = 'Lighting Difference';
-        } else if (avgQuality < 65.0) {
-          likelyCause = 'Poor Quality Frames';
+        if (!livenessPassed) {
+          likelyCause = 'Liveness Failed (Spoof Detected)';
         } else {
-          likelyCause = 'Low Similarity';
+          final yawDiff = (regYaw - avgLocalYaw).abs();
+          final pitchDiff = (regPitch - avgLocalPitch).abs();
+          final brightnessDiff = (regBrightness - avgLocalBrightness).abs();
+
+          if (yawDiff > 10.0 || pitchDiff > 10.0) {
+            likelyCause = 'Pose Difference';
+          } else if (brightnessDiff > 45.0) {
+            likelyCause = 'Lighting Difference';
+          } else if (avgQuality < 65.0) {
+            likelyCause = 'Poor Quality Frames';
+          } else {
+            likelyCause = 'Low Similarity';
+          }
         }
       }
 
@@ -1255,6 +1377,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       debugPrint('Backend Score=${score.toStringAsFixed(4)}');
       debugPrint('Fused Score=${fusedScore.toStringAsFixed(4)}');
       debugPrint('Threshold=${_verificationThreshold.toStringAsFixed(4)}');
+      debugPrint('LivenessPassed=$livenessPassed');
       debugPrint('Decision=${isMatch ? "PASS" : "FAIL"}');
 
       debugPrint('[FACE_VER][$_sessionId] =========================');
@@ -1290,6 +1413,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       debugPrint(
         '[FACE_VER][$_sessionId] Threshold=${_verificationThreshold.toStringAsFixed(4)}',
       );
+      debugPrint(
+        '[FACE_VER][$_sessionId] Liveness Passed=$livenessPassed',
+      );
       debugPrint('[FACE_VER][$_sessionId] ');
       debugPrint('[FACE_VER][$_sessionId] Likely Cause:');
       debugPrint('[FACE_VER][$_sessionId] $likelyCause');
@@ -1297,7 +1423,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       FaceLogger.ver(
         _sessionId,
-        'Backend Decision | Score: ${score.toStringAsFixed(4)} | FusedScore: ${fusedScore.toStringAsFixed(4)} | Match: $isMatch | LiveFrames: ${_liveEmbeddings.length}',
+        'Backend Decision | Score: ${score.toStringAsFixed(4)} | FusedScore: ${fusedScore.toStringAsFixed(4)} | LivenessPassed: $livenessPassed | Match: $isMatch | LiveFrames: ${_liveEmbeddings.length}',
       );
 
       if (isMatch) {
@@ -1360,7 +1486,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         setState(() => _borderColor = AppStyles.errorRed);
         _updateInstruction(
           'Verification Failed',
-          subtitle: 'Face did not match',
+          subtitle: !livenessPassed
+              ? 'Liveness check failed - present a real face'
+              : 'Face did not match',
         );
 
         bool hasSeverePoseWarning = _capturedVerificationFramesStats.any((s) => ((s['yaw'] ?? 0.0).abs() > 20.0 || (s['pitch'] ?? 0.0).abs() > 15.0));
@@ -1380,8 +1508,17 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _cameraFrozen = false;
           _lastCapturedFrameBytes = null;
           _isSubmitting = false;
-          _livenessService.resetCalibration();
-          _clearSmoothing();
+          final double rPlan = math.Random().nextDouble();
+          if (rPlan < 0.40) {
+            _livenessPlan = 'blink_only';
+          } else if (rPlan < 0.70) {
+            _livenessPlan = 'blink_left';
+          } else {
+            _livenessPlan = 'blink_right';
+          }
+          _blinkDone = false;
+          _turnDone = false;
+          _turnStartTime = null;
           _challengeVerified = false;
           _captureProgress = 0;
           _challengeStartTime = null;
@@ -1824,6 +1961,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       if (newPhase == _Phase.positioning) {
         _challengeVerified = false;
         _challengeStartTime = null;
+        _turnStartTime = null;
+        _blinkDone = false;
+        _turnDone = false;
         _livenessService.reset();
         _steadyStartTime = null;
         _isFaceReady = false;
@@ -2687,6 +2827,68 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                                             mainAxisAlignment:
                                                 MainAxisAlignment.center,
                                             children: [
+                                              if (_livenessPlan != 'blink_only' &&
+                                                  (_phase == _Phase.positioning ||
+                                                      _phase == _Phase.liveness)) ...[
+                                                Padding(
+                                                  padding: const EdgeInsets.only(
+                                                    bottom: 8.0,
+                                                    top: 2.0,
+                                                  ),
+                                                  child: SizedBox(
+                                                    width: 180,
+                                                    child: Row(
+                                                      mainAxisAlignment:
+                                                          MainAxisAlignment.center,
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment.start,
+                                                      children: [
+                                                        _SubChallengeNode(
+                                                          label: 'Blink',
+                                                          isDone: _blinkDone,
+                                                          isActive:
+                                                              (_phase ==
+                                                                      _Phase
+                                                                          .positioning ||
+                                                                  _phase ==
+                                                                      _Phase
+                                                                          .liveness) &&
+                                                              !_blinkDone,
+                                                        ),
+                                                        Expanded(
+                                                          child: Container(
+                                                            margin:
+                                                                const EdgeInsets.only(
+                                                                  top: 12,
+                                                                  left: 4,
+                                                                  right: 4,
+                                                                ),
+                                                            height: 2,
+                                                            color: _blinkDone
+                                                                ? const Color(
+                                                                    0xFF2ECC71,
+                                                                  )
+                                                                : const Color(
+                                                                    0xFFD1D5DB,
+                                                                  ),
+                                                          ),
+                                                        ),
+                                                        _SubChallengeNode(
+                                                          label:
+                                                              _livenessPlan ==
+                                                                      'blink_left'
+                                                                  ? 'Turn Left'
+                                                                  : 'Turn Right',
+                                                          isDone: _turnDone,
+                                                          isActive:
+                                                              _blinkDone &&
+                                                              !_turnDone,
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
                                               Text(
                                                 _instructionTitle,
                                                 textAlign: TextAlign.center,
@@ -2832,7 +3034,17 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     _lastCapturedFrameBytes = null;
     _isSubmitting = false;
 
-    _captureProgress = 0;
+    final double rPlan = math.Random().nextDouble();
+    if (rPlan < 0.40) {
+      _livenessPlan = 'blink_only';
+    } else if (rPlan < 0.70) {
+      _livenessPlan = 'blink_left';
+    } else {
+      _livenessPlan = 'blink_right';
+    }
+    _blinkDone = false;
+    _turnDone = false;
+    _turnStartTime = null;
     _challengeVerified = false;
     _challengeStartTime = null;
     _blinkCountdownController.reset();
@@ -2866,6 +3078,123 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     }
 
     _setPhase(_Phase.positioning);
+  }
+}
+
+// ─── _SubChallengeNode ────────────────────────────────────────────────────────
+class _SubChallengeNode extends StatefulWidget {
+  final String label;
+  final bool isDone;
+  final bool isActive;
+
+  const _SubChallengeNode({
+    required this.label,
+    required this.isDone,
+    required this.isActive,
+  });
+
+  @override
+  State<_SubChallengeNode> createState() => _SubChallengeNodeState();
+}
+
+class _SubChallengeNodeState extends State<_SubChallengeNode> {
+  double _scale = 1.0;
+
+  @override
+  void didUpdateWidget(_SubChallengeNode oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.isDone && widget.isDone) {
+      _triggerBounce();
+    }
+  }
+
+  void _triggerBounce() async {
+    if (!mounted) return;
+    setState(() => _scale = 1.15);
+    await Future.delayed(const Duration(milliseconds: 140));
+    if (!mounted) return;
+    setState(() => _scale = 1.0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Color circleBgColor;
+    Border circleBorder;
+    List<BoxShadow>? circleShadow;
+    Widget circleChild;
+    Color labelColor;
+
+    if (widget.isDone) {
+      circleBgColor = const Color(0xFF2ECC71);
+      circleBorder = Border.all(color: const Color(0xFF2ECC71), width: 1.5);
+      circleShadow = null;
+      circleChild = const Icon(Icons.check, color: Colors.white, size: 14);
+      labelColor = const Color(0xFF2ECC71);
+    } else if (widget.isActive) {
+      circleBgColor = Colors.white;
+      circleBorder = Border.all(color: AppStyles.primaryBlue, width: 2.0);
+      circleShadow = [
+        BoxShadow(
+          color: AppStyles.primaryBlue.withValues(alpha: 0.20),
+          blurRadius: 6,
+          spreadRadius: 1,
+        ),
+      ];
+      circleChild = Container(
+        width: 8,
+        height: 8,
+        decoration: const BoxDecoration(
+          color: AppStyles.primaryBlue,
+          shape: BoxShape.circle,
+        ),
+      );
+      labelColor = AppStyles.primaryBlue;
+    } else {
+      circleBgColor = Colors.white;
+      circleBorder = Border.all(color: const Color(0xFFD1D5DB), width: 1.5);
+      circleShadow = null;
+      circleChild = Container(
+        width: 6,
+        height: 6,
+        decoration: const BoxDecoration(
+          color: Color(0xFF9CA3AF),
+          shape: BoxShape.circle,
+        ),
+      );
+      labelColor = const Color(0xFF6B7280);
+    }
+
+    return AnimatedScale(
+      scale: _scale,
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOutBack,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 26,
+            height: 26,
+            decoration: BoxDecoration(
+              color: circleBgColor,
+              shape: BoxShape.circle,
+              border: circleBorder,
+              boxShadow: circleShadow,
+            ),
+            child: Center(child: circleChild),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            widget.label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: labelColor,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

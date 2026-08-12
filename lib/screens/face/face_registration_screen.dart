@@ -130,13 +130,14 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   final Map<_Phase, int> _consecutiveRejections = {};
   final Map<_Phase, bool> _hintShown = {};
   final Map<_Phase, int> _lastRelaxationLevel = {};
-  List<_Phase> _pendingPoses = [
-    _Phase.left,
-    _Phase.front,
-    _Phase.right,
-    _Phase.up,
-    _Phase.down,
+  static const List<List<_Phase>> _validPoseOrders = [
+    [_Phase.left, _Phase.front, _Phase.right, _Phase.up, _Phase.down],
+    [_Phase.right, _Phase.front, _Phase.left, _Phase.up, _Phase.down],
+    [_Phase.left, _Phase.front, _Phase.right, _Phase.down, _Phase.up],
+    [_Phase.right, _Phase.front, _Phase.left, _Phase.down, _Phase.up],
   ];
+  late List<_Phase> _poseOrder;
+  late List<_Phase> _pendingPoses;
 
   void _showHintOnce(_Phase phase, String hint) {
     if (_hintShown[phase] == true) return;
@@ -291,7 +292,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   @override
   void initState() {
     super.initState();
-    debugPrint('[FACE_REG] Screen initialized');
+    _poseOrder = _validPoseOrders[math.Random().nextInt(_validPoseOrders.length)];
+    _pendingPoses = List<_Phase>.from(_poseOrder);
+    debugPrint('[FACE_REG] Screen initialized with pose order: ${_poseOrder.map((p) => p.name).join(", ")}');
 
     // Security guard from original screen
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -660,12 +663,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           if (!_challengeVerified) {
             await _handleLivenessChallenge(face, ChallengeType.blink);
           } else {
-            // Blink verified — transition to left capture phase
+            // Blink verified — transition to first pose capture phase
             debugPrint(
-              '[FACE_REG] Liveness verified — moving directly to left capture phase',
+              '[FACE_REG] Liveness verified — moving directly to first capture phase (${_pendingPoses.first.name})',
             );
             await Future.delayed(const Duration(milliseconds: 500));
-            if (mounted) _setPhase(_Phase.left);
+            if (mounted) _setPhase(_pendingPoses.first);
           }
           break;
         case _Phase.left:
@@ -939,19 +942,19 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     final int rejections = _consecutiveRejections[currentPhase] ?? 0;
     int level = 0;
     double sharpnessMin = 2.0;
-    double brightMin = 45.0;
-    double brightMax = 230.0;
+    double brightMin = 50.0;
+    double brightMax = 160.0; // 🛠️ Capped at 160 to preserve skin micro-texture for the AI
 
     if (rejections >= 6) {
       level = 2;
       sharpnessMin = 1.0;
-      brightMin = 30.0;
-      brightMax = 250.0;
+      brightMin = 40.0;
+      brightMax = 180.0; // Relaxed slightly if struggling, but still capped
     } else if (rejections >= 3) {
       level = 1;
       sharpnessMin = 1.4;
-      brightMin = 35.0;
-      brightMax = 245.0;
+      brightMin = 45.0;
+      brightMax = 170.0;
     }
 
     if (_lastRelaxationLevel[currentPhase] != level) {
@@ -1131,7 +1134,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           animate: true,
         );
 
-        Future.delayed(const Duration(milliseconds: 150), () {
+        Future.delayed(const Duration(milliseconds: 50), () {
           if (mounted) {
             _setPhase(_Phase.processing);
             _processAndUpload();
@@ -1175,6 +1178,16 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         _bestFramesStats[_Phase.down]!,
       ];
 
+      final user = Supabase.instance.client.auth.currentUser;
+      final userId = user?.id;
+      final Future<Map<String, dynamic>?>? studentDataFuture = userId != null
+          ? Supabase.instance.client
+              .from('students')
+              .select('face_template_version, face_registered')
+              .eq('id', userId)
+              .maybeSingle()
+          : null;
+
       _totalFramesCaptured += bestFramesList.length;
       FaceLogger.reg(_sessionId, 'Embedding Generation Started');
       FaceLogger.reg(_sessionId, '  Batch size = ${bestFramesList.length}');
@@ -1217,6 +1230,61 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           subtitle:
               'Unable to connect to the face server. Please check your connection and try again.',
           animate: false,
+        );
+        return;
+      }
+
+      // ── CASE 3: Liveness check failed — restart capture ──────────────────
+      final bool livenessPassed =
+          batchResults.isNotEmpty ? batchResults.first.livenessPassed : true;
+
+      if (!livenessPassed) {
+        FaceLogger.reg(_sessionId, 'Liveness Check Failed (liveness_passed == false)');
+        _leftFrames.clear();
+        _leftFramesStats.clear();
+        _frontFrames.clear();
+        _frontFramesStats.clear();
+        _rightFrames.clear();
+        _rightFramesStats.clear();
+        _upFrames.clear();
+        _upFramesStats.clear();
+        _downFrames.clear();
+        _downFramesStats.clear();
+        _bestFrames.clear();
+        _bestFramesStats.clear();
+        _leftAttempts = 0;
+        _frontAttempts = 0;
+        _rightAttempts = 0;
+        _upAttempts = 0;
+        _downAttempts = 0;
+        _captureCompleted = false;
+        _pendingPoses = List.from(_poseOrder);
+        _validResults.clear();
+
+        setState(() {
+          _cameraFrozen = false;
+          _isProcessingFrame = false;
+          _captureProgress = 0;
+          _progressLabel = '0 / $_totalTargetFrames';
+          _isSubmitting = false;
+        });
+
+        _captureStopwatch.start();
+        _setPhase(_pendingPoses.first);
+
+        if (!_imageStreamRunning) {
+          try {
+            await _cameraController?.startImageStream(_onCameraFrame);
+            _imageStreamRunning = true;
+          } catch (e) {
+            _setError('Camera could not start. Please try again.');
+            return;
+          }
+        }
+
+        _updateInstruction(
+          'Liveness check failed - present a real face',
+          subtitle: 'Liveness check failed - present a real face',
         );
         return;
       }
@@ -1306,7 +1374,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           _upAttempts = 0;
           _downAttempts = 0;
           _captureCompleted = false;
-          _pendingPoses = List.from(allPosesInOrder);
+          _pendingPoses = List.from(_poseOrder);
 
           setState(() {
             _cameraFrozen = false;
@@ -1317,7 +1385,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           });
 
           _captureStopwatch.start();
-          _setPhase(_Phase.left);
+          _setPhase(_pendingPoses.first);
 
           if (!_imageStreamRunning) {
             try {
@@ -1434,15 +1502,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       final String? photoUrl = await _uploadRegistrationPhoto();
 
       // ── Save to students table in Supabase
-      final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) throw Exception('User not logged in');
-      final userId = user.id;
+      if (user == null || userId == null) throw Exception('User not logged in');
 
-      final studentData = await Supabase.instance.client
-          .from('students')
-          .select('face_template_version, face_registered')
-          .eq('id', userId)
-          .maybeSingle();
+      final studentData = studentDataFuture != null ? await studentDataFuture : null;
 
       final bool isAlreadyRegistered =
           studentData?['face_registered'] as bool? ?? false;
@@ -1451,92 +1513,95 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       final int newTemplateVersion =
           isAlreadyRegistered ? (existingVersion + 1) : 1;
 
-      try {
-        await Supabase.instance.client
-            .from('students')
-            .update({
-              'embedding_a': leftEmbedding,
-              'embedding_b': frontEmbedding,
-              'embedding_c': rightEmbedding,
-              'embedding_up': upEmbedding,
-              'embedding_down': downEmbedding,
-              'face_embedding': frontEmbedding, // Frontal fallback only, no master averaging!
-              'verification_threshold': 0.62, // Fixed global threshold
-              'registration_photo_url': photoUrl,
-              'face_registered': true,
-              'face_template_updated_at':
-                  DateTime.now().toUtc().toIso8601String(),
-              'face_template_version': newTemplateVersion,
-              'embedding_model_name': 'insightface_buffalo_l',
-              'embedding_model_version': 'v1',
-              'embedding_dimension': 512,
-            })
-            .eq('id', userId);
-        _uploadStopwatch.stop();
-        _totalStopwatch.stop();
+      _uploadStopwatch.stop();
+      _totalStopwatch.stop();
 
-        // Compute quality stats for display in summary
-        final double avgQuality = _validResults.isEmpty
-            ? 0.0
-            : _validResults
-                      .map((e) => e.rawQualityScore)
-                      .reduce((a, b) => a + b) /
-                  _validResults.length;
+      // 🚀 Fire-and-forget Supabase update
+      Supabase.instance.client
+          .from('students')
+          .update({
+            'embedding_a': leftEmbedding,
+            'embedding_b': frontEmbedding,
+            'embedding_c': rightEmbedding,
+            'embedding_up': upEmbedding,
+            'embedding_down': downEmbedding,
+            'face_embedding': frontEmbedding,
+            'verification_threshold': 0.68,
+            'registration_photo_url': photoUrl,
+            'face_registered': true,
+            'face_template_updated_at':
+                DateTime.now().toUtc().toIso8601String(),
+            'face_template_version': newTemplateVersion,
+            'embedding_model_name': 'insightface_buffalo_l',
+            'embedding_model_version': 'v1',
+            'embedding_dimension': 512,
+          })
+          .eq('id', userId)
+          .then((_) {
+            FaceLogger.reg(
+              _sessionId,
+              '✅ Supabase database updated successfully in background',
+            );
+          })
+          .catchError((e) {
+            FaceLogger.reg(
+              _sessionId,
+              '❌ Supabase database update failed in background: $e',
+            );
+          });
 
-        final int framesAccepted = _validFrameCount;
-        final int framesRejected = _totalFramesCaptured - framesAccepted;
+      // Compute quality stats for display in summary
+      final double avgQuality = _validResults.isEmpty
+          ? 0.0
+          : _validResults
+                    .map((e) => e.rawQualityScore)
+                    .reduce((a, b) => a + b) /
+                _validResults.length;
 
-        final double avgLocalBrightness = _frontFramesStats.isEmpty
-            ? 0.0
-            : _frontFramesStats
-                      .map((s) => s['brightness'] ?? 0.0)
-                      .reduce((a, b) => a + b) /
-                  _frontFramesStats.length;
-        final double avgLocalSharpness = _frontFramesStats.isEmpty
-            ? 0.0
-            : _frontFramesStats
-                      .map((s) => s['sharpness'] ?? 0.0)
-                      .reduce((a, b) => a + b) /
-                  _frontFramesStats.length;
+      final int framesAccepted = _validFrameCount;
+      final int framesRejected = _totalFramesCaptured - framesAccepted;
 
-        final double avgYaw = _validResults.isEmpty
-            ? 0.0
-            : _validResults.map((r) => r.yaw).reduce((a, b) => a + b) /
-                  _validResults.length;
-        final double avgPitch = _validResults.isEmpty
-            ? 0.0
-            : _validResults.map((r) => r.pitch).reduce((a, b) => a + b) /
-                  _validResults.length;
+      final double avgLocalBrightness = _frontFramesStats.isEmpty
+          ? 0.0
+          : _frontFramesStats
+                    .map((s) => s['brightness'] ?? 0.0)
+                    .reduce((a, b) => a + b) /
+                _frontFramesStats.length;
+      final double avgLocalSharpness = _frontFramesStats.isEmpty
+          ? 0.0
+          : _frontFramesStats
+                    .map((s) => s['sharpness'] ?? 0.0)
+                    .reduce((a, b) => a + b) /
+                _frontFramesStats.length;
 
-        // Save registration averages to SharedPreferences
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setDouble('reg_yaw_$userId', avgYaw);
-        await prefs.setDouble('reg_pitch_$userId', avgPitch);
-        await prefs.setDouble('reg_brightness_$userId', avgLocalBrightness);
+      final double avgYaw = _validResults.isEmpty
+          ? 0.0
+          : _validResults.map((r) => r.yaw).reduce((a, b) => a + b) /
+                _validResults.length;
+      final double avgPitch = _validResults.isEmpty
+          ? 0.0
+          : _validResults.map((r) => r.pitch).reduce((a, b) => a + b) /
+                _validResults.length;
 
-        debugPrint('[FACE_REG][$_sessionId]');
-        debugPrint('=========================');
-        debugPrint('FACE REGISTRATION SUMMARY');
-        debugPrint('=========================');
-        debugPrint('Frames Captured=$_totalFramesCaptured');
-        debugPrint('Frames Accepted=$framesAccepted');
-        debugPrint('Frames Rejected=$framesRejected');
-        debugPrint('Average Brightness=${avgLocalBrightness.round()}');
-        debugPrint('Average Sharpness=${avgLocalSharpness.round()}');
-        debugPrint('Average Yaw=${avgYaw.round()}');
-        debugPrint('Average Pitch=${avgPitch.round()}');
-        debugPrint('Average Quality=${avgQuality.round()}');
-        debugPrint('=========================');
-      } catch (e) {
-        _uploadStopwatch.stop();
-        _totalStopwatch.stop();
-        FaceLogger.reg(_sessionId, 'Save failed: $e');
-        setState(() {
-          _phase = _Phase.error;
-          _isSubmitting = false;
-        });
-        return;
-      }
+      // Save registration averages to SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('reg_yaw_$userId', avgYaw);
+      await prefs.setDouble('reg_pitch_$userId', avgPitch);
+      await prefs.setDouble('reg_brightness_$userId', avgLocalBrightness);
+
+      debugPrint('[FACE_REG][$_sessionId]');
+      debugPrint('=========================');
+      debugPrint('FACE REGISTRATION SUMMARY');
+      debugPrint('=========================');
+      debugPrint('Frames Captured=$_totalFramesCaptured');
+      debugPrint('Frames Accepted=$framesAccepted');
+      debugPrint('Frames Rejected=$framesRejected');
+      debugPrint('Average Brightness=${avgLocalBrightness.round()}');
+      debugPrint('Average Sharpness=${avgLocalSharpness.round()}');
+      debugPrint('Average Yaw=${avgYaw.round()}');
+      debugPrint('Average Pitch=${avgPitch.round()}');
+      debugPrint('Average Quality=${avgQuality.round()}');
+      debugPrint('=========================');
 
       await _landmarkService.clearEmbeddingsCache();
 
@@ -2658,28 +2723,41 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     );
   }
 
+  String _getPoseLabel(_Phase phase) {
+    switch (phase) {
+      case _Phase.left:
+        return 'Left';
+      case _Phase.front:
+        return 'Front';
+      case _Phase.right:
+        return 'Right';
+      case _Phase.up:
+        return 'Up';
+      case _Phase.down:
+        return 'Down';
+      default:
+        return '';
+    }
+  }
+
   Widget _buildStageIndicators() {
-    final bool leftDone = _isPoseStageCompleted(_Phase.left);
-    final bool frontDone = _isPoseStageCompleted(_Phase.front);
-    final bool rightDone = _isPoseStageCompleted(_Phase.right);
-    final bool upDone = _isPoseStageCompleted(_Phase.up);
+    final List<Widget> children = [];
+    for (int i = 0; i < _poseOrder.length; i++) {
+      final pose = _poseOrder[i];
+      final String label = _getPoseLabel(pose);
+      children.add(_buildStageNode(label, pose));
+      if (i < _poseOrder.length - 1) {
+        final bool isDone = _isPoseStageCompleted(pose);
+        children.add(Expanded(child: _buildStageConnector(isDone)));
+      }
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
       child: Row(
         mainAxisSize: MainAxisSize.max,
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildStageNode('Left', _Phase.left),
-          Expanded(child: _buildStageConnector(leftDone)),
-          _buildStageNode('Front', _Phase.front),
-          Expanded(child: _buildStageConnector(frontDone)),
-          _buildStageNode('Right', _Phase.right),
-          Expanded(child: _buildStageConnector(rightDone)),
-          _buildStageNode('Up', _Phase.up),
-          Expanded(child: _buildStageConnector(upDone)),
-          _buildStageNode('Down', _Phase.down),
-        ],
+        children: children,
       ),
     );
   }
@@ -3467,6 +3545,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _cameraStabilizer.resetStabilityOnly();
     _meteringApplied = false;
     _stabilityRejectCount = 0;
+
+    _poseOrder = _validPoseOrders[math.Random().nextInt(_validPoseOrders.length)];
+    _pendingPoses = List<_Phase>.from(_poseOrder);
 
     // Problem 2 & 3: reset both new flags for a fresh registration attempt
     _captureCompleted = false;
