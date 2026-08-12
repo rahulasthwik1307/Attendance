@@ -120,7 +120,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   List<List<double>>? _storedTemplates;
   double _verificationThreshold = 0.68;
 
-  int _attemptCount = 1;
+  final int _attemptCount = 1;
 
   // Instruction / UI state
   String _instructionTitle = 'Setting up camera…';
@@ -1253,32 +1253,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       );
 
       if (_validFrameCount < 3 && framesAboveThresholdCount < 2) {
-        _capturedVerificationFrames.clear();
-        _capturedVerificationFramesStats.clear();
-
-        setState(() {
-          _cameraFrozen = false;
-          _isProcessingFrame = false;
-          _captureProgress = _validFrameCount;
-          _isSubmitting = false;
-        });
-
-        _captureStopwatch.start();
-        _setPhase(_Phase.capturing);
-        _startCountdownTimer();
-
-        try {
-          await _cameraController?.startImageStream(_onCameraFrame);
-        } catch (e) {
-          _setError('Camera could not start. Please try again.');
-          return;
-        }
-
-        _updateInstruction(
-          'Need clearer frames',
-          subtitle:
-              'Please hold still in good lighting. Capturing ${_framesPerPhase - _validFrameCount} more...',
-        );
+        FaceLogger.ver(_sessionId, 'Backend rejected frames due to quality. Failing gracefully to avoid user loop.');
+        _setError('Image quality was too low. Please ensure good lighting and hold the phone steady, then try again.');
         return;
       }
 
@@ -1483,71 +1459,13 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           Navigator.of(context).pushReplacementNamed('/attendance_success');
         }
       } else {
+        FaceLogger.ver(_sessionId, 'Verification failed. Face did not match.');
         setState(() => _borderColor = AppStyles.errorRed);
-        _updateInstruction(
-          'Verification Failed',
-          subtitle: !livenessPassed
-              ? 'Liveness check failed - present a real face'
-              : 'Face did not match',
-        );
+        _updateInstruction('Verification Failed', subtitle: 'Face did not match');
 
-        bool hasSeverePoseWarning = _capturedVerificationFramesStats.any((s) => ((s['yaw'] ?? 0.0).abs() > 20.0 || (s['pitch'] ?? 0.0).abs() > 15.0));
-        FaceLogger.ver(_sessionId, 'Verification failed (attempt $_attemptCount). Pose warning: $hasSeverePoseWarning.');
-
-        if (!isMatch && _attemptCount < 2) {
-          FaceLogger.ver(_sessionId, 'Attempt $_attemptCount failed. Triggering full flow retry.');
-          await Future.delayed(const Duration(milliseconds: 1200));
-          if (!mounted) return;
-
-          _attemptCount++;
-          _liveEmbeddings.clear();
-          _capturedVerificationFrames.clear();
-          _capturedVerificationFramesStats.clear();
-          _validResults.clear();
-          _validFrameCount = 0;
-          _cameraFrozen = false;
-          _lastCapturedFrameBytes = null;
-          _isSubmitting = false;
-          final double rPlan = math.Random().nextDouble();
-          if (rPlan < 0.40) {
-            _livenessPlan = 'blink_only';
-          } else if (rPlan < 0.70) {
-            _livenessPlan = 'blink_left';
-          } else {
-            _livenessPlan = 'blink_right';
-          }
-          _blinkDone = false;
-          _turnDone = false;
-          _turnStartTime = null;
-          _challengeVerified = false;
-          _captureProgress = 0;
-          _challengeStartTime = null;
-          _blinkCountdownController.reset();
-          _steadyStartTime = null;
-          _isFaceReady = false;
-          _lastKnownBlinkCount = 0;
-
-          _secondsRemaining = 60;
-
-          _captureStopwatch.reset();
-          _apiStopwatch.reset();
-          _comparisonStopwatch.reset();
-          _totalStopwatch.reset();
-
-          setState(() => _borderColor = AppStyles.primaryBlue);
-
-          try {
-            await _cameraController!.startImageStream(_onCameraFrame);
-          } catch (_) {}
-
-          _setPhase(_Phase.positioning);
-          _startCountdownTimer();
-        } else {
-          FaceLogger.ver(_sessionId, 'Attempt $_attemptCount failed. Max retries reached. Navigating to attendance_failed.');
-          await Future.delayed(const Duration(milliseconds: 600));
-          if (mounted) {
-            Navigator.of(context).pushReplacementNamed('/attendance_failed');
-          }
+        await Future.delayed(const Duration(milliseconds: 800));
+        if (mounted) {
+          Navigator.of(context).pushReplacementNamed('/attendance_failed');
         }
       }
     } catch (e) {
