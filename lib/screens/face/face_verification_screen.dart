@@ -3447,8 +3447,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                                                                 ),
                                                             child: BackdropFilter(
                                                               filter: ImageFilter.blur(
-                                                                sigmaX: _phase == _Phase.processing ? 14 : 0,
-                                                                sigmaY: _phase == _Phase.processing ? 14 : 0,
+                                                                sigmaX: _phase == _Phase.processing ? 16 : 0,
+                                                                sigmaY: _phase == _Phase.processing ? 16 : 0,
                                                               ),
                                                               child: AnimatedSize(
                                                                 duration:
@@ -3461,200 +3461,210 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                                                                 alignment: Alignment
                                                                     .topCenter,
                                                                 child: AnimatedContainer(
-                                                                  duration:
-                                                                      const Duration(
-                                                                        milliseconds:
-                                                                            300,
-                                                                      ),
-                                                                  curve: Curves
-                                                                      .easeOutCubic,
-                                                                  decoration: BoxDecoration(
-                                                                    color: _phase == _Phase.processing
-                                                                        ? Colors.white.withValues(alpha: 0.88)
-                                                                        : Colors.white.withValues(alpha: 0.95),
-                                                                    borderRadius:
-                                                                        BorderRadius.circular(
-                                                                          18,
-                                                                        ),
-                                                                    border: Border.all(
-                                                                      color: _phase == _Phase.processing
-                                                                          ? const Color(0xFF38BDF8).withValues(alpha: 0.35)
-                                                                          : (_phase == _Phase.error
-                                                                              ? AppStyles.errorRed.withValues(alpha: 0.3)
-                                                                              : const Color(0xFFE2E8F0)),
-                                                                      width: 1.2,
+                                                                duration:
+                                                                    const Duration(
+                                                                      milliseconds:
+                                                                          300,
                                                                     ),
-                                                                    boxShadow: _phase == _Phase.processing
-                                                                        ? [
-                                                                            BoxShadow(
-                                                                              color: const Color(0xFF0F172A).withValues(alpha: 0.08),
-                                                                              blurRadius: 24,
-                                                                              offset: const Offset(0, 8),
-                                                                            ),
-                                                                            BoxShadow(
-                                                                              color: AppStyles.primaryBlue.withValues(alpha: 0.08),
-                                                                              blurRadius: 16,
-                                                                              offset: const Offset(0, 2),
-                                                                              spreadRadius: -1,
-                                                                            ),
-                                                                            BoxShadow(
-                                                                              color: const Color(0xFF38BDF8).withValues(alpha: 0.12),
-                                                                              blurRadius: 10,
-                                                                              offset: const Offset(0, 1),
-                                                                            ),
-                                                                          ]
-                                                                        : [
-                                                                            BoxShadow(
-                                                                              color: Colors.black.withValues(alpha: 0.05),
-                                                                              blurRadius: 14,
-                                                                              offset: const Offset(0, 4),
-                                                                            ),
+                                                                curve: Curves
+                                                                    .easeOutCubic,
+                                                                decoration: BoxDecoration(
+                                                                  gradient: _phase == _Phase.processing
+                                                                      ? LinearGradient(
+                                                                          begin: Alignment.topCenter,
+                                                                          end: Alignment.bottomCenter,
+                                                                          colors: [
+                                                                            Colors.white.withValues(alpha: 0.94),
+                                                                            const Color(0xFFF8FAFC).withValues(alpha: 0.88),
                                                                           ],
-                                                                  ),
-                                                                  padding: EdgeInsets.symmetric(
-                                                                    horizontal: 18,
-                                                                    vertical:
-                                                                        _phase ==
-                                                                            _Phase
-                                                                                .processing
-                                                                        ? 18
-                                                                        : 14,
-                                                                  ),
-                                                                  child: Column(
-                                                                  mainAxisSize:
-                                                                      MainAxisSize
-                                                                          .min,
-                                                                  mainAxisAlignment:
-                                                                      MainAxisAlignment
-                                                                          .center,
-                                                                  children: [
-                                                                    // Challenge progress indicator
-                                                                    if (_livenessPlan !=
-                                                                            'blink_only' &&
-                                                                        (_phase ==
-                                                                                _Phase.positioning ||
-                                                                            _phase ==
-                                                                                _Phase.liveness)) ...[
-                                                                      Padding(
-                                                                        padding: const EdgeInsets.only(
-                                                                          bottom:
-                                                                              8.0,
-                                                                        ),
-                                                                        child: _MiniChallengeProgressIndicator(
-                                                                          livenessPlan:
-                                                                              _livenessPlan,
-                                                                          blinkDone:
-                                                                              _blinkDone,
-                                                                          turnDone:
-                                                                              _turnDone,
-                                                                          phase:
-                                                                              _phase,
-                                                                        ),
+                                                                        )
+                                                                      : null,
+                                                                  color: _phase != _Phase.processing
+                                                                      ? Colors.white.withValues(alpha: 0.95)
+                                                                      : null,
+                                                                  borderRadius:
+                                                                      BorderRadius.circular(
+                                                                        18,
                                                                       ),
-                                                                    ],
-                                                                    AnimatedSwitcher(
-                                                                      duration: const Duration(
-                                                                        milliseconds:
-                                                                            280,
+                                                                  border: Border.all(
+                                                                    color: _phase == _Phase.processing
+                                                                        ? const Color(0xFF38BDF8).withValues(alpha: 0.42)
+                                                                        : (_phase == _Phase.error
+                                                                            ? AppStyles.errorRed.withValues(alpha: 0.3)
+                                                                            : const Color(0xFFE2E8F0)),
+                                                                    width: _phase == _Phase.processing ? 1.3 : 1.2,
+                                                                  ),
+                                                                  boxShadow: _phase == _Phase.processing
+                                                                      ? [
+                                                                          BoxShadow(
+                                                                            color: const Color(0xFF0F172A).withValues(alpha: 0.09),
+                                                                            blurRadius: 28,
+                                                                            offset: const Offset(0, 10),
+                                                                          ),
+                                                                          BoxShadow(
+                                                                            color: const Color(0xFF0284C7).withValues(alpha: 0.11),
+                                                                            blurRadius: 18,
+                                                                            offset: const Offset(0, 3),
+                                                                            spreadRadius: -2,
+                                                                          ),
+                                                                          BoxShadow(
+                                                                            color: const Color(0xFF38BDF8).withValues(alpha: 0.16),
+                                                                            blurRadius: 10,
+                                                                            offset: const Offset(0, 1),
+                                                                          ),
+                                                                        ]
+                                                                      : [
+                                                                          BoxShadow(
+                                                                            color: Colors.black.withValues(alpha: 0.05),
+                                                                            blurRadius: 14,
+                                                                            offset: const Offset(0, 4),
+                                                                          ),
+                                                                        ],
+                                                                ),
+                                                                padding: EdgeInsets.symmetric(
+                                                                  horizontal: 20,
+                                                                  vertical:
+                                                                      _phase ==
+                                                                          _Phase
+                                                                              .processing
+                                                                      ? 16
+                                                                      : 14,
+                                                                ),
+                                                                child: Column(
+                                                                mainAxisSize:
+                                                                    MainAxisSize
+                                                                        .min,
+                                                                mainAxisAlignment:
+                                                                    MainAxisAlignment
+                                                                        .center,
+                                                                children: [
+                                                                  // Challenge progress indicator
+                                                                  if (_livenessPlan !=
+                                                                          'blink_only' &&
+                                                                      (_phase ==
+                                                                              _Phase.positioning ||
+                                                                          _phase ==
+                                                                              _Phase.liveness)) ...[
+                                                                    Padding(
+                                                                      padding: const EdgeInsets.only(
+                                                                        bottom:
+                                                                            8.0,
                                                                       ),
-                                                                      switchInCurve:
-                                                                          Curves
-                                                                              .easeOutCubic,
-                                                                      switchOutCurve:
-                                                                          Curves
-                                                                              .easeInCubic,
-                                                                      transitionBuilder:
-                                                                          (
-                                                                            child,
-                                                                            animation,
-                                                                          ) {
-                                                                            return FadeTransition(
-                                                                              opacity:
-                                                                                  animation,
-                                                                              child: SlideTransition(
-                                                                                position:
-                                                                                    Tween<
-                                                                                          Offset
-                                                                                        >(
-                                                                                          begin: const Offset(
-                                                                                            0,
-                                                                                            0.12,
-                                                                                          ),
-                                                                                          end: Offset.zero,
-                                                                                        )
-                                                                                        .animate(
-                                                                                          animation,
+                                                                      child: _MiniChallengeProgressIndicator(
+                                                                        livenessPlan:
+                                                                            _livenessPlan,
+                                                                        blinkDone:
+                                                                            _blinkDone,
+                                                                        turnDone:
+                                                                            _turnDone,
+                                                                        phase:
+                                                                            _phase,
+                                                                      ),
+                                                                    ),
+                                                                  ],
+                                                                  AnimatedSwitcher(
+                                                                    duration: const Duration(
+                                                                      milliseconds:
+                                                                          280,
+                                                                    ),
+                                                                    switchInCurve:
+                                                                        Curves
+                                                                            .easeOutCubic,
+                                                                    switchOutCurve:
+                                                                        Curves
+                                                                            .easeInCubic,
+                                                                    transitionBuilder:
+                                                                        (
+                                                                          child,
+                                                                          animation,
+                                                                        ) {
+                                                                          return FadeTransition(
+                                                                            opacity:
+                                                                                animation,
+                                                                            child: SlideTransition(
+                                                                              position:
+                                                                                  Tween<
+                                                                                        Offset
+                                                                                      >(
+                                                                                        begin: const Offset(
+                                                                                          0,
+                                                                                          0.12,
                                                                                         ),
-                                                                                child: child,
-                                                                              ),
-                                                                            );
-                                                                          },
-                                                                      child: Column(
-                                                                        key:
-                                                                            ValueKey<
-                                                                              String
-                                                                            >(
-                                                                              '${_instructionTitle}_$_instructionSubtitle',
+                                                                                        end: Offset.zero,
+                                                                                      )
+                                                                                      .animate(
+                                                                                        animation,
+                                                                                      ),
+                                                                              child: child,
                                                                             ),
-                                                                        mainAxisSize:
-                                                                            MainAxisSize
-                                                                                .min,
-                                                                        children: [
+                                                                          );
+                                                                        },
+                                                                    child: Column(
+                                                                      key:
+                                                                          ValueKey<
+                                                                            String
+                                                                          >(
+                                                                            '${_instructionTitle}_$_instructionSubtitle',
+                                                                          ),
+                                                                      mainAxisSize:
+                                                                          MainAxisSize
+                                                                              .min,
+                                                                      children: [
+                                                                        Text(
+                                                                          _instructionTitle,
+                                                                          textAlign:
+                                                                              TextAlign.center,
+                                                                          style: TextStyle(
+                                                                            fontSize:
+                                                                                18.0,
+                                                                            fontWeight:
+                                                                                FontWeight.w700,
+                                                                            letterSpacing:
+                                                                                -0.35,
+                                                                            height:
+                                                                                1.25,
+                                                                            color:
+                                                                                _phase ==
+                                                                                    _Phase.error
+                                                                                ? AppStyles.errorRed
+                                                                                : AppStyles.primaryBlue,
+                                                                          ),
+                                                                        ),
+                                                                        if (_instructionSubtitle
+                                                                            .isNotEmpty) ...[
+                                                                          const SizedBox(
+                                                                            height:
+                                                                                5.0,
+                                                                          ),
                                                                           Text(
-                                                                            _instructionTitle,
+                                                                            _instructionSubtitle,
                                                                             textAlign:
                                                                                 TextAlign.center,
-                                                                            style: TextStyle(
+                                                                            style: const TextStyle(
                                                                               fontSize:
-                                                                                  18.0,
-                                                                              fontWeight:
-                                                                                  FontWeight.w700,
-                                                                              letterSpacing:
-                                                                                  -0.35,
-                                                                              height:
-                                                                                  1.25,
+                                                                                  13.5,
                                                                               color:
-                                                                                  _phase ==
-                                                                                      _Phase.error
-                                                                                  ? AppStyles.errorRed
-                                                                                  : AppStyles.primaryBlue,
+                                                                                  Color(0xFF334155),
+                                                                              fontWeight:
+                                                                                  FontWeight.w500,
+                                                                              height:
+                                                                                  1.40,
                                                                             ),
                                                                           ),
-                                                                          if (_instructionSubtitle
-                                                                              .isNotEmpty) ...[
-                                                                            const SizedBox(
-                                                                              height:
-                                                                                  6.0,
-                                                                            ),
-                                                                            Text(
-                                                                              _instructionSubtitle,
-                                                                              textAlign:
-                                                                                  TextAlign.center,
-                                                                              style: const TextStyle(
-                                                                                fontSize:
-                                                                                    13.5,
-                                                                                color:
-                                                                                    Color(0xFF334155),
-                                                                                fontWeight:
-                                                                                    FontWeight.w500,
-                                                                                height:
-                                                                                    1.40,
-                                                                              ),
-                                                                            ),
-                                                                          ],
                                                                         ],
-                                                                      ),
+                                                                      ],
                                                                     ),
+                                                                  ),
 
-                                                                    if (_phase ==
-                                                                        _Phase
-                                                                            .processing) ...[
-                                                                      const SizedBox(
-                                                                        height:
-                                                                            16,
-                                                                      ),
-                                                                      const _BiometricVerificationWidget(),
-                                                                    ],
+                                                                  if (_phase ==
+                                                                      _Phase
+                                                                          .processing) ...[
+                                                                    const SizedBox(
+                                                                      height:
+                                                                          10,
+                                                                    ),
+                                                                    const _BiometricVerificationWidget(),
+                                                                  ],
                                                                     if (_phase ==
                                                                         _Phase
                                                                             .error) ...[
@@ -4960,57 +4970,93 @@ class _BiometricVerificationWidgetState
 
             return Stack(
               alignment: Alignment.center,
+              clipBehavior: Clip.none,
               children: [
-                // Soft ambient breathing radial glow behind the percentage text
-                Transform.scale(
-                  scale: haloScale,
-                  child: Container(
-                    width: 140,
-                    height: 72,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(36),
-                      gradient: RadialGradient(
-                        colors: [
-                          AppStyles.primaryBlue.withValues(
-                            alpha: 0.12 + 0.06 * pulse,
+                // Enhanced ambient breathing radial glow behind the percentage text (Positioned.fill so it does not inflate Stack height)
+                Positioned.fill(
+                  child: Center(
+                    child: Transform.scale(
+                      scale: haloScale,
+                      child: Container(
+                        width: 154,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(28),
+                          gradient: RadialGradient(
+                            colors: [
+                              const Color(0xFF0284C7).withValues(
+                                alpha: 0.20 + 0.08 * pulse,
+                              ),
+                              const Color(0xFF38BDF8).withValues(
+                                alpha: 0.10 + 0.05 * pulse,
+                              ),
+                              const Color(0xFF818CF8).withValues(
+                                alpha: 0.04 + 0.02 * pulse,
+                              ),
+                              Colors.transparent,
+                            ],
+                            stops: const [0.0, 0.42, 0.72, 1.0],
                           ),
-                          const Color(0xFF38BDF8).withValues(
-                            alpha: 0.06 + 0.04 * pulse,
-                          ),
-                          Colors.transparent,
-                        ],
-                        stops: const [0.0, 0.55, 1.0],
+                        ),
                       ),
                     ),
                   ),
                 ),
 
-                // Hero Large Confidence Percentage Display
+                // Hero Large Confidence Percentage Display with Rich Gradient Styling
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.baseline,
                   textBaseline: TextBaseline.alphabetic,
                   children: [
-                    Text(
-                      confidence.toStringAsFixed(1),
-                      style: const TextStyle(
-                        fontSize: 40,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -1.0,
-                        color: AppStyles.primaryBlue,
-                        height: 1.0,
-                        fontFeatures: [FontFeature.tabularFigures()],
+                    ShaderMask(
+                      shaderCallback: (Rect bounds) {
+                        return const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            Color(0xFF0284C7), // Vibrant Sky 600
+                            Color(0xFF1D4ED8), // Cobalt Blue 700
+                            Color(0xFF0F172A), // Deep Slate 900
+                          ],
+                          stops: [0.0, 0.58, 1.0],
+                        ).createShader(bounds);
+                      },
+                      blendMode: BlendMode.srcIn,
+                      child: Text(
+                        confidence.toStringAsFixed(1),
+                        style: const TextStyle(
+                          fontSize: 42,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -1.2,
+                          color: Colors.white,
+                          height: 1.0,
+                          fontFeatures: [FontFeature.tabularFigures()],
+                        ),
                       ),
                     ),
-                    const SizedBox(width: 2),
-                    const Text(
-                      '%',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.3,
-                        color: Color(0xFF0284C7),
-                        height: 1.0,
+                    const SizedBox(width: 2.5),
+                    ShaderMask(
+                      shaderCallback: (Rect bounds) {
+                        return const LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Color(0xFF0284C7),
+                            Color(0xFF2563EB),
+                          ],
+                        ).createShader(bounds);
+                      },
+                      blendMode: BlendMode.srcIn,
+                      child: const Text(
+                        '%',
+                        style: TextStyle(
+                          fontSize: 21,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.4,
+                          color: Colors.white,
+                          height: 1.0,
+                        ),
                       ),
                     ),
                   ],
@@ -5019,7 +5065,7 @@ class _BiometricVerificationWidgetState
             );
           },
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 280),
           switchInCurve: Curves.easeOutCubic,
@@ -5039,11 +5085,13 @@ class _BiometricVerificationWidgetState
           child: Text(
             _verificationMessages[_messageIndex],
             key: ValueKey<int>(_messageIndex),
+            textAlign: TextAlign.center,
             style: const TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
-              color: AppStyles.primaryBlue,
+              color: Color(0xFF0284C7),
               letterSpacing: -0.1,
+              height: 1.25,
             ),
           ),
         ),
