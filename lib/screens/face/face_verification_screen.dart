@@ -2546,10 +2546,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         backgroundColor: AppStyles.backgroundLight,
         body: Stack(
           children: [
-            // ── Background Biometric Atmosphere ──
-            const Positioned.fill(
-              child: _BiometricBackgroundAtmosphere(),
-            ),
             SafeArea(
               child: AnimatedBuilder(
                 animation: Listenable.merge([
@@ -3449,17 +3445,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                                                                 BorderRadius.circular(
                                                                   18,
                                                                 ),
-                                                            child: AnimatedSize(
-                                                              duration:
-                                                                  const Duration(
-                                                                    milliseconds:
-                                                                        300,
-                                                                  ),
-                                                              curve: Curves
-                                                                  .easeOutCubic,
-                                                              alignment: Alignment
-                                                                  .topCenter,
-                                                              child: AnimatedContainer(
+                                                            child: BackdropFilter(
+                                                              filter: ImageFilter.blur(
+                                                                sigmaX: _phase == _Phase.processing ? 14 : 0,
+                                                                sigmaY: _phase == _Phase.processing ? 14 : 0,
+                                                              ),
+                                                              child: AnimatedSize(
                                                                 duration:
                                                                     const Duration(
                                                                       milliseconds:
@@ -3467,60 +3458,69 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                                                                     ),
                                                                 curve: Curves
                                                                     .easeOutCubic,
-                                                                decoration: BoxDecoration(
-                                                                  color: Colors
-                                                                      .white
-                                                                      .withValues(
-                                                                        alpha:
-                                                                            0.95,
+                                                                alignment: Alignment
+                                                                    .topCenter,
+                                                                child: AnimatedContainer(
+                                                                  duration:
+                                                                      const Duration(
+                                                                        milliseconds:
+                                                                            300,
                                                                       ),
-                                                                  borderRadius:
-                                                                      BorderRadius.circular(
-                                                                        18,
-                                                                      ),
-                                                                  border: Border.all(
-                                                                    color:
+                                                                  curve: Curves
+                                                                      .easeOutCubic,
+                                                                  decoration: BoxDecoration(
+                                                                    color: _phase == _Phase.processing
+                                                                        ? Colors.white.withValues(alpha: 0.88)
+                                                                        : Colors.white.withValues(alpha: 0.95),
+                                                                    borderRadius:
+                                                                        BorderRadius.circular(
+                                                                          18,
+                                                                        ),
+                                                                    border: Border.all(
+                                                                      color: _phase == _Phase.processing
+                                                                          ? const Color(0xFF38BDF8).withValues(alpha: 0.35)
+                                                                          : (_phase == _Phase.error
+                                                                              ? AppStyles.errorRed.withValues(alpha: 0.3)
+                                                                              : const Color(0xFFE2E8F0)),
+                                                                      width: 1.2,
+                                                                    ),
+                                                                    boxShadow: _phase == _Phase.processing
+                                                                        ? [
+                                                                            BoxShadow(
+                                                                              color: const Color(0xFF0F172A).withValues(alpha: 0.08),
+                                                                              blurRadius: 24,
+                                                                              offset: const Offset(0, 8),
+                                                                            ),
+                                                                            BoxShadow(
+                                                                              color: AppStyles.primaryBlue.withValues(alpha: 0.08),
+                                                                              blurRadius: 16,
+                                                                              offset: const Offset(0, 2),
+                                                                              spreadRadius: -1,
+                                                                            ),
+                                                                            BoxShadow(
+                                                                              color: const Color(0xFF38BDF8).withValues(alpha: 0.12),
+                                                                              blurRadius: 10,
+                                                                              offset: const Offset(0, 1),
+                                                                            ),
+                                                                          ]
+                                                                        : [
+                                                                            BoxShadow(
+                                                                              color: Colors.black.withValues(alpha: 0.05),
+                                                                              blurRadius: 14,
+                                                                              offset: const Offset(0, 4),
+                                                                            ),
+                                                                          ],
+                                                                  ),
+                                                                  padding: EdgeInsets.symmetric(
+                                                                    horizontal: 18,
+                                                                    vertical:
                                                                         _phase ==
                                                                             _Phase
-                                                                                .error
-                                                                        ? AppStyles
-                                                                              .errorRed
-                                                                              .withValues(
-                                                                                alpha: 0.3,
-                                                                              )
-                                                                        : const Color(
-                                                                            0xFFE2E8F0,
-                                                                          ),
-                                                                    width: 1.2,
+                                                                                .processing
+                                                                        ? 18
+                                                                        : 14,
                                                                   ),
-                                                                  boxShadow: [
-                                                                    BoxShadow(
-                                                                      color: Colors
-                                                                          .black
-                                                                          .withValues(
-                                                                            alpha:
-                                                                                0.05,
-                                                                          ),
-                                                                      blurRadius:
-                                                                          14,
-                                                                      offset:
-                                                                          const Offset(
-                                                                            0,
-                                                                            4,
-                                                                          ),
-                                                                    ),
-                                                                  ],
-                                                                ),
-                                                                padding: EdgeInsets.symmetric(
-                                                                  horizontal: 18,
-                                                                  vertical:
-                                                                      _phase ==
-                                                                          _Phase
-                                                                              .processing
-                                                                      ? 18
-                                                                      : 14,
-                                                                ),
-                                                                child: Column(
+                                                                  child: Column(
                                                                   mainAxisSize:
                                                                       MainAxisSize
                                                                           .min,
@@ -3684,7 +3684,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                                                         ),
                                                       ),
                                                     ),
-                                                  ],
+                                                  ),
+                                                ],
                                                 ),
                                               ),
                                             ),
@@ -4896,6 +4897,7 @@ class _BiometricVerificationWidgetState
   late AnimationController _rotationController;
   int _messageIndex = 0;
   Timer? _messageTimer;
+  late DateTime _startTime;
 
   static const List<String> _verificationMessages = [
     'Comparing facial landmarks…',
@@ -4907,6 +4909,7 @@ class _BiometricVerificationWidgetState
   @override
   void initState() {
     super.initState();
+    _startTime = DateTime.now();
     _rotationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2400),
@@ -4937,76 +4940,86 @@ class _BiometricVerificationWidgetState
           animation: _rotationController,
           builder: (context, child) {
             final double t = _rotationController.value;
-            final double haloScale = 0.95 + 0.05 * math.sin(t * 2 * math.pi);
+            final double pulse = 0.5 + 0.5 * math.sin(t * 2 * math.pi);
+            final double haloScale = 0.95 + 0.08 * pulse;
 
-            return SizedBox(
-              width: 84,
-              height: 84,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  // Layer 1: Outer soft ambient breathing glow halo
-                  Transform.scale(
-                    scale: haloScale,
-                    child: Container(
-                      width: 84,
-                      height: 84,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: AppStyles.primaryBlue.withValues(alpha: 0.04),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFF38BDF8).withValues(
-                              alpha: 0.16 + 0.06 * math.sin(t * 2 * math.pi),
-                            ),
-                            blurRadius: 20,
-                            spreadRadius: 2,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+            final elapsedMs =
+                DateTime.now().difference(_startTime).inMilliseconds;
+            final double stageProgress =
+                ((elapsedMs % 1600) / 1600.0).clamp(0.0, 1.0);
 
-                  // Layer 2: Concentric Rotating Biometric Scan Ring
-                  CustomPaint(
-                    size: const Size(84, 84),
-                    painter: _BiometricScanRingPainter(
-                      rotationProgress: t,
-                      color: AppStyles.primaryBlue,
-                    ),
-                  ),
+            // Smooth progressive confidence count-up (48.0% -> 99.8%)
+            const baseByStage = [48.0, 74.2, 89.6, 97.4];
+            const targetByStage = [74.2, 89.6, 97.4, 99.8];
+            final currentStage = _messageIndex.clamp(0, 3);
+            final base = baseByStage[currentStage];
+            final target = targetByStage[currentStage];
+            final curvedStage = Curves.easeOutCubic.transform(stageProgress);
+            final double confidence =
+                (base + (target - base) * curvedStage).clamp(48.0, 99.8);
 
-                  // Layer 3: Center Biometric Face Structure & Active Landmark Mesh
-                  Container(
-                    width: 60,
-                    height: 60,
+            return Stack(
+              alignment: Alignment.center,
+              children: [
+                // Soft ambient breathing radial glow behind the percentage text
+                Transform.scale(
+                  scale: haloScale,
+                  child: Container(
+                    width: 140,
+                    height: 72,
                     decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white,
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppStyles.primaryBlue.withValues(alpha: 0.08),
-                          blurRadius: 10,
-                          offset: const Offset(0, 3),
-                        ),
-                      ],
-                    ),
-                    child: Center(
-                      child: CustomPaint(
-                        size: const Size(54, 54),
-                        painter: _BiometricFaceScanPainter(
-                          scanProgress: t,
-                          color: AppStyles.primaryBlue,
-                        ),
+                      borderRadius: BorderRadius.circular(36),
+                      gradient: RadialGradient(
+                        colors: [
+                          AppStyles.primaryBlue.withValues(
+                            alpha: 0.12 + 0.06 * pulse,
+                          ),
+                          const Color(0xFF38BDF8).withValues(
+                            alpha: 0.06 + 0.04 * pulse,
+                          ),
+                          Colors.transparent,
+                        ],
+                        stops: const [0.0, 0.55, 1.0],
                       ),
                     ),
                   ),
-                ],
-              ),
+                ),
+
+                // Hero Large Confidence Percentage Display
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Text(
+                      confidence.toStringAsFixed(1),
+                      style: const TextStyle(
+                        fontSize: 40,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -1.0,
+                        color: AppStyles.primaryBlue,
+                        height: 1.0,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    const Text(
+                      '%',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.3,
+                        color: Color(0xFF0284C7),
+                        height: 1.0,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             );
           },
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 10),
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 280),
           switchInCurve: Curves.easeOutCubic,
@@ -5436,6 +5449,23 @@ class _BorderPainter extends CustomPainter {
         ..strokeWidth = 4.0
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
       canvas.drawCircle(center, radius, shadowPaint);
+
+      // Rich emerald aura when verified successfully
+      if (phase == _Phase.done) {
+        final successAuraPaint = Paint()
+          ..color = baseColor.withValues(alpha: 0.42)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 10.0
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8.0);
+        canvas.drawCircle(center, radius, successAuraPaint);
+
+        final successCorePaint = Paint()
+          ..color = const Color(0xFF34D399).withValues(alpha: 0.55)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 5.0
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.0);
+        canvas.drawCircle(center, radius, successCorePaint);
+      }
     }
 
     // 2. Base crisp circle border
@@ -5500,32 +5530,176 @@ class _ParticleBurstPainter extends CustomPainter {
 
   _ParticleBurstPainter(this.progress);
 
+  // Pre-configured deterministic particle dataset for optimal runtime performance
+  static final List<_BurstParticle> _particles = _initParticles();
+
+  static List<_BurstParticle> _initParticles() {
+    final random = math.Random(777);
+    final list = <_BurstParticle>[];
+    const total = 46;
+    for (int i = 0; i < total; i++) {
+      final baseAngle = (i / total) * 2 * math.pi;
+      final angleJitter = (random.nextDouble() - 0.5) * 0.25;
+      final angle = baseAngle + angleJitter;
+
+      // 0: streak, 1: glowing dot, 2: sparkle
+      final int type = (i % 3 == 0) ? 0 : ((i % 3 == 1) ? 1 : 2);
+
+      final double speed;
+      final double size;
+      final Color color;
+
+      if (type == 0) {
+        // High-velocity streak
+        speed = 130.0 + random.nextDouble() * 95.0;
+        size = 2.2 + random.nextDouble() * 1.4;
+        color = (random.nextDouble() > 0.4)
+            ? const Color(0xFF10B981)
+            : (random.nextDouble() > 0.5
+                ? const Color(0xFF34D399)
+                : const Color(0xFF38BDF8));
+      } else if (type == 1) {
+        // Medium-velocity glowing dot
+        speed = 65.0 + random.nextDouble() * 70.0;
+        size = 2.0 + random.nextDouble() * 1.8;
+        color = (random.nextDouble() > 0.3)
+            ? const Color(0xFF34D399)
+            : const Color(0xFFFFFFFF);
+      } else {
+        // Micro-sparkle
+        speed = 30.0 + random.nextDouble() * 40.0;
+        size = 1.2 + random.nextDouble() * 1.2;
+        color = (random.nextDouble() > 0.4)
+            ? const Color(0xFFFDE047)
+            : const Color(0xFF38BDF8);
+      }
+
+      list.add(_BurstParticle(
+        angle: angle,
+        speed: speed,
+        size: size,
+        type: type,
+        color: color,
+        seed: random.nextDouble(),
+      ));
+    }
+    return list;
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     if (progress <= 0.0 || progress >= 1.0) return;
 
     final center = Offset(size.width / 2, size.height / 2);
-    final paint = Paint()
-      ..color = Colors.white.withValues(alpha: 1.0 - progress);
+    final baseRadius = size.width / 2;
 
-    final random = math.Random(12345);
-    for (int i = 0; i < 30; i++) {
-      final angle = random.nextDouble() * 2 * math.pi;
-      final speed = 50.0 + random.nextDouble() * 100.0;
-      final distance = (size.width / 2) + speed * progress;
+    // ── Layer 1: Expanding Ring Glow Pulse (Success Shockwave) ──
+    // Expands smoothly from face circle border over first 60% of animation
+    const ringCutoff = 0.60;
+    if (progress < ringCutoff) {
+      final ringNorm = progress / ringCutoff;
+      final ringCurved = Curves.easeOutCubic.transform(ringNorm);
+      final ringRadius = baseRadius + 34.0 * ringCurved;
+      final ringFade = (1.0 - ringCurved);
 
-      final x = center.dx + math.cos(angle) * distance;
-      final y = center.dy + math.sin(angle) * distance;
+      // Outer soft aura wave
+      final ringAuraPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 6.0 * ringFade
+        ..color = const Color(0xFF38BDF8).withValues(alpha: 0.28 * ringFade)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6.0);
+      canvas.drawCircle(center, ringRadius, ringAuraPaint);
 
-      final rectSize = 3.0 + random.nextDouble() * 5.0;
-      canvas.drawRect(
-        Rect.fromCenter(
-          center: Offset(x, y),
-          width: rectSize,
-          height: rectSize,
-        ),
-        paint,
-      );
+      // Core energetic emerald shockwave
+      final ringCorePaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.0 * ringFade
+        ..color = const Color(0xFF10B981).withValues(alpha: 0.75 * ringFade)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
+      canvas.drawCircle(center, ringRadius, ringCorePaint);
+
+      // Crisp inner bright line
+      final ringLinePaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4 * ringFade
+        ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.85 * ringFade);
+      canvas.drawCircle(center, ringRadius, ringLinePaint);
+    }
+
+    // ── Layer 2: Designed Radial Particle Burst ──
+    final curvedProgress = Curves.easeOutCubic.transform(progress);
+
+    // Dynamic alpha curve: rapid peak at 120-150ms then smooth graceful fadeout
+    final double masterAlpha;
+    if (progress < 0.12) {
+      masterAlpha = (progress / 0.12).clamp(0.0, 1.0);
+    } else {
+      masterAlpha = ((1.0 - progress) / 0.88).clamp(0.0, 1.0);
+    }
+
+    for (final p in _particles) {
+      final dir = Offset(math.cos(p.angle), math.sin(p.angle));
+      final currentDist = baseRadius + p.speed * curvedProgress;
+      final pPos = center + dir * currentDist;
+
+      if (p.type == 0) {
+        // High-velocity streak trail
+        final streakLen = (9.0 + (p.speed * 0.08)) * (1.0 - progress * 0.35);
+        final pTail = pPos - dir * streakLen;
+
+        final streakPaint = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = p.size
+          ..shader = LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.white.withValues(alpha: 0.95 * masterAlpha),
+              p.color.withValues(alpha: 0.70 * masterAlpha),
+              p.color.withValues(alpha: 0.0),
+            ],
+            stops: const [0.0, 0.45, 1.0],
+          ).createShader(Rect.fromPoints(pTail, pPos));
+
+        canvas.drawLine(pTail, pPos, streakPaint);
+
+        // Bright leading core spark
+        final headPaint = Paint()
+          ..style = PaintingStyle.fill
+          ..color = Colors.white.withValues(alpha: 0.90 * masterAlpha);
+        canvas.drawCircle(pPos, p.size * 0.7, headPaint);
+      } else if (p.type == 1) {
+        // Radial glowing dot particle
+        final haloPaint = Paint()
+          ..style = PaintingStyle.fill
+          ..color = p.color.withValues(alpha: 0.35 * masterAlpha)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.0);
+        canvas.drawCircle(pPos, p.size * 2.2, haloPaint);
+
+        // Inner solid core
+        final corePaint = Paint()
+          ..style = PaintingStyle.fill
+          ..color = Color.lerp(p.color, Colors.white, 0.45)!
+              .withValues(alpha: 0.95 * masterAlpha);
+        canvas.drawCircle(pPos, p.size, corePaint);
+      } else {
+        // Micro-sparkle with twinkle
+        final twinkle =
+            0.6 + 0.4 * math.sin(progress * 12 * math.pi + p.seed * 6.28);
+        final sparkAlpha = (masterAlpha * twinkle).clamp(0.0, 1.0);
+
+        final sparkHalo = Paint()
+          ..style = PaintingStyle.fill
+          ..color = p.color.withValues(alpha: 0.45 * sparkAlpha)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.0);
+        canvas.drawCircle(pPos, p.size * 1.8, sparkHalo);
+
+        final sparkCore = Paint()
+          ..style = PaintingStyle.fill
+          ..color = Colors.white.withValues(alpha: 0.95 * sparkAlpha);
+        canvas.drawCircle(pPos, p.size * 0.8, sparkCore);
+      }
     }
   }
 
@@ -5533,6 +5707,24 @@ class _ParticleBurstPainter extends CustomPainter {
   bool shouldRepaint(covariant _ParticleBurstPainter oldDelegate) {
     return oldDelegate.progress != progress;
   }
+}
+
+class _BurstParticle {
+  final double angle;
+  final double speed;
+  final double size;
+  final int type;
+  final Color color;
+  final double seed;
+
+  const _BurstParticle({
+    required this.angle,
+    required this.speed,
+    required this.size,
+    required this.type,
+    required this.color,
+    required this.seed,
+  });
 }
 
 // ─── _MiniRingPainter — Premium Biometric Countdown Ring ─────────────────
@@ -6388,553 +6580,5 @@ class _GeofenceBadgePainter extends CustomPainter {
   bool shouldRepaint(covariant _GeofenceBadgePainter oldDelegate) =>
       oldDelegate.animationValue != animationValue ||
       oldDelegate.isVerified != isVerified ||
-      oldDelegate.primaryColor != primaryColor;
-}
-
-// ─── _BiometricScanRingPainter ────────────────────────────────────────────────
-class _BiometricScanRingPainter extends CustomPainter {
-  final double rotationProgress;
-  final Color color;
-
-  _BiometricScanRingPainter({
-    required this.rotationProgress,
-    required this.color,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.width / 2 - 4.0;
-    final rect = Rect.fromCircle(center: center, radius: radius);
-
-    // Subtle outer track ring
-    final trackPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0
-      ..color = color.withValues(alpha: 0.12);
-    canvas.drawCircle(center, radius, trackPaint);
-
-    // Cardinal reticle alignment ticks (0°, 90°, 180°, 270°)
-    final tickPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.3
-      ..strokeCap = StrokeCap.round
-      ..color = color.withValues(alpha: 0.35);
-
-    const tickLen = 4.5;
-    // Top
-    canvas.drawLine(
-      Offset(center.dx, center.dy - radius - 1.0),
-      Offset(center.dx, center.dy - radius + tickLen),
-      tickPaint,
-    );
-    // Bottom
-    canvas.drawLine(
-      Offset(center.dx, center.dy + radius - tickLen),
-      Offset(center.dx, center.dy + radius + 1.0),
-      tickPaint,
-    );
-    // Left
-    canvas.drawLine(
-      Offset(center.dx - radius - 1.0, center.dy),
-      Offset(center.dx - radius + tickLen, center.dy),
-      tickPaint,
-    );
-    // Right
-    canvas.drawLine(
-      Offset(center.dx + radius - tickLen, center.dy),
-      Offset(center.dx + radius + 1.0, center.dy),
-      tickPaint,
-    );
-
-    // Outer rotating gradient sweep arc
-    canvas.save();
-    canvas.translate(center.dx, center.dy);
-    canvas.rotate(rotationProgress * 2 * math.pi);
-    canvas.translate(-center.dx, -center.dy);
-
-    final sweepPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0
-      ..strokeCap = StrokeCap.round
-      ..shader = SweepGradient(
-        colors: [
-          const Color(0xFF38BDF8),
-          color,
-          color.withValues(alpha: 0.0),
-        ],
-        stops: const [0.0, 0.45, 0.75],
-      ).createShader(rect);
-
-    canvas.drawArc(rect, 0, math.pi * 1.1, false, sweepPaint);
-    canvas.restore();
-
-    // Subtle counter-rotating pulse arc segment
-    final innerRadius = radius - 4.5;
-    final innerRect = Rect.fromCircle(center: center, radius: innerRadius);
-
-    canvas.save();
-    canvas.translate(center.dx, center.dy);
-    canvas.rotate(-rotationProgress * 2 * math.pi * 0.8);
-    canvas.translate(-center.dx, -center.dy);
-
-    final innerArcPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.1
-      ..strokeCap = StrokeCap.round
-      ..color = color.withValues(alpha: 0.25);
-
-    canvas.drawArc(innerRect, 0, math.pi * 0.35, false, innerArcPaint);
-    canvas.drawArc(innerRect, math.pi, math.pi * 0.35, false, innerArcPaint);
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant _BiometricScanRingPainter oldDelegate) =>
-      oldDelegate.rotationProgress != rotationProgress ||
-      oldDelegate.color != color;
-}
-
-// ─── _BiometricFaceScanPainter ────────────────────────────────────────────────
-class _BiometricFaceScanPainter extends CustomPainter {
-  final double scanProgress;
-  final Color color;
-
-  _BiometricFaceScanPainter({
-    required this.scanProgress,
-    this.color = AppStyles.primaryBlue,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-    final cy = size.height / 2 - 0.5;
-
-    // Corner targeting brackets
-    final bracketPaint = Paint()
-      ..color = color.withValues(alpha: 0.28)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0
-      ..strokeCap = StrokeCap.round;
-
-    const bLen = 4.0;
-    const pad = 3.0;
-
-    // Top-Left
-    canvas.drawLine(
-      const Offset(pad, pad + bLen),
-      const Offset(pad, pad),
-      bracketPaint,
-    );
-    canvas.drawLine(
-      const Offset(pad, pad),
-      const Offset(pad + bLen, pad),
-      bracketPaint,
-    );
-
-    // Top-Right
-    canvas.drawLine(
-      Offset(size.width - pad - bLen, pad),
-      Offset(size.width - pad, pad),
-      bracketPaint,
-    );
-    canvas.drawLine(
-      Offset(size.width - pad, pad),
-      Offset(size.width - pad, pad + bLen),
-      bracketPaint,
-    );
-
-    // Bottom-Left
-    canvas.drawLine(
-      Offset(pad, size.height - pad - bLen),
-      Offset(pad, size.height - pad),
-      bracketPaint,
-    );
-    canvas.drawLine(
-      Offset(pad, size.height - pad),
-      Offset(pad + bLen, size.height - pad),
-      bracketPaint,
-    );
-
-    // Bottom-Right
-    canvas.drawLine(
-      Offset(size.width - pad - bLen, size.height - pad),
-      Offset(size.width - pad, size.height - pad),
-      bracketPaint,
-    );
-    canvas.drawLine(
-      Offset(size.width - pad, size.height - pad),
-      Offset(size.width - pad, size.height - pad - bLen),
-      bracketPaint,
-    );
-
-    // Biometric Face Silhouette Contour Path
-    final facePath = Path();
-    facePath.moveTo(cx, cy - 15.5);
-    // Right temple & cheekbone
-    facePath.cubicTo(
-      cx + 9.5,
-      cy - 15.5,
-      cx + 13.5,
-      cy - 7.5,
-      cx + 13.5,
-      cy + 0.5,
-    );
-    // Right jaw to chin
-    facePath.cubicTo(
-      cx + 13.5,
-      cy + 8.0,
-      cx + 6.8,
-      cy + 15.0,
-      cx + 2.8,
-      cy + 17.0,
-    );
-    // Chin bottom
-    facePath.quadraticBezierTo(
-      cx,
-      cy + 18.0,
-      cx - 2.8,
-      cy + 17.0,
-    );
-    // Left jaw
-    facePath.cubicTo(
-      cx - 6.8,
-      cy + 15.0,
-      cx - 13.5,
-      cy + 8.0,
-      cx - 13.5,
-      cy + 0.5,
-    );
-    // Left temple
-    facePath.cubicTo(
-      cx - 13.5,
-      cy - 7.5,
-      cx - 9.5,
-      cy - 15.5,
-      cx,
-      cy - 15.5,
-    );
-    facePath.close();
-
-    // Draw Face Outline
-    final faceOutlinePaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.3
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..color = color.withValues(alpha: 0.40);
-    canvas.drawPath(facePath, faceOutlinePaint);
-
-    // Facial feature landmarks / nodes
-    final landmarks = <Offset>[
-      Offset(cx, cy - 11.0), // 0: Forehead
-      Offset(cx - 5.8, cy - 6.0), // 1: Left eyebrow
-      Offset(cx + 5.8, cy - 6.0), // 2: Right eyebrow
-      Offset(cx - 5.5, cy - 1.8), // 3: Left eye
-      Offset(cx + 5.5, cy - 1.8), // 4: Right eye
-      Offset(cx, cy - 1.2), // 5: Nose bridge
-      Offset(cx, cy + 3.8), // 6: Nose tip
-      Offset(cx - 9.0, cy + 3.0), // 7: Left cheek
-      Offset(cx + 9.0, cy + 3.0), // 8: Right cheek
-      Offset(cx - 4.2, cy + 9.2), // 9: Left mouth corner
-      Offset(cx, cy + 9.2), // 10: Mouth center
-      Offset(cx + 4.2, cy + 9.2), // 11: Right mouth corner
-      Offset(cx, cy + 14.0), // 12: Chin landmark
-    ];
-
-    // Biometric Mesh Triangulation Connections
-    const connections = <List<int>>[
-      [0, 1],
-      [0, 2],
-      [1, 3],
-      [2, 4],
-      [1, 5],
-      [2, 5],
-      [3, 5],
-      [4, 5],
-      [3, 7],
-      [4, 8],
-      [5, 6],
-      [6, 7],
-      [6, 8],
-      [6, 10],
-      [7, 9],
-      [8, 11],
-      [9, 10],
-      [10, 11],
-      [9, 12],
-      [10, 12],
-      [11, 12],
-    ];
-
-    // Smooth vertical scan sweep position
-    final scanNorm =
-        (math.sin(scanProgress * 2 * math.pi - math.pi / 2) + 1.0) / 2.0;
-    final scanY = (cy - 17.0) + scanNorm * 34.0;
-
-    // Draw Mesh Connections with dynamic illumination
-    for (final conn in connections) {
-      final p1 = landmarks[conn[0]];
-      final p2 = landmarks[conn[1]];
-      final midY = (p1.dy + p2.dy) / 2.0;
-      final dist = (midY - scanY).abs();
-      final illum = (1.0 - (dist / 6.5)).clamp(0.0, 1.0);
-
-      final linePaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 0.8 + illum * 0.4
-        ..strokeCap = StrokeCap.round
-        ..color = Color.lerp(
-          color.withValues(alpha: 0.16),
-          const Color(0xFF38BDF8),
-          illum * 0.8,
-        )!;
-
-      canvas.drawLine(p1, p2, linePaint);
-    }
-
-    // Soft vertical glow band
-    final beamRect = Rect.fromLTWH(cx - 15.0, scanY - 5.0, 30.0, 10.0);
-    final glowPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          const Color(0xFF38BDF8).withValues(alpha: 0.0),
-          const Color(0xFF38BDF8).withValues(alpha: 0.22),
-          const Color(0xFF38BDF8).withValues(alpha: 0.0),
-        ],
-      ).createShader(beamRect);
-    canvas.drawRect(beamRect, glowPaint);
-
-    // Thin primary scan beam with horizontal gradient falloff
-    final lineRect = Rect.fromLTWH(cx - 14.0, scanY - 1.0, 28.0, 2.0);
-    final scanBeamPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.3
-      ..strokeCap = StrokeCap.round
-      ..shader = LinearGradient(
-        colors: [
-          color.withValues(alpha: 0.0),
-          const Color(0xFF38BDF8).withValues(alpha: 0.90),
-          color.withValues(alpha: 0.0),
-        ],
-        stops: const [0.0, 0.5, 1.0],
-      ).createShader(lineRect);
-
-    canvas.drawLine(
-      Offset(cx - 13.5, scanY),
-      Offset(cx + 13.5, scanY),
-      scanBeamPaint,
-    );
-
-    // Draw Facial Landmark Nodes with illumination and subtle pulse
-    for (int i = 0; i < landmarks.length; i++) {
-      final p = landmarks[i];
-      final dist = (p.dy - scanY).abs();
-      final illum = (1.0 - (dist / 5.5)).clamp(0.0, 1.0);
-      final pulse =
-          0.5 + 0.5 * math.sin(scanProgress * 4 * math.pi + i * 0.5);
-
-      if (illum > 0.05) {
-        // Soft illumination glow
-        final haloPaint = Paint()
-          ..style = PaintingStyle.fill
-          ..color = const Color(0xFF38BDF8).withValues(alpha: 0.32 * illum);
-        canvas.drawCircle(p, 3.2 * illum + 1.2, haloPaint);
-
-        // Bright active node
-        final nodePaint = Paint()
-          ..style = PaintingStyle.fill
-          ..color = Color.lerp(
-            color,
-            const Color(0xFF00B4D8),
-            illum,
-          )!;
-        canvas.drawCircle(p, 1.3 + illum * 0.8, nodePaint);
-      } else {
-        // Ambient resting node
-        final nodePaint = Paint()
-          ..style = PaintingStyle.fill
-          ..color = color.withValues(alpha: 0.45 + 0.20 * pulse);
-        canvas.drawCircle(p, 1.2, nodePaint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _BiometricFaceScanPainter oldDelegate) =>
-      oldDelegate.scanProgress != scanProgress || oldDelegate.color != color;
-}
-
-// ─── _BiometricBackgroundAtmosphere ──────────────────────────────────────────
-class _BiometricBackgroundAtmosphere extends StatefulWidget {
-  const _BiometricBackgroundAtmosphere();
-
-  @override
-  State<_BiometricBackgroundAtmosphere> createState() =>
-      _BiometricBackgroundAtmosphereState();
-}
-
-class _BiometricBackgroundAtmosphereState
-    extends State<_BiometricBackgroundAtmosphere>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ambientController;
-
-  @override
-  void initState() {
-    super.initState();
-    _ambientController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 8000),
-    )..repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _ambientController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: AnimatedBuilder(
-        animation: _ambientController,
-        builder: (context, _) {
-          return CustomPaint(
-            painter: _BiometricBackgroundAtmospherePainter(
-              animationValue: _ambientController.value,
-              primaryColor: AppStyles.primaryBlue,
-            ),
-            size: Size.infinite,
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _BiometricBackgroundAtmospherePainter extends CustomPainter {
-  final double animationValue;
-  final Color primaryColor;
-
-  _BiometricBackgroundAtmospherePainter({
-    required this.animationValue,
-    required this.primaryColor,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-
-    // 1. Base clean biometric gradient (light theme)
-    final bgRect = Rect.fromLTWH(0, 0, w, h);
-    final bgPaint = Paint()
-      ..shader = const LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          Color(0xFFFAFCFF),
-          Color(0xFFF1F6FD),
-          Color(0xFFF8FAFC),
-        ],
-        stops: [0.0, 0.42, 1.0],
-      ).createShader(bgRect);
-    canvas.drawRect(bgRect, bgPaint);
-
-    // 2. Ambient Top-Right Soft Cyan Glow Field
-    final trCenter = Offset(w * 0.82, h * 0.12);
-    final trRadius = w * 0.70;
-    final trPulse = 0.035 + 0.020 * animationValue;
-    final trPaint = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          const Color(0xFF38BDF8).withValues(alpha: trPulse),
-          const Color(0xFF60A5FA).withValues(alpha: trPulse * 0.45),
-          const Color(0xFF38BDF8).withValues(alpha: 0.0),
-        ],
-        stops: const [0.0, 0.55, 1.0],
-      ).createShader(Rect.fromCircle(center: trCenter, radius: trRadius));
-    canvas.drawCircle(trCenter, trRadius, trPaint);
-
-    // 3. Ambient Bottom-Left Soft Indigo/Blue Glow Field
-    final blCenter = Offset(w * 0.14, h * 0.84);
-    final blRadius = w * 0.75;
-    final blPulse = 0.030 + 0.020 * (1.0 - animationValue);
-    final blPaint = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          primaryColor.withValues(alpha: blPulse),
-          const Color(0xFF818CF8).withValues(alpha: blPulse * 0.35),
-          primaryColor.withValues(alpha: 0.0),
-        ],
-        stops: const [0.0, 0.55, 1.0],
-      ).createShader(Rect.fromCircle(center: blCenter, radius: blRadius));
-    canvas.drawCircle(blCenter, blRadius, blPaint);
-
-    // 4. Center-Depth Biometric Ambient Field
-    final centerPos = Offset(w * 0.50, h * 0.55);
-    final centerRadius = w * 0.60;
-    final centerPulse = 0.025 + 0.015 * animationValue;
-    final centerPaint = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          const Color(0xFF00B4D8).withValues(alpha: centerPulse),
-          const Color(0xFF38BDF8).withValues(alpha: 0.0),
-        ],
-      ).createShader(Rect.fromCircle(center: centerPos, radius: centerRadius));
-    canvas.drawCircle(centerPos, centerRadius, centerPaint);
-
-    // 5. Extremely faint ambient biometric wave ribbons
-    final wave1Paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0
-      ..color = const Color(0xFF38BDF8).withValues(
-        alpha: 0.030 + 0.015 * animationValue,
-      );
-
-    final wave1Path = Path();
-    wave1Path.moveTo(
-      0,
-      h * 0.32 + 8.0 * math.sin(animationValue * 2 * math.pi),
-    );
-    wave1Path.cubicTo(
-      w * 0.35,
-      h * 0.28 - 12.0 * math.cos(animationValue * 2 * math.pi),
-      w * 0.70,
-      h * 0.36 + 10.0 * math.sin(animationValue * 2 * math.pi),
-      w,
-      h * 0.30 - 6.0 * math.cos(animationValue * 2 * math.pi),
-    );
-    canvas.drawPath(wave1Path, wave1Paint);
-
-    final wave2Paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0
-      ..color = primaryColor.withValues(
-        alpha: 0.025 + 0.015 * (1.0 - animationValue),
-      );
-
-    final wave2Path = Path();
-    wave2Path.moveTo(
-      0,
-      h * 0.65 - 10.0 * math.cos(animationValue * 2 * math.pi),
-    );
-    wave2Path.cubicTo(
-      w * 0.30,
-      h * 0.69 + 12.0 * math.sin(animationValue * 2 * math.pi),
-      w * 0.68,
-      h * 0.61 - 10.0 * math.cos(animationValue * 2 * math.pi),
-      w,
-      h * 0.67 + 8.0 * math.sin(animationValue * 2 * math.pi),
-    );
-    canvas.drawPath(wave2Path, wave2Paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _BiometricBackgroundAtmospherePainter oldDelegate) =>
-      oldDelegate.animationValue != animationValue ||
       oldDelegate.primaryColor != primaryColor;
 }
