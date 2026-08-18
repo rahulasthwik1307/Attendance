@@ -22,11 +22,13 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   late MobileScannerController _scannerController;
   int _secondsRemaining = 180; // default, overridden from route args
   Timer? _countdownTimer;
+  Timer? _errorDismissTimer;
   bool _hasNavigated = false;
   bool _timerInitialized = false;
   bool _isProcessing = false;
   String _subjectPeriodLabel = 'Loading...';
   bool _infoLoaded = false;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -44,7 +46,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       vsync: this,
       duration: const Duration(milliseconds: 2000),
     )..repeat(reverse: true);
-    _bracketGlowOpacity = Tween<double>(begin: 0.5, end: 1.0).animate(
+    _bracketGlowOpacity = Tween<double>(begin: 0.65, end: 1.0).animate(
       CurvedAnimation(parent: _bracketGlowController, curve: Curves.easeInOut),
     );
   }
@@ -103,6 +105,13 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   // ── Real Supabase QR validation flow ─────────────────────────────────
   Future<void> _onQrDetected(String scannedToken) async {
     if (_isProcessing || _hasNavigated) return;
+
+    // Clear any existing error state immediately on new scan attempt
+    _errorDismissTimer?.cancel();
+    if (mounted && _errorMessage != null) {
+      setState(() => _errorMessage = null);
+    }
+
     setState(() => _isProcessing = true);
 
     try {
@@ -158,16 +167,10 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         debugPrint('Upsert result: success for session $sessionId');
       } catch (upsertError) {
         debugPrint('Upsert error: $upsertError');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to mark attendance: $upsertError'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+        _showError('Failed to mark attendance. Please try again.');
         return;
       }
+
       // ── Step 5: Mark token as used ──────────────────────────────────
       await supabase
           .from('qr_tokens')
@@ -177,6 +180,10 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       // ── Step 6: Navigate to face verification ───────────────────────
       if (mounted && !_hasNavigated) {
         _hasNavigated = true;
+        // Explicitly cancel error timer and wipe any lingering error state before pushing
+        _errorDismissTimer?.cancel();
+        _errorMessage = null;
+
         final DateTime? endTime =
             ModalRoute.of(context)?.settings.arguments as DateTime?;
         Navigator.of(context).pushReplacementNamed(
@@ -193,18 +200,19 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
   void _showError(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppStyles.errorRed,
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        duration: const Duration(seconds: 4),
-      ),
-    );
-    // Allow scanning again
-    if (mounted) setState(() => _isProcessing = false);
+    _errorDismissTimer?.cancel();
+    setState(() {
+      _errorMessage = message;
+      _isProcessing = false;
+    });
+
+    _errorDismissTimer = Timer(const Duration(milliseconds: 3500), () {
+      if (mounted) {
+        setState(() {
+          _errorMessage = null;
+        });
+      }
+    });
   }
 
   @override
@@ -311,6 +319,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
   @override
   void dispose() {
+    _errorDismissTimer?.cancel();
     qrScannerReleaseCompleter = Completer<void>();
     Future(() async {
       try {
@@ -326,8 +335,64 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     super.dispose();
   }
 
+  // ─── Coordinate Filtering helper (strictly validates against qrTargetRect) ──
+  bool _isBarcodeInsideTarget(
+    Barcode barcode,
+    Size imageSize,
+    Size screenSize,
+    Rect qrTargetRect,
+  ) {
+    if (imageSize.width <= 0 || imageSize.height <= 0) return true;
+
+    final double scaleX = screenSize.width / imageSize.width;
+    final double scaleY = screenSize.height / imageSize.height;
+    final double scale = math.max(scaleX, scaleY);
+    final double scaledW = imageSize.width * scale;
+    final double scaledH = imageSize.height * scale;
+    final double offsetX = (screenSize.width - scaledW) / 2;
+    final double offsetY = (screenSize.height - scaledH) / 2;
+
+    if (barcode.corners.isNotEmpty) {
+      double minX = double.infinity;
+      double maxX = -double.infinity;
+      double minY = double.infinity;
+      double maxY = -double.infinity;
+      double sumX = 0;
+      double sumY = 0;
+
+      for (final corner in barcode.corners) {
+        final double screenX = corner.dx * scale + offsetX;
+        final double screenY = corner.dy * scale + offsetY;
+        minX = math.min(minX, screenX);
+        maxX = math.max(maxX, screenX);
+        minY = math.min(minY, screenY);
+        maxY = math.max(maxY, screenY);
+        sumX += screenX;
+        sumY += screenY;
+      }
+
+      final Offset center = Offset(
+        sumX / barcode.corners.length,
+        sumY / barcode.corners.length,
+      );
+
+      // Bounding box margin for target detection tolerance while strictly excluding out-of-frame codes
+      final Rect allowedBounds = qrTargetRect.inflate(16);
+      final bool centerInside = allowedBounds.contains(center);
+      final Rect barcodeRect = Rect.fromLTRB(minX, minY, maxX, maxY);
+      final bool overlaps = allowedBounds.overlaps(barcodeRect);
+
+      return centerInside || overlaps;
+    }
+
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     final Color timerColor = _secondsRemaining <= 30
         ? AppStyles.errorRed
         : _secondsRemaining <= 60
@@ -336,11 +401,53 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     final String mm = (_secondsRemaining ~/ 60).toString().padLeft(2, '0');
     final String ss = (_secondsRemaining % 60).toString().padLeft(2, '0');
 
+    final Size screenSize = MediaQuery.of(context).size;
+    final double topSafe = MediaQuery.of(context).padding.top;
+    final double bottomSafe = MediaQuery.of(context).padding.bottom;
+
+    // ── 1. Outer Camera Preview Geometry (Larger container) ───────────────────
+    final double cameraPreviewSize = math.min(
+      304.0,
+      screenSize.width - 40.0,
+    );
+    final double infoCardTop = topSafe + 54.0;
+    const double infoCardHeight = 64.0;
+    final double infoCardBottom = infoCardTop + infoCardHeight;
+
+    // Vertically balance the camera preview between the info card and instructions
+    final double idealCameraTop =
+        (screenSize.height - cameraPreviewSize) / 2 - 20.0;
+    final double cameraPreviewTop = math.max(
+      infoCardBottom + 16.0,
+      idealCameraTop,
+    );
+    final double cameraPreviewLeft =
+        (screenSize.width - cameraPreviewSize) / 2.0;
+
+    final Rect cameraPreviewRect = Rect.fromLTWH(
+      cameraPreviewLeft,
+      cameraPreviewTop,
+      cameraPreviewSize,
+      cameraPreviewSize,
+    );
+
+    // ── 2. Inner Blue QR Target Frame Geometry (Centered inside preview) ──────
+    // Equal inset on all four sides: left == right == top == bottom
+    const double targetInset = 36.0;
+    final double qrTargetSize = cameraPreviewSize - (targetInset * 2.0);
+
+    final Rect qrTargetRect = Rect.fromLTWH(
+      cameraPreviewRect.left + targetInset,
+      cameraPreviewRect.top + targetInset,
+      qrTargetSize,
+      qrTargetSize,
+    );
+
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0D0D),
+      backgroundColor: theme.scaffoldBackgroundColor,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
           icon: const Icon(
@@ -355,207 +462,336 @@ class _QrScannerScreenState extends State<QrScannerScreen>
           'Scan QR Code',
           style: TextStyle(
             color: AppStyles.textDark,
-            fontWeight: FontWeight.bold,
+            fontWeight: FontWeight.w700,
             fontSize: 18,
+            letterSpacing: -0.3,
           ),
         ),
       ),
       body: Stack(
         children: [
-          // ── Full-screen camera preview ───────────────────────
+          // ── Layer 1: Full-screen camera preview at base layer ──────────────────
           Positioned.fill(
             child: MobileScanner(
               controller: _scannerController,
+              scanWindow: qrTargetRect,
               onDetect: (BarcodeCapture barcodes) {
-                final rawValue = barcodes.barcodes.first.rawValue;
-                if (rawValue == null) return;
-                if (_isProcessing) return;
-                _onQrDetected(rawValue);
+                if (_isProcessing || _hasNavigated) return;
+                for (final barcode in barcodes.barcodes) {
+                  final rawValue = barcode.rawValue;
+                  if (rawValue == null || rawValue.isEmpty) continue;
+
+                  // Restrict barcode detection strictly to the INNER QR target frame
+                  final bool isInside = _isBarcodeInsideTarget(
+                    barcode,
+                    barcodes.size,
+                    screenSize,
+                    qrTargetRect,
+                  );
+
+                  if (isInside) {
+                    _onQrDetected(rawValue);
+                    break;
+                  } else {
+                    debugPrint(
+                      '[QR_SCANNER] Ignored barcode outside inner QR target frame',
+                    );
+                  }
+                }
               },
             ),
           ),
-          // ── Overlay UI on top of camera ──────────────────────
-          SafeArea(
-            child: Column(
+
+          // ── Layer 2: White/Light Background Cutout Mask (Outer cameraPreviewRect) ──
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _ScanWindowCutoutPainter(
+                cameraPreviewRect: cameraPreviewRect,
+                backgroundColor: theme.scaffoldBackgroundColor,
+              ),
+            ),
+          ),
+
+          // ── Layer 3: Inner Blue QR Target Frame & Laser Scan Line ─────────────
+          Positioned(
+            left: qrTargetRect.left,
+            top: qrTargetRect.top,
+            width: qrTargetRect.width,
+            height: qrTargetRect.height,
+            child: Stack(
               children: [
-                // ── Info card (compact) ────────────────────────────────
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
+                // Corner brackets with breathing glow animation
+                AnimatedBuilder(
+                  animation: _bracketGlowOpacity,
+                  builder: (context, _) {
+                    return CustomPaint(
+                      size: Size(qrTargetRect.width, qrTargetRect.height),
+                      painter: _ViewfinderPainter(
+                        opacity: _bracketGlowOpacity.value,
+                      ),
+                    );
+                  },
+                ),
+                // Animated laser scan line bounded strictly inside qrTargetRect
+                AnimatedBuilder(
+                  animation: _scanLineController,
+                  builder: (context, _) {
+                    final dy = _scanLineController.value * qrTargetRect.height;
+                    return Positioned(
+                      top: dy,
+                      left: 10,
+                      right: 10,
+                      child: Container(
+                        height: 2.5,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              Colors.transparent,
+                              AppStyles.primaryBlue.withValues(alpha: 0.95),
+                              Colors.transparent,
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(2),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppStyles.primaryBlue.withValues(
+                                alpha: 0.65,
+                              ),
+                              blurRadius: 12,
+                              spreadRadius: 2.0,
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+
+          // ── Layer 4: Top Info Card (Header) ───────────────────────────────────
+          Positioned(
+            top: infoCardTop,
+            left: 20,
+            right: 20,
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.1)
+                      : const Color(0xFFE2E8F0),
+                ),
+                boxShadow: isDark
+                    ? null
+                    : [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.05),
+                          blurRadius: 16,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: AppStyles.primaryBlue.withValues(
+                        alpha: isDark ? 0.2 : 0.08,
+                      ),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(
+                      Icons.menu_book_rounded,
+                      color: AppStyles.primaryBlue,
+                      size: 18,
+                    ),
                   ),
-                  child: Container(
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _subjectPeriodLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: isDark ? Colors.white : AppStyles.textDark,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Place QR code within the blue frame',
+                          style: TextStyle(
+                            color: isDark
+                                ? Colors.grey.shade400
+                                : AppStyles.textGray,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 400),
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
+                      horizontal: 10,
+                      vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.06),
-                          blurRadius: 12,
-                          offset: const Offset(0, 3),
-                        ),
-                      ],
+                      color: timerColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: timerColor.withValues(alpha: 0.25),
+                      ),
                     ),
                     child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.all(7),
-                          decoration: BoxDecoration(
-                            color: AppStyles.primaryBlue.withValues(
-                              alpha: 0.08,
-                            ),
-                            borderRadius: BorderRadius.circular(9),
-                          ),
-                          child: const Icon(
-                            Icons.menu_book_rounded,
-                            color: AppStyles.primaryBlue,
-                            size: 18,
-                          ),
+                        Icon(
+                          Icons.timer_outlined,
+                          size: 13,
+                          color: timerColor,
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _subjectPeriodLabel,
-                                style: TextStyle(
-                                  color: AppStyles.textDark,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                ),
-                              ),
-                              SizedBox(height: 2),
-                              Text(
-                                'This code expires shortly',
-                                style: TextStyle(
-                                  color: AppStyles.textGray.withValues(
-                                    alpha: 0.8,
-                                  ),
-                                  fontSize: 11,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        AnimatedContainer(
-                          duration: const Duration(milliseconds: 500),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: timerColor.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.timer_outlined,
-                                size: 13,
-                                color: timerColor,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                '$mm:$ss',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 14,
-                                  color: timerColor,
-                                ),
-                              ),
-                            ],
+                        const SizedBox(width: 4),
+                        Text(
+                          '$mm:$ss',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13,
+                            color: timerColor,
                           ),
                         ),
                       ],
                     ),
                   ),
-                ),
+                ],
+              ),
+            ),
+          ),
 
-                // ── Central scan area ──────────────────────────────────
-                const Spacer(),
-                Center(
-                  child: SizedBox(
-                    width: 240,
-                    height: 240,
-                    child: Stack(
-                      children: [
-                        // Corner brackets with breathing glow
-                        AnimatedBuilder(
-                          animation: _bracketGlowOpacity,
-                          builder: (context, _) {
-                            return CustomPaint(
-                              size: const Size(240, 240),
-                              painter: _ViewfinderPainter(
-                                opacity: _bracketGlowOpacity.value,
-                              ),
-                            );
-                          },
-                        ),
-                        // Animated scan line
-                        AnimatedBuilder(
-                          animation: _scanLineController,
-                          builder: (context, _) {
-                            final dy = _scanLineController.value * 240;
-                            return Positioned(
-                              top: dy,
-                              left: 12,
-                              right: 12,
-                              child: Container(
-                                height: 2,
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: [
-                                      Colors.transparent,
-                                      AppStyles.primaryBlue.withValues(
-                                        alpha: 0.9,
-                                      ),
-                                      Colors.transparent,
-                                    ],
-                                  ),
-                                  borderRadius: BorderRadius.circular(1),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: AppStyles.primaryBlue.withValues(
-                                        alpha: 0.5,
-                                      ),
-                                      blurRadius: 12,
-                                      spreadRadius: 2,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 32),
-                const Text(
+          // ── Layer 5: Instructions below camera preview ────────────────────────
+          Positioned(
+            top: cameraPreviewRect.bottom + 20.0,
+            left: 20,
+            right: 20,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
                   'Point camera at the QR code',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: isDark ? Colors.white : const Color(0xFF1E293B),
                     fontSize: 15,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.2,
                   ),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'This code expires shortly',
+                  'Rotating QR code refreshes periodically',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.35),
+                    color: isDark ? Colors.grey.shade400 : AppStyles.textGray,
                     fontSize: 13,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                const Spacer(flex: 2),
               ],
+            ),
+          ),
+
+          // ── Layer 6: In-flow Error Banner (Dismissible & Auto-cleared) ──────────
+          Positioned(
+            bottom: math.max(bottomSafe + 16, 24),
+            left: 20,
+            right: 20,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, animation) {
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, 0.2),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                );
+              },
+              child: _errorMessage != null
+                  ? Container(
+                      key: ValueKey<String>(_errorMessage!),
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 11,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? AppStyles.errorRed.withValues(alpha: 0.12)
+                            : const Color(0xFFFEF2F2),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: AppStyles.errorRed.withValues(
+                            alpha: isDark ? 0.3 : 0.2,
+                          ),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppStyles.errorRed.withValues(alpha: 0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(5),
+                            decoration: BoxDecoration(
+                              color: AppStyles.errorRed.withValues(alpha: 0.15),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.info_outline_rounded,
+                              color: AppStyles.errorRed,
+                              size: 16,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _errorMessage!,
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                color: isDark
+                                    ? Colors.red.shade200
+                                    : const Color(0xFF991B1B),
+                                height: 1.3,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : const SizedBox.shrink(),
             ),
           ),
         ],
@@ -564,23 +800,73 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   }
 }
 
-/// Draws four corner brackets with breathing glow opacity.
+/// Creates a solid background with a transparent rounded-rectangle cutout
+/// for the outer camera preview area.
+class _ScanWindowCutoutPainter extends CustomPainter {
+  final Rect cameraPreviewRect;
+  final Color backgroundColor;
+
+  const _ScanWindowCutoutPainter({
+    required this.cameraPreviewRect,
+    required this.backgroundColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Path backgroundPath = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+
+    final Path cameraPreviewPath = Path()
+      ..addRRect(
+        RRect.fromRectAndRadius(cameraPreviewRect, const Radius.circular(20)),
+      );
+
+    final Path cutoutPath = Path.combine(
+      PathOperation.difference,
+      backgroundPath,
+      cameraPreviewPath,
+    );
+
+    final Paint paint = Paint()..color = backgroundColor;
+    canvas.drawPath(cutoutPath, paint);
+
+    // Subtle polished border around the outer camera preview window
+    final Paint borderPaint = Paint()
+      ..color = const Color(0xFF3B82F6).withValues(alpha: 0.2)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(cameraPreviewRect, const Radius.circular(20)),
+      borderPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScanWindowCutoutPainter oldDelegate) {
+    return oldDelegate.cameraPreviewRect != cameraPreviewRect ||
+        oldDelegate.backgroundColor != backgroundColor;
+  }
+}
+
+/// Draws four perfectly symmetrical corner brackets with breathing glow opacity.
 class _ViewfinderPainter extends CustomPainter {
   final double opacity;
   const _ViewfinderPainter({required this.opacity});
 
   @override
   void paint(Canvas canvas, Size size) {
-    const double bracketLen = 32;
-    const double strokeW = 3.5;
-    const double radius = 14;
+    const double bracketLen = 28.0;
+    const double strokeW = 4.0;
+    const double radius = 14.0;
+
     final paint = Paint()
       ..color = AppStyles.primaryBlue.withValues(alpha: opacity)
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeW
       ..strokeCap = StrokeCap.round;
 
-    // Top-left
+    // Top-left corner
     canvas.drawArc(
       Rect.fromLTWH(0, 0, radius * 2, radius * 2),
       math.pi,
@@ -591,7 +877,7 @@ class _ViewfinderPainter extends CustomPainter {
     canvas.drawLine(Offset(0, radius), Offset(0, bracketLen), paint);
     canvas.drawLine(Offset(radius, 0), Offset(bracketLen, 0), paint);
 
-    // Top-right
+    // Top-right corner
     canvas.drawArc(
       Rect.fromLTWH(size.width - radius * 2, 0, radius * 2, radius * 2),
       -math.pi / 2,
@@ -610,7 +896,7 @@ class _ViewfinderPainter extends CustomPainter {
       paint,
     );
 
-    // Bottom-left
+    // Bottom-left corner
     canvas.drawArc(
       Rect.fromLTWH(0, size.height - radius * 2, radius * 2, radius * 2),
       math.pi / 2,
@@ -629,7 +915,7 @@ class _ViewfinderPainter extends CustomPainter {
       paint,
     );
 
-    // Bottom-right
+    // Bottom-right corner
     canvas.drawArc(
       Rect.fromLTWH(
         size.width - radius * 2,

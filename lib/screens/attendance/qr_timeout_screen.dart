@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../utils/app_styles.dart';
+import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
 
 class QrTimeoutScreen extends StatefulWidget {
@@ -41,15 +42,19 @@ class _QrTimeoutScreenState extends State<QrTimeoutScreen>
     final bool isTimeout = widget.isTimeout;
 
     final Color accentColor = isTimeout
-        ? Colors.orange.shade700
+        ? const Color(0xFFD97706) // Muted warm amber
         : AppStyles.errorRed;
+    final Color badgeBg = isTimeout
+        ? const Color(0xFFFEF3C7)
+        : const Color(0xFFFEE2E2);
+
     final IconData heroIcon = isTimeout
         ? Icons.timer_off_rounded
-        : Icons.face_retouching_off;
+        : Icons.face_retouching_off_rounded;
     final String title = isTimeout ? 'Session Expired' : 'Verification Failed';
     final String message = isTimeout
-        ? 'You did not complete face verification within 60 seconds. Your session has been invalidated.'
-        : 'Face verification failed after 3 attempts. Your attendance could not be marked for this period.';
+        ? 'You did not complete face verification within the allowed time. Please restart the attendance process.'
+        : 'Face verification could not be confirmed. Your attendance could not be marked for this period.';
 
     return PopScope(
       canPop: false,
@@ -58,99 +63,155 @@ class _QrTimeoutScreenState extends State<QrTimeoutScreen>
         body: SafeArea(
           child: Center(
             child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // ── Animated icon ──────────────────────────────────
+                  // ── Animated icon badge ────────────────────────────
                   ScaleTransition(
                     scale: _scaleAnim,
                     child: Container(
-                      padding: const EdgeInsets.all(24),
+                      width: 92,
+                      height: 92,
                       decoration: BoxDecoration(
-                        color: accentColor.withValues(alpha: 0.1),
+                        color: isDark
+                            ? accentColor.withValues(alpha: 0.15)
+                            : badgeBg,
                         shape: BoxShape.circle,
-                      ),
-                      child: Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: accentColor,
-                          shape: BoxShape.circle,
+                        border: Border.all(
+                          color: accentColor.withValues(
+                            alpha: isDark ? 0.3 : 0.2,
+                          ),
+                          width: 2,
                         ),
-                        child: Icon(heroIcon, color: Colors.white, size: 44),
+                        boxShadow: [
+                          BoxShadow(
+                            color: accentColor.withValues(
+                              alpha: isDark ? 0.2 : 0.12,
+                            ),
+                            blurRadius: 20,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: Center(
+                        child: Container(
+                          width: 58,
+                          height: 58,
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? accentColor.withValues(alpha: 0.3)
+                                : Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: isDark
+                                ? null
+                                : [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(
+                                        alpha: 0.04,
+                                      ),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                          ),
+                          child: Icon(heroIcon, color: accentColor, size: 28),
+                        ),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 24),
 
                   // ── Title ──────────────────────────────────────────
                   FadeSlideY(
-                    delay: const Duration(milliseconds: 300),
+                    delay: const Duration(milliseconds: 250),
                     child: Text(
                       title,
                       style: TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.bold,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.4,
                         color:
                             theme.textTheme.displayLarge?.color ??
                             AppStyles.textDark,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
 
                   // ── Message ────────────────────────────────────────
                   FadeSlideY(
-                    delay: const Duration(milliseconds: 400),
+                    delay: const Duration(milliseconds: 350),
                     child: Text(
                       message,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 15,
-                        color: AppStyles.textGray,
-                        height: 1.5,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: isDark
+                            ? Colors.grey.shade400
+                            : AppStyles.textGray,
+                        height: 1.45,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 24),
 
                   // ── Warning info card ──────────────────────────────
                   FadeSlideY(
-                    delay: const Duration(milliseconds: 500),
+                    delay: const Duration(milliseconds: 450),
                     child: Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
                       decoration: BoxDecoration(
                         color: isDark
-                            ? Colors.white.withValues(alpha: 0.06)
-                            : Colors.orange.withValues(alpha: 0.07),
+                            ? Colors.white.withValues(alpha: 0.04)
+                            : Colors.white,
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
-                          color: Colors.orange.withValues(alpha: 0.2),
+                          color: isDark
+                              ? Colors.white.withValues(alpha: 0.08)
+                              : const Color(0xFFE2E8F0),
                         ),
+                        boxShadow: isDark
+                            ? null
+                            : [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.03),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
                       ),
                       child: Row(
                         children: [
                           Container(
-                            padding: const EdgeInsets.all(8),
+                            padding: const EdgeInsets.all(7),
                             decoration: BoxDecoration(
-                              color: Colors.orange.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(10),
+                              color: const Color(
+                                0xFFF59E0B,
+                              ).withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(9),
                             ),
-                            child: Icon(
-                              Icons.warning_amber_rounded,
-                              color: Colors.orange.shade700,
-                              size: 20,
+                            child: const Icon(
+                              Icons.info_outline_rounded,
+                              color: Color(0xFFD97706),
+                              size: 18,
                             ),
                           ),
                           const SizedBox(width: 12),
-                          const Expanded(
+                          Expanded(
                             child: Text(
-                              'Please contact your instructor or class teacher if you believe this is an error.',
+                              'Contact your instructor or class teacher if you believe this is an error.',
                               style: TextStyle(
                                 fontSize: 13,
-                                color: AppStyles.textGray,
-                                height: 1.5,
+                                color: isDark
+                                    ? Colors.grey.shade400
+                                    : AppStyles.textGray,
+                                height: 1.35,
                               ),
                             ),
                           ),
@@ -158,14 +219,14 @@ class _QrTimeoutScreenState extends State<QrTimeoutScreen>
                       ),
                     ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 28),
 
                   // ── Dashboard button ───────────────────────────────
                   FadeSlideY(
-                    delay: const Duration(milliseconds: 600),
+                    delay: const Duration(milliseconds: 550),
                     child: SizedBox(
                       width: double.infinity,
-                      child: ElevatedButton(
+                      child: AnimatedButton(
                         onPressed: () => Navigator.of(
                           context,
                         ).pushReplacementNamed('/dashboard'),
@@ -181,8 +242,8 @@ class _QrTimeoutScreenState extends State<QrTimeoutScreen>
                         child: const Text(
                           'Return to Dashboard',
                           style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
                           ),
                         ),
                       ),

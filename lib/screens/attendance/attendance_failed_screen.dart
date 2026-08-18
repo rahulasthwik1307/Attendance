@@ -34,7 +34,7 @@ class _AttendanceFailedScreenState extends State<AttendanceFailedScreen>
     _rippleController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
-    )..repeat();
+    )..forward();
 
     _shakeController.forward();
   }
@@ -48,10 +48,12 @@ class _AttendanceFailedScreenState extends State<AttendanceFailedScreen>
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final String? mode = ModalRoute.of(context)?.settings.arguments as String?;
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -63,116 +65,203 @@ class _AttendanceFailedScreenState extends State<AttendanceFailedScreen>
       ),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0),
+          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Spacer(),
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  AnimatedBuilder(
-                    animation: _rippleController,
-                    builder: (context, child) {
-                      return Container(
-                        width: 150 + (_rippleController.value * 50),
-                        height: 150 + (_rippleController.value * 50),
+              Center(
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    AnimatedBuilder(
+                      animation: _rippleController,
+                      builder: (context, child) {
+                        return Container(
+                          width: 110 + (_rippleController.value * 36),
+                          height: 110 + (_rippleController.value * 36),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: AppStyles.errorRed.withValues(
+                              alpha: (1 - _rippleController.value) * 0.12,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    AnimatedBuilder(
+                      animation: _shakeAnimation,
+                      builder: (context, child) {
+                        final sineValue = math.sin(
+                          _shakeAnimation.value * math.pi * 3,
+                        );
+                        return Transform.translate(
+                          offset: Offset(sineValue * 12, 0),
+                          child: child,
+                        );
+                      },
+                      child: Container(
+                        width: 88,
+                        height: 88,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: AppStyles.errorRed.withValues(
-                            alpha: 1 - _rippleController.value,
+                          color: isDark
+                              ? AppStyles.errorRed.withValues(alpha: 0.15)
+                              : const Color(0xFFFEE2E2),
+                          border: Border.all(
+                            color: AppStyles.errorRed.withValues(
+                              alpha: isDark ? 0.3 : 0.2,
+                            ),
+                            width: 2,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppStyles.errorRed.withValues(
+                                alpha: isDark ? 0.2 : 0.1,
+                              ),
+                              blurRadius: 20,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: Container(
+                            width: 56,
+                            height: 56,
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? AppStyles.errorRed.withValues(alpha: 0.35)
+                                  : Colors.white,
+                              shape: BoxShape.circle,
+                              boxShadow: isDark
+                                  ? null
+                                  : [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(
+                                          alpha: 0.04,
+                                        ),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
+                            ),
+                            child: const Icon(
+                              Icons.close_rounded,
+                              size: 32,
+                              color: AppStyles.errorRed,
+                            ),
                           ),
                         ),
-                      );
-                    },
-                  ),
-                  AnimatedBuilder(
-                    animation: _shakeAnimation,
-                    builder: (context, child) {
-                      final sineValue = math.sin(
-                        _shakeAnimation.value * math.pi * 3,
-                      );
-                      return Transform.translate(
-                        offset: Offset(sineValue * 15, 0),
-                        child: child,
-                      );
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.all(24),
-                      decoration: const BoxDecoration(
-                        color: AppStyles.errorRed,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.close_rounded,
-                        size: 60,
-                        color: Colors.white,
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-              const SizedBox(height: 32),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 300),
+              const SizedBox(height: 24),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 250),
                 child: Text(
                   'Verification Failed',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: AppStyles.textDark,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.4,
+                    color:
+                        theme.textTheme.displayLarge?.color ??
+                        AppStyles.textDark,
                   ),
                 ),
               ),
-              if (mode == 'forgot_password')
-                const FadeSlideY(
-                  delay: Duration(milliseconds: 350),
-                  child: Padding(
-                    padding: EdgeInsets.only(top: 8.0, left: 16.0, right: 16.0),
-                    child: Text(
-                      'We could not verify your identity. Please try again in good lighting.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 14, color: AppStyles.textGray),
-                    ),
+              const SizedBox(height: 8),
+              FadeSlideY(
+                delay: const Duration(milliseconds: 320),
+                child: Text(
+                  mode == 'forgot_password'
+                      ? 'We could not verify your identity. Please try again in good lighting.'
+                      : 'Face did not match the registered profile. Please try again.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: isDark ? Colors.grey.shade400 : AppStyles.textGray,
+                    height: 1.45,
                   ),
                 ),
-              const SizedBox(height: 32),
+              ),
+              const SizedBox(height: 24),
+
+              // ── Tips card ─────────────────────────────────────────
               FadeSlideY(
-                delay: const Duration(milliseconds: 400),
+                delay: const Duration(milliseconds: 420),
                 child: Container(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: AppStyles.backgroundLight,
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.04)
+                        : Colors.white,
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.grey.shade200),
+                    border: Border.all(
+                      color: isDark
+                          ? Colors.white.withValues(alpha: 0.08)
+                          : const Color(0xFFE2E8F0),
+                    ),
+                    boxShadow: isDark
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.03),
+                              blurRadius: 10,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                   ),
-                  child: const Column(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
-                          Icon(
-                            Icons.lightbulb_outline_rounded,
-                            color: AppStyles.textGray,
+                          Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: const Color(
+                                0xFF3B82F6,
+                              ).withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(
+                              Icons.lightbulb_outline_rounded,
+                              color: AppStyles.primaryBlue,
+                              size: 18,
+                            ),
                           ),
-                          SizedBox(width: 8),
+                          const SizedBox(width: 10),
                           Text(
-                            'Tips for success',
+                            'Tips for successful verification',
                             style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: AppStyles.textDark,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                              color:
+                                  theme.textTheme.bodyLarge?.color ??
+                                  AppStyles.textDark,
                             ),
                           ),
                         ],
                       ),
-                      SizedBox(height: 12),
-                      Text(
-                        '1. Make sure your face is well-lit.\n2. Look directly at the camera.\n3. Remove glasses or masks if any.',
-                        style: TextStyle(
-                          color: AppStyles.textGray,
-                          height: 1.5,
-                        ),
+                      const SizedBox(height: 12),
+                      _TipItem(
+                        text: 'Ensure your face is well-lit without backlighting',
+                        isDark: isDark,
+                      ),
+                      const SizedBox(height: 6),
+                      _TipItem(
+                        text: 'Look straight at the camera and keep steady',
+                        isDark: isDark,
+                      ),
+                      const SizedBox(height: 6),
+                      _TipItem(
+                        text: 'Remove sunglasses, heavy masks, or hats',
+                        isDark: isDark,
                       ),
                     ],
                   ),
@@ -180,27 +269,82 @@ class _AttendanceFailedScreenState extends State<AttendanceFailedScreen>
               ),
               const Spacer(),
               FadeSlideY(
-                delay: const Duration(milliseconds: 500),
-                child: AnimatedButton(
-                  onPressed: () {
-                    if (mode == 'forgot_password') {
-                      Navigator.of(
-                        context,
-                      ).pushReplacementNamed('/forgot_password_face_verify');
-                    } else {
-                      Navigator.of(
-                        context,
-                      ).pushReplacementNamed('/face_verification');
-                    }
-                  },
-                  child: const Text('Try Again'),
+                delay: const Duration(milliseconds: 550),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: AnimatedButton(
+                    onPressed: () {
+                      if (mode == 'forgot_password') {
+                        Navigator.of(
+                          context,
+                        ).pushReplacementNamed('/forgot_password_face_verify');
+                      } else {
+                        Navigator.of(
+                          context,
+                        ).pushReplacementNamed('/face_verification');
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppStyles.primaryBlue,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: const Text(
+                      'Try Again',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _TipItem extends StatelessWidget {
+  final String text;
+  final bool isDark;
+
+  const _TipItem({required this.text, required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 5.0, right: 8.0),
+          child: Container(
+            width: 4,
+            height: 4,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: isDark ? Colors.grey.shade400 : AppStyles.textGray,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? Colors.grey.shade400 : AppStyles.textGray,
+              height: 1.4,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

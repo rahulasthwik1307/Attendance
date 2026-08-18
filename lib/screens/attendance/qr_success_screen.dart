@@ -165,7 +165,8 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
         body: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -180,8 +181,8 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
                           animation: _rippleController,
                           builder: (context, child) {
                             return Container(
-                              width: 130 + (_rippleController.value * 40),
-                              height: 130 + (_rippleController.value * 40),
+                              width: 120 + (_rippleController.value * 36),
+                              height: 120 + (_rippleController.value * 36),
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 color: AppStyles.successGreen.withValues(
@@ -194,23 +195,44 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
                         ScaleTransition(
                           scale: _scaleAnim,
                           child: Container(
-                            padding: const EdgeInsets.all(24),
+                            width: 88,
+                            height: 88,
                             decoration: BoxDecoration(
-                              color: AppStyles.successGreen.withValues(
-                                alpha: 0.12,
-                              ),
+                              color: isDark
+                                  ? AppStyles.successGreen.withValues(
+                                      alpha: 0.15,
+                                    )
+                                  : const Color(0xFFDCFCE7),
                               shape: BoxShape.circle,
-                            ),
-                            child: Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: const BoxDecoration(
-                                color: AppStyles.successGreen,
-                                shape: BoxShape.circle,
+                              border: Border.all(
+                                color: AppStyles.successGreen.withValues(
+                                  alpha: isDark ? 0.3 : 0.2,
+                                ),
+                                width: 2,
                               ),
-                              child: const Icon(
-                                Icons.check_rounded,
-                                color: Colors.white,
-                                size: 48,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppStyles.successGreen.withValues(
+                                    alpha: isDark ? 0.25 : 0.15,
+                                  ),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 8),
+                                ),
+                              ],
+                            ),
+                            child: Center(
+                              child: Container(
+                                width: 56,
+                                height: 56,
+                                decoration: const BoxDecoration(
+                                  color: AppStyles.successGreen,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.check_rounded,
+                                  color: Colors.white,
+                                  size: 36,
+                                ),
                               ),
                             ),
                           ),
@@ -218,42 +240,55 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
                       ],
                     ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 24),
 
                   // ── Title ──────────────────────────────────────────
                   FadeSlideY(
-                    delay: const Duration(milliseconds: 250),
+                    delay: const Duration(milliseconds: 200),
                     child: Text(
                       'Attendance Marked!',
                       style: TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.bold,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.4,
                         color:
                             theme.textTheme.displayLarge?.color ??
                             AppStyles.textDark,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 6),
+                  FadeSlideY(
+                    delay: const Duration(milliseconds: 280),
+                    child: Text(
+                      'Period attendance successfully recorded',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: isDark
+                            ? Colors.grey.shade400
+                            : AppStyles.textGray,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
 
                   // ── Details card ───────────────────────────────────
                   FadeSlideY(
-                    delay: const Duration(milliseconds: 450),
+                    delay: const Duration(milliseconds: 400),
                     child: Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 6),
                       decoration: BoxDecoration(
                         color: isDark
-                            ? Colors.white.withValues(alpha: 0.06)
+                            ? Colors.white.withValues(alpha: 0.05)
                             : Colors.white,
                         borderRadius: BorderRadius.circular(18),
                         border: Border.all(
                           color: isDark
                               ? Colors.white.withValues(alpha: 0.08)
-                              : Colors.black.withValues(alpha: 0.06),
+                              : const Color(0xFFE2E8F0),
                         ),
                         boxShadow: isDark
-                            ? []
+                            ? null
                             : [
                                 BoxShadow(
                                   color: Colors.black.withValues(alpha: 0.04),
@@ -296,45 +331,48 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
                       ),
                     ),
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 24),
 
                   // ── Thin progress line (replaces countdown text) ───
                   FadeSlideY(
-                    delay: const Duration(milliseconds: 600),
+                    delay: const Duration(milliseconds: 550),
                     child: Column(
                       children: [
                         ClipRRect(
-                          borderRadius: BorderRadius.circular(2),
+                          borderRadius: BorderRadius.circular(3),
                           child: SizedBox(
-                            height: 3,
+                            height: 3.5,
                             width: double.infinity,
                             child: LinearProgressIndicator(
                               value: _progress,
                               backgroundColor: isDark
                                   ? Colors.white.withValues(alpha: 0.08)
-                                  : Colors.black.withValues(alpha: 0.06),
+                                  : const Color(0xFFE2E8F0),
                               valueColor: const AlwaysStoppedAnimation<Color>(
                                 AppStyles.primaryBlue,
                               ),
                             ),
                           ),
                         ),
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 8),
                         Text(
                           'Redirecting to dashboard…',
                           style: TextStyle(
                             fontSize: 12,
-                            color: AppStyles.textGray.withValues(alpha: 0.6),
+                            fontWeight: FontWeight.w500,
+                            color: isDark
+                                ? Colors.grey.shade400
+                                : AppStyles.textGray,
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 20),
 
                   // ── Dashboard button with elevation & bounce ───────
                   FadeSlideY(
-                    delay: const Duration(milliseconds: 700),
+                    delay: const Duration(milliseconds: 650),
                     child: SizedBox(
                       width: double.infinity,
                       child: AnimatedButton(
@@ -346,13 +384,13 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
                           ),
-                          elevation: 2,
+                          elevation: 0,
                         ),
                         child: const Text(
                           'Go to Dashboard',
                           style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
                           ),
                         ),
                       ),
@@ -371,10 +409,10 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
     return Divider(
       height: 1,
       thickness: 1,
-      indent: 56,
+      indent: 54,
       color: isDark
           ? Colors.white.withValues(alpha: 0.06)
-          : Colors.black.withValues(alpha: 0.05),
+          : const Color(0xFFF1F5F9),
     );
   }
 }
@@ -398,23 +436,21 @@ class _DetailRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Icon
           Container(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(7),
             decoration: BoxDecoration(
               color: iconColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(9),
             ),
-            child: Icon(icon, color: iconColor, size: 18),
+            child: Icon(icon, color: iconColor, size: 17),
           ),
           const SizedBox(width: 12),
-          // Label — fixed width, left aligned, never truncates
           SizedBox(
-            width: 90,
+            width: 95,
             child: Text(
               label,
               style: const TextStyle(
@@ -424,24 +460,17 @@ class _DetailRow extends StatelessWidget {
               ),
             ),
           ),
-          // Value — takes remaining space, right aligned
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  value,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: valueColor ??
-                        (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
-                  ),
-                  textAlign: TextAlign.end,
-                  softWrap: true,
-                ),
-              ],
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w700,
+                color: valueColor ??
+                    (theme.textTheme.bodyLarge?.color ?? AppStyles.textDark),
+              ),
+              textAlign: TextAlign.end,
+              softWrap: true,
             ),
           ),
         ],
