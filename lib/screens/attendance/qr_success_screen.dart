@@ -65,7 +65,22 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
     try {
       final args = ModalRoute.of(context)?.settings.arguments;
       String? sessionId;
-      if (args is Map) sessionId = args['session_id'] as String?;
+      if (args is Map) {
+        sessionId = args['session_id'] as String?;
+        final forwardedSubject = args['subject_name'] as String?;
+        final forwardedPeriod = args['period_info'] as String?;
+        if (forwardedSubject != null &&
+            forwardedSubject.isNotEmpty &&
+            forwardedPeriod != null &&
+            forwardedPeriod.isNotEmpty) {
+          // Already known from upstream — render instantly, skip the fetch
+          // that was previously the sole source of this text.
+          setState(() {
+            _subjectName = forwardedSubject;
+            _periodInfo = forwardedPeriod;
+          });
+        }
+      }
       if (sessionId == null) return;
 
       final user = Supabase.instance.client.auth.currentUser;
@@ -246,7 +261,7 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
                   FadeSlideY(
                     delay: const Duration(milliseconds: 200),
                     child: Text(
-                      'Attendance Marked!',
+                      'Attendance Submitted!',
                       style: TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.w700,
@@ -261,7 +276,7 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
                   FadeSlideY(
                     delay: const Duration(milliseconds: 280),
                     child: Text(
-                      'Period attendance successfully recorded',
+                      'Waiting for your teacher to finalize attendance',
                       style: TextStyle(
                         fontSize: 14,
                         color: isDark
@@ -326,6 +341,14 @@ class _QrSuccessScreenState extends State<QrSuccessScreen>
                             label: 'Face Verified',
                             value: 'Confirmed ✓',
                             valueColor: AppStyles.successGreen,
+                          ),
+                          _divider(isDark),
+                          _DetailRow(
+                            icon: Icons.hourglass_top_rounded,
+                            iconColor: Colors.orange.shade600,
+                            label: 'Status',
+                            value: 'Pending Review',
+                            valueColor: Colors.orange.shade700,
                           ),
                         ],
                       ),

@@ -242,8 +242,26 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map) {
         _sessionId = args['session_id'] as String?;
+        final forwardedSubject = args['subject_name'] as String?;
+        final forwardedPeriod = args['period_info'] as String?;
+        if (forwardedSubject != null &&
+            forwardedSubject.isNotEmpty &&
+            forwardedPeriod != null &&
+            forwardedPeriod.isNotEmpty) {
+          // Data already known from the QR scanner — render immediately,
+          // no network round trip needed before the screen is usable.
+          String cleanPeriod = forwardedPeriod;
+          final timeRangeRegex = RegExp(r'\s+\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}');
+          cleanPeriod = cleanPeriod.replaceAll(timeRangeRegex, '').trim();
+          setState(() {
+            _subjectName = forwardedSubject;
+            _periodInfo = cleanPeriod;
+          });
+        } else {
+          // Fallback only if not forwarded — e.g. deep link or old nav path
+          await _fetchSessionInfo();
+        }
       }
-      await _fetchSessionInfo();
       await _initializeCamera();
     });
   }
@@ -1486,7 +1504,11 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         if (!mounted) return;
         Navigator.of(context).pushReplacementNamed(
           '/qr-success',
-          arguments: {'session_id': _sessionId},
+          arguments: {
+            'session_id': _sessionId,
+            'subject_name': _subjectName,
+            'period_info': _periodInfo,
+          },
         );
       } else {
         // ── Failure & Close-Score Retry Check ──
@@ -2202,12 +2224,15 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                   // ── Subject & Period Pill Badge ─────────────────────────
                   if (_subjectName.isNotEmpty)
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 4.0),
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4.0),
                       child: Center(
                         child: Container(
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.of(context).size.width - 32,
+                          ),
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 5,
+                            horizontal: 12,
+                            vertical: 4.5,
                           ),
                           decoration: BoxDecoration(
                             color: AppStyles.primaryBlue.withValues(alpha: 0.08),
@@ -2226,12 +2251,18 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                                 color: AppStyles.primaryBlue.withValues(alpha: 0.8),
                               ),
                               const SizedBox(width: 6),
-                              Text(
-                                '$_periodInfo — $_subjectName',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppStyles.primaryBlue,
+                              Flexible(
+                                child: Text(
+                                  '$_periodInfo — $_subjectName',
+                                  textAlign: TextAlign.center,
+                                  maxLines: 2,
+                                  softWrap: true,
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF1E293B),
+                                    height: 1.2,
+                                  ),
                                 ),
                               ),
                             ],

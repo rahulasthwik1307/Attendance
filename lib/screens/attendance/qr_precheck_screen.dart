@@ -187,11 +187,23 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
     await Future.delayed(const Duration(milliseconds: 600));
     if (!mounted) return;
 
-    final DateTime? endTime =
-        ModalRoute.of(context)?.settings.arguments as DateTime?;
-    Navigator.of(
-      context,
-    ).pushReplacementNamed('/qr-scanner', arguments: endTime);
+    final args = ModalRoute.of(context)?.settings.arguments;
+    DateTime? endTime;
+    String? subjectName;
+    String? periodInfo;
+    if (args is Map) {
+      endTime = args['end_time'] as DateTime?;
+      subjectName = args['subject_name'] as String?;
+      periodInfo = args['period_info'] as String?;
+    } else if (args is DateTime) {
+      // Backward-compat: old callers that still pass a raw DateTime
+      endTime = args;
+    }
+    Navigator.of(context).pushReplacementNamed('/qr-scanner', arguments: {
+      'end_time': endTime,
+      'subject_name': subjectName,
+      'period_info': periodInfo,
+    });
   }
 
   void _handleFailure() {

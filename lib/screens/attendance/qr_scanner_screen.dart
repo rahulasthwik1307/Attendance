@@ -28,6 +28,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   bool _isProcessing = false;
   String _subjectPeriodLabel = 'Loading...';
   bool _infoLoaded = false;
+  String? _forwardedSubjectName;
+  String? _forwardedPeriodInfo;
   String? _errorMessage;
 
   @override
@@ -184,11 +186,13 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         _errorDismissTimer?.cancel();
         _errorMessage = null;
 
-        final DateTime? endTime =
-            ModalRoute.of(context)?.settings.arguments as DateTime?;
         Navigator.of(context).pushReplacementNamed(
           '/qr-face-verify',
-          arguments: {'session_id': sessionId, 'end_time': endTime},
+          arguments: {
+            'session_id': sessionId,
+            'subject_name': _forwardedSubjectName,
+            'period_info': _forwardedPeriodInfo,
+          },
         );
       }
     } catch (e) {
@@ -221,8 +225,26 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     // Read route args and start timer only once
     if (!_timerInitialized) {
       _timerInitialized = true;
-      final DateTime? endTime =
-          ModalRoute.of(context)?.settings.arguments as DateTime?;
+      final args = ModalRoute.of(context)?.settings.arguments;
+      DateTime? endTime;
+      if (args is Map) {
+        endTime = args['end_time'] as DateTime?;
+        _forwardedSubjectName = args['subject_name'] as String?;
+        _forwardedPeriodInfo = args['period_info'] as String?;
+        if (_forwardedSubjectName != null &&
+            _forwardedSubjectName!.isNotEmpty &&
+            _forwardedPeriodInfo != null &&
+            _forwardedPeriodInfo!.isNotEmpty) {
+          String cleanPeriod = _forwardedPeriodInfo!;
+          final timeRangeRegex = RegExp(r'\s+\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}');
+          cleanPeriod = cleanPeriod.replaceAll(timeRangeRegex, '').trim();
+          _forwardedPeriodInfo = cleanPeriod;
+          _subjectPeriodLabel = '$cleanPeriod — $_forwardedSubjectName';
+          _infoLoaded = true;
+        }
+      } else if (args is DateTime) {
+        endTime = args;
+      }
       if (endTime != null) {
         final remaining = endTime.difference(DateTime.now()).inSeconds;
         _secondsRemaining = remaining > 0 ? remaining : 0;
@@ -617,31 +639,17 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _subjectPeriodLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: isDark ? Colors.white : AppStyles.textDark,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Place QR code within the blue frame',
-                          style: TextStyle(
-                            color: isDark
-                                ? Colors.grey.shade400
-                                : AppStyles.textGray,
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
+                    child: Text(
+                      _subjectPeriodLabel,
+                      maxLines: 2,
+                      softWrap: true,
+                      style: TextStyle(
+                        color: isDark ? Colors.white : AppStyles.textDark,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13.5,
+                        letterSpacing: -0.2,
+                        height: 1.25,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),

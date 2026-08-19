@@ -2614,8 +2614,6 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           String formattedPeriod = 'Unknown Period';
           if (periodData != null) {
             final int periodNum = periodData['period_number'] as int? ?? 1;
-            final String start = periodData['start_time'] as String? ?? '';
-            final String end = periodData['end_time'] as String? ?? '';
 
             String getOrdinal(int n) {
               if (n >= 11 && n <= 13) return 'th';
@@ -2632,9 +2630,6 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             }
 
             formattedPeriod = '$periodNum${getOrdinal(periodNum)} Period';
-            if (start.isNotEmpty && end.isNotEmpty) {
-              formattedPeriod += ' $start - $end';
-            }
           }
 
           setState(() {
@@ -2797,6 +2792,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                         fontWeight: FontWeight.w600,
                         color: AppStyles.textGray,
                       ),
+                      maxLines: 2,
+                      softWrap: true,
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -2866,6 +2863,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                         fontWeight: FontWeight.w500,
                         color: AppStyles.errorRed.withValues(alpha: 0.8),
                       ),
+                      maxLines: 2,
+                      softWrap: true,
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -2941,6 +2940,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                         fontWeight: FontWeight.w600,
                         color: AppStyles.textGray,
                       ),
+                      maxLines: 2,
+                      softWrap: true,
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -3117,7 +3118,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                   const Icon(
                     Icons.menu_book_rounded,
                     size: 15,
-                    color: AppStyles.textGray,
+                    color: AppStyles.primaryBlue,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -3126,10 +3127,10 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                       style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
-                        color: AppStyles.textGray,
+                        color: AppStyles.textDark,
                       ),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
+                      maxLines: 2,
+                      softWrap: true,
                     ),
                   ),
                 ],
@@ -3142,13 +3143,14 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               onTapDown: (_) => setState(() => _ctaPressed = true),
               onTapUp: (_) {
                 setState(() => _ctaPressed = false);
-                // Pass absolute end time for perfect timer sync
                 final endTime = DateTime.now().add(
                   Duration(seconds: _secondsRemaining),
                 );
-                Navigator.of(
-                  context,
-                ).pushNamed('/qr-precheck', arguments: endTime);
+                Navigator.of(context).pushNamed('/qr-precheck', arguments: {
+                  'end_time': endTime,
+                  'subject_name': _subjectName,
+                  'period_info': _periodInfo,
+                });
               },
               onTapCancel: () => setState(() => _ctaPressed = false),
               child: AnimatedScale(
