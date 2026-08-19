@@ -2784,16 +2784,18 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                         letterSpacing: -0.3,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${widget.finalizedPeriod} — ${widget.finalizedSubject}',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppStyles.textGray,
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '${widget.finalizedPeriod} — ${widget.finalizedSubject}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppStyles.textGray,
+                        ),
+                        maxLines: 1,
                       ),
-                      maxLines: 2,
-                      softWrap: true,
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -2855,16 +2857,18 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                         letterSpacing: -0.2,
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      '${widget.absentPeriod} — ${widget.absentSubject}',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: AppStyles.errorRed.withValues(alpha: 0.8),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '${widget.absentPeriod} — ${widget.absentSubject}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: AppStyles.errorRed.withValues(alpha: 0.8),
+                        ),
+                        maxLines: 1,
                       ),
-                      maxLines: 2,
-                      softWrap: true,
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -2932,16 +2936,18 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                         letterSpacing: -0.3,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '$_periodInfo — $_subjectName',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppStyles.textGray,
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '$_periodInfo — $_subjectName',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppStyles.textGray,
+                        ),
+                        maxLines: 1,
                       ),
-                      maxLines: 2,
-                      softWrap: true,
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -3014,32 +3020,33 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
         : 0.0;
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10.0),
+      padding: const EdgeInsets.only(bottom: 12.0),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 500),
+        duration: const Duration(milliseconds: 400),
         curve: Curves.easeInOut,
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 15),
         decoration: BoxDecoration(
-          color: themeColor.withValues(alpha: 0.08),
+          color: Colors.white,
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: themeColor.withValues(alpha: 0.25),
+            color: themeColor.withValues(alpha: 0.28),
             width: 1.5,
           ),
-          boxShadow: glowOpacity > 0
-              ? [
-                  BoxShadow(
-                    color: themeColor.withValues(alpha: glowOpacity),
-                    blurRadius: 16,
-                    spreadRadius: 1,
-                  ),
-                ]
-              : [],
+          boxShadow: [
+            BoxShadow(
+              color: themeColor.withValues(
+                alpha: glowOpacity > 0 ? glowOpacity : 0.06,
+              ),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
+              spreadRadius: glowOpacity > 0 ? 1 : 0,
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Row 1: Status + Timer pill ─────────────────────
+            // ── Row 1: Status + Stable-Width Urgency Timer pill ──
             Row(
               children: [
                 _PulsingDot(color: themeColor),
@@ -3065,37 +3072,44 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w500,
-                          color: themeColor.withValues(alpha: 0.8),
+                          color: themeColor.withValues(alpha: 0.85),
                         ),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 8),
-                // Pulsing timer pill
+                // Stable timer pill with tabular figures to eliminate horizontal jitter
                 ScaleTransition(
                   scale: _timerPulseAnim,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 500),
+                  child: Container(
+                    constraints: const BoxConstraints(minWidth: 74),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
-                      vertical: 5,
+                      vertical: 5.5,
                     ),
                     decoration: BoxDecoration(
-                      color: themeColor.withValues(alpha: 0.18),
+                      color: themeColor.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: themeColor.withValues(alpha: 0.28),
+                        width: 1.2,
+                      ),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(Icons.timer_outlined, size: 14, color: themeColor),
-                        const SizedBox(width: 4),
+                        const SizedBox(width: 5),
                         Text(
                           '$minutes:$seconds',
                           style: TextStyle(
                             fontWeight: FontWeight.w800,
-                            fontSize: 15,
+                            fontSize: 13.5,
                             color: themeColor,
+                            letterSpacing: 0.3,
+                            fontFeatures: const [FontFeature.tabularFigures()],
                           ),
                         ),
                       ],
@@ -3106,31 +3120,38 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             ),
             const SizedBox(height: 12),
 
-            // ── Row 2: Period info ─────────────────────────────
+            // ── Row 2: Period info on a single auto-scaled line ─────
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8.5),
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.03),
+                color: AppStyles.backgroundLight,
                 borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: Colors.black.withValues(alpha: 0.04),
+                ),
               ),
               child: Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.menu_book_rounded,
                     size: 15,
-                    color: AppStyles.primaryBlue,
+                    color: AppStyles.textDark.withValues(alpha: 0.75),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      '$_periodInfo — $_subjectName',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppStyles.textDark,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '$_periodInfo — $_subjectName',
+                        maxLines: 1,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppStyles.textDark,
+                          letterSpacing: -0.1,
+                        ),
                       ),
-                      maxLines: 2,
-                      softWrap: true,
                     ),
                   ),
                 ],
@@ -3138,7 +3159,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             ),
             const SizedBox(height: 14),
 
-            // ── CTA with press scale ──────────────────────────
+            // ── Row 3: CTA with press scale ──────────────────────────
             GestureDetector(
               onTapDown: (_) => setState(() => _ctaPressed = true),
               onTapUp: (_) {
@@ -3161,10 +3182,14 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                   width: double.infinity,
                   child: ElevatedButton.icon(
                     onPressed: null, // handled by GestureDetector
-                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 20),
                     label: const Text(
                       'Scan QR Now',
-                      style: TextStyle(fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        letterSpacing: -0.2,
+                      ),
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: themeColor,

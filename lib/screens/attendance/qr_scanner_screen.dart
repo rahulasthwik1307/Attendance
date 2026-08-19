@@ -19,6 +19,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   late AnimationController _scanLineController;
   late AnimationController _bracketGlowController;
   late Animation<double> _bracketGlowOpacity;
+  late AnimationController _timerPulseController;
+  late Animation<double> _timerPulseAnimation;
   late MobileScannerController _scannerController;
   int _secondsRemaining = 180; // default, overridden from route args
   Timer? _countdownTimer;
@@ -50,6 +52,15 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     )..repeat(reverse: true);
     _bracketGlowOpacity = Tween<double>(begin: 0.65, end: 1.0).animate(
       CurvedAnimation(parent: _bracketGlowController, curve: Curves.easeInOut),
+    );
+
+    // Gentle breathing pulse for countdown timer
+    _timerPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat(reverse: true);
+    _timerPulseAnimation = Tween<double>(begin: 0.96, end: 1.0).animate(
+      CurvedAnimation(parent: _timerPulseController, curve: Curves.easeInOut),
     );
   }
 
@@ -94,6 +105,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
       if (mounted) {
         setState(() {
+          _forwardedPeriodInfo = '$periodNum${getOrdinal(periodNum)} Period';
+          _forwardedSubjectName = subjectName;
           _subjectPeriodLabel =
               '$periodNum${getOrdinal(periodNum)} Period — $subjectName';
           _infoLoaded = true;
@@ -102,6 +115,26 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     } catch (e) {
       debugPrint('[QR_SCANNER] Failed to fetch session info: $e');
     }
+  }
+
+  String get _periodText {
+    if (_forwardedPeriodInfo != null && _forwardedPeriodInfo!.isNotEmpty) {
+      return _forwardedPeriodInfo!;
+    }
+    if (_subjectPeriodLabel.contains(' — ')) {
+      return _subjectPeriodLabel.split(' — ').first;
+    }
+    return _infoLoaded ? 'Active Period' : 'Loading...';
+  }
+
+  String get _subjectText {
+    if (_forwardedSubjectName != null && _forwardedSubjectName!.isNotEmpty) {
+      return _forwardedSubjectName!;
+    }
+    if (_subjectPeriodLabel.contains(' — ')) {
+      return _subjectPeriodLabel.split(' — ').last;
+    }
+    return _subjectPeriodLabel;
   }
 
   // ── Real Supabase QR validation flow ─────────────────────────────────
@@ -353,6 +386,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     });
     _scanLineController.dispose();
     _bracketGlowController.dispose();
+    _timerPulseController.dispose();
     _countdownTimer?.cancel();
     super.dispose();
   }
@@ -427,22 +461,18 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     final double topSafe = MediaQuery.of(context).padding.top;
     final double bottomSafe = MediaQuery.of(context).padding.bottom;
 
-    // ── 1. Outer Camera Preview Geometry (Larger container) ───────────────────
-    final double cameraPreviewSize = math.min(
-      304.0,
-      screenSize.width - 40.0,
-    );
-    final double infoCardTop = topSafe + 54.0;
-    const double infoCardHeight = 64.0;
+    // ── 1. Top Info Card Geometry ──────────────────────────────────────────
+    final double infoCardTop = topSafe + 48.0;
+    const double infoCardHeight = 106.0;
     final double infoCardBottom = infoCardTop + infoCardHeight;
 
-    // Vertically balance the camera preview between the info card and instructions
-    final double idealCameraTop =
-        (screenSize.height - cameraPreviewSize) / 2 - 20.0;
-    final double cameraPreviewTop = math.max(
-      infoCardBottom + 16.0,
-      idealCameraTop,
+    // ── 2. Outer Camera Preview Geometry ────────────────────────────────────
+    final double cameraPreviewSize = math.min(
+      304.0,
+      screenSize.width - 48.0,
     );
+    // Shift camera preview + scanner group comfortably downward
+    final double cameraPreviewTop = infoCardBottom + 36.0;
     final double cameraPreviewLeft =
         (screenSize.width - cameraPreviewSize) / 2.0;
 
@@ -453,9 +483,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       cameraPreviewSize,
     );
 
-    // ── 2. Inner Blue QR Target Frame Geometry (Centered inside preview) ──────
-    // Equal inset on all four sides: left == right == top == bottom
-    const double targetInset = 36.0;
+    // ── 3. Inner Blue QR Target Frame Geometry (Centered inside preview) ──────
+    const double targetInset = 34.0;
     final double qrTargetSize = cameraPreviewSize - (targetInset * 2.0);
 
     final Rect qrTargetRect = Rect.fromLTWH(
@@ -592,99 +621,149 @@ class _QrScannerScreenState extends State<QrScannerScreen>
             ),
           ),
 
-          // ── Layer 4: Top Info Card (Header) ───────────────────────────────────
+          // ── Layer 4: Top Info Card (Premium Attendance Session Indicator) ─────
           Positioned(
             top: infoCardTop,
             left: 20,
             right: 20,
             child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 14,
-                vertical: 12,
-              ),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
               decoration: BoxDecoration(
                 color: isDark ? const Color(0xFF1E293B) : Colors.white,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(18),
                 border: Border.all(
                   color: isDark
                       ? Colors.white.withValues(alpha: 0.1)
                       : const Color(0xFFE2E8F0),
+                  width: 1.2,
                 ),
                 boxShadow: isDark
                     ? null
                     : [
                         BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.05),
-                          blurRadius: 16,
+                          color: Colors.black.withValues(alpha: 0.06),
+                          blurRadius: 18,
                           offset: const Offset(0, 4),
                         ),
                       ],
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: AppStyles.primaryBlue.withValues(
-                        alpha: isDark ? 0.2 : 0.08,
-                      ),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(
-                      Icons.menu_book_rounded,
-                      color: AppStyles.primaryBlue,
-                      size: 18,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      _subjectPeriodLabel,
-                      maxLines: 2,
-                      softWrap: true,
-                      style: TextStyle(
-                        color: isDark ? Colors.white : AppStyles.textDark,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13.5,
-                        letterSpacing: -0.2,
-                        height: 1.25,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 400),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: timerColor.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: timerColor.withValues(alpha: 0.25),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.timer_outlined,
-                          size: 13,
-                          color: timerColor,
+                  // ── Top Row: Icon  +  Period label  +  Timer pill ──────
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // Book icon
+                      Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: AppStyles.primaryBlue.withValues(
+                            alpha: isDark ? 0.22 : 0.09,
+                          ),
+                          borderRadius: BorderRadius.circular(11),
                         ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '$mm:$ss',
+                        child: const Icon(
+                          Icons.menu_book_rounded,
+                          color: AppStyles.primaryBlue,
+                          size: 19,
+                        ),
+                      ),
+                      const SizedBox(width: 11),
+
+                      // Period label (e.g. "4th Period") takes remaining space
+                      Expanded(
+                        child: Text(
+                          _periodText,
                           style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 13,
-                            color: timerColor,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: isDark
+                                ? Colors.grey.shade400
+                                : AppStyles.textGray,
+                            letterSpacing: -0.1,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+
+                      // ── Countdown timer pill ──────────────────────────
+                      ScaleTransition(
+                        scale: _timerPulseAnimation,
+                        child: Container(
+                          constraints: const BoxConstraints(minWidth: 76),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: timerColor.withValues(alpha: 0.11),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: timerColor.withValues(alpha: 0.30),
+                              width: 1.2,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.timer_outlined,
+                                size: 14,
+                                color: timerColor,
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                '$mm:$ss',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 13.5,
+                                  color: timerColor,
+                                  letterSpacing: 0.5,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 9),
+
+                  // ── Subject Name (full width — no clipping possible) ──
+                  Text(
+                    _subjectText,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: isDark ? Colors.white : AppStyles.textDark,
+                      letterSpacing: -0.4,
+                      height: 1.2,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+
+                  // ── Status line ───────────────────────────────────────
+                  Text(
+                    'Active attendance session',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w500,
+                      color: timerColor.withValues(alpha: 0.80),
+                      letterSpacing: 0.0,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
@@ -693,7 +772,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
           // ── Layer 5: Instructions below camera preview ────────────────────────
           Positioned(
-            top: cameraPreviewRect.bottom + 20.0,
+            top: cameraPreviewRect.bottom + 24.0,
             left: 20,
             right: 20,
             child: Column(
