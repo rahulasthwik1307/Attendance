@@ -45,7 +45,7 @@ class QrFaceVerifyScreen extends StatefulWidget {
 }
 
 class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   // ─── Animation controllers ──────────────────────────────────────────────
   late AnimationController _pulseController;
   late AnimationController _textFadeController;
@@ -53,15 +53,33 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   late AnimationController _successBounceController;
   late AnimationController _particleController;
 
-  // ─── Timer ring (Overall 60-second screen session) ───────────────────────
+  // ─── Timer ring (Authoritative attendance session window) ────────────────
   // Deliberately separate from the liveness challenge countdown timer.
   late AnimationController _timerPulseController;
   late Animation<double> _timerPulseAnim;
   late AnimationController _ringController;
   late Animation<double> _ringProgress;
-  static const int _totalSeconds = 60;
+  static const int _totalSeconds = 180;
   int _secondsRemaining = _totalSeconds;
+  DateTime? _sessionDeadline;
+  DateTime? _verificationDeadline;
+  DateTime? _verificationStartedAt;
+  bool _isRevalidatingSession = false;
   Timer? _countdownTimer;
+
+  int _calculateRemainingSeconds() {
+    if (_sessionDeadline != null) {
+      final remaining =
+          _sessionDeadline!.difference(DateTime.now().toUtc()).inSeconds;
+      return math.max(0, remaining);
+    }
+    if (_verificationDeadline != null) {
+      final remaining =
+          _verificationDeadline!.difference(DateTime.now().toUtc()).inSeconds;
+      return math.max(0, remaining);
+    }
+    return _totalSeconds;
+  }
 
   // ─── Camera ─────────────────────────────────────────────────────────────
   CameraController? _cameraController;
@@ -192,6 +210,10 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _verificationStartedAt ??= DateTime.now();
+    _verificationDeadline ??=
+        _verificationStartedAt!.add(const Duration(seconds: _totalSeconds));
 
     // ── Animation setup ────────────────────────────────────────────────────
     _pulseController = AnimationController(
@@ -243,6 +265,12 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map) {
         _sessionId = args['session_id'] as String?;
+        final forwardedDeadline = args['deadline'] as DateTime?;
+        if (forwardedDeadline != null) {
+          _sessionDeadline = forwardedDeadline;
+          _secondsRemaining = _calculateRemainingSeconds();
+          if (mounted) setState(() {});
+        }
         final forwardedSubject = args['subject_name'] as String?;
         final forwardedPeriod = args['period_info'] as String?;
         if (forwardedSubject != null &&
@@ -277,6 +305,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
             subject_id,
             period_id,
             status,
+            opened_at,
             subjects ( name ),
             periods ( period_number )
           ''')
@@ -285,6 +314,14 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
       if (data != null && mounted) {
         final status = data['status'] as String?;
+        final openedAtStr = data['opened_at'] as String?;
+        if (openedAtStr != null && _sessionDeadline == null) {
+          try {
+            final openedAt = DateTime.parse(openedAtStr).toUtc();
+            _sessionDeadline = openedAt.add(const Duration(seconds: 180));
+            _secondsRemaining = _calculateRemainingSeconds();
+          } catch (_) {}
+        }
         if (status != null && status != 'active') {
           FaceLogger.ver(
             _sessionId ?? 'QR_VER',
@@ -1787,13 +1824,13 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         timer.cancel();
         return;
       }
-      if (_secondsRemaining > 1) {
-        setState(() => _secondsRemaining--);
+      final remaining = _calculateRemainingSeconds();
+      setState(() => _secondsRemaining = remaining);
+      if (remaining > 0) {
         _timerPulseController.forward().then((_) {
           if (mounted) _timerPulseController.reverse();
         });
       } else {
-        setState(() => _secondsRemaining = 0);
         timer.cancel();
         if (mounted && !_isTerminal && _phase != _Phase.done) {
           FaceLogger.ver(
@@ -2262,7 +2299,47 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (mounted && !_isTerminal && _phase != _Phase.done) {
+        final remaining = _calculateRemainingSeconds();
+        setState(() => _secondsRemaining = remaining);
+        if (remaining <= 0) {
+          _countdownTimer?.cancel();
+          FaceLogger.ver(
+            _sessionId ?? 'QR_VER',
+            '60-second face verification timer expired while in background',
+          );
+          _navigateToTimeout(isTimeout: true);
+        } else {
+          _revalidateSessionOnResume();
+        }
+      }
+    }
+  }
+
+  Future<void> _revalidateSessionOnResume() async {
+    if (_sessionId == null || !mounted || _isRevalidatingSession) return;
+    _isRevalidatingSession = true;
+    try {
+      final isActive = await _isSessionActive();
+      if (!isActive && mounted && !_isTerminal && _phase != _Phase.done) {
+        FaceLogger.ver(
+          _sessionId ?? 'QR_VER',
+          'Teacher attendance session closed while app was backgrounded',
+        );
+        _navigateToTimeout(isTimeout: true);
+      }
+    } catch (e) {
+      debugPrint('[QR_FACE_VER] Error revalidating session on resume: $e');
+    } finally {
+      _isRevalidatingSession = false;
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _isTerminal = true;
     _countdownTimer?.cancel();
     _instructionDebounceTimer?.cancel();
@@ -2722,9 +2799,14 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                                                         key: const ValueKey('session_ring'),
                                                         animation: Listenable.merge([_ringProgress, _timerPulseAnim]),
                                                         builder: (context, _) {
-                                                          final Color ringColor = _secondsRemaining <= 5
+                                                          final Color ringColor = _secondsRemaining <= 30
                                                               ? AppStyles.errorRed
+                                                              : _secondsRemaining <= 60
+                                                              ? AppStyles.amberWarning
                                                               : AppStyles.primaryBlue;
+                                                          final String mm = (_secondsRemaining ~/ 60).toString().padLeft(2, '0');
+                                                          final String ss = (_secondsRemaining % 60).toString().padLeft(2, '0');
+                                                          final double progress = (_secondsRemaining / 180.0).clamp(0.0, 1.0);
                                                           return ScaleTransition(
                                                             scale: _timerPulseAnim,
                                                             child: Container(
@@ -2743,7 +2825,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                                                               ),
                                                               child: CustomPaint(
                                                                 painter: _MiniRingPainter(
-                                                                  progress: _ringProgress.value,
+                                                                  progress: progress,
                                                                   color: ringColor,
                                                                 ),
                                                                 child: Center(
@@ -2759,12 +2841,13 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                                                                       );
                                                                     },
                                                                     child: Text(
-                                                                      '${_secondsRemaining}s',
+                                                                      '$mm:$ss',
                                                                       key: ValueKey<int>(_secondsRemaining),
                                                                       style: const TextStyle(
-                                                                        fontSize: 13,
+                                                                        fontSize: 11.5,
                                                                         fontWeight: FontWeight.w800,
                                                                         color: Color(0xFF0F172A),
+                                                                        letterSpacing: -0.3,
                                                                       ),
                                                                     ),
                                                                   ),

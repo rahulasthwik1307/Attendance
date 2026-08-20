@@ -15,7 +15,7 @@ class QrScannerScreen extends StatefulWidget {
 }
 
 class _QrScannerScreenState extends State<QrScannerScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   late AnimationController _scanLineController;
   late AnimationController _bracketGlowController;
   late Animation<double> _bracketGlowOpacity;
@@ -23,6 +23,9 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   late Animation<double> _timerPulseAnimation;
   late MobileScannerController _scannerController;
   int _secondsRemaining = 180; // default, overridden from route args
+  String? _sessionId;
+  DateTime? _sessionDeadline;
+  bool _isRevalidating = false;
   Timer? _countdownTimer;
   Timer? _errorDismissTimer;
   bool _hasNavigated = false;
@@ -35,9 +38,17 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   String? _forwardedPeriodTiming;
   String? _errorMessage;
 
+  int _calculateRemaining() {
+    if (_sessionDeadline == null) return _secondsRemaining;
+    final remaining =
+        _sessionDeadline!.difference(DateTime.now().toUtc()).inSeconds;
+    return math.max(0, remaining);
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     _scannerController = MobileScannerController();
 
@@ -209,6 +220,25 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         return;
       }
 
+      final sessionRecord = sessionRows[0];
+      final openedAtStr = sessionRecord['opened_at'] as String?;
+      DateTime? sessionDeadline;
+      if (openedAtStr != null) {
+        try {
+          final openedAt = DateTime.parse(openedAtStr).toUtc();
+          sessionDeadline = openedAt.add(const Duration(seconds: 180));
+        } catch (_) {}
+      }
+
+      if (sessionDeadline != null) {
+        final remaining =
+            sessionDeadline.difference(DateTime.now().toUtc()).inSeconds;
+        if (remaining <= 0) {
+          _showError('Attendance window has closed.');
+          return;
+        }
+      }
+
       // ── Step 4: Upsert attendance as pending — face verify will upgrade to present ───────
       try {
         await supabase.from('period_attendance').upsert({
@@ -242,8 +272,10 @@ class _QrScannerScreenState extends State<QrScannerScreen>
           '/qr-face-verify',
           arguments: {
             'session_id': sessionId,
+            'deadline': sessionDeadline ?? _sessionDeadline,
             'subject_name': _forwardedSubjectName,
             'period_info': _forwardedPeriodInfo,
+            'period_timing': _forwardedPeriodTiming,
           },
         );
       }
@@ -280,6 +312,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       final args = ModalRoute.of(context)?.settings.arguments;
       DateTime? endTime;
       if (args is Map) {
+        _sessionId = args['session_id'] as String?;
+        _sessionDeadline = args['deadline'] as DateTime?;
         endTime = args['end_time'] as DateTime?;
         _forwardedSubjectName = args['subject_name'] as String?;
         _forwardedPeriodInfo = args['period_info'] as String?;
@@ -315,24 +349,89 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       } else if (args is DateTime) {
         endTime = args;
       }
-      if (endTime != null) {
-        final remaining = endTime.difference(DateTime.now()).inSeconds;
-        _secondsRemaining = remaining > 0 ? remaining : 0;
+      _sessionDeadline ??= endTime;
+      if (_sessionDeadline != null) {
+        _secondsRemaining = _calculateRemaining();
+      }
+      if (_sessionId != null) {
+        _revalidateSession();
       }
       _startCountdown();
     }
   }
 
+  Future<void> _revalidateSession() async {
+    if (_sessionId == null || !mounted || _isRevalidating) return;
+    _isRevalidating = true;
+    try {
+      final sessionData = await supabase
+          .from('attendance_sessions')
+          .select('status, opened_at, subject_id, period_id')
+          .eq('id', _sessionId!)
+          .maybeSingle();
+
+      if (!mounted || _hasNavigated) return;
+      if (sessionData == null || sessionData['status'] != 'active') {
+        _countdownTimer?.cancel();
+        _showWindowClosedDialog();
+        return;
+      }
+
+      final openedAtStr = sessionData['opened_at'] as String?;
+      if (openedAtStr != null) {
+        try {
+          final openedAt = DateTime.parse(openedAtStr).toUtc();
+          _sessionDeadline = openedAt.add(const Duration(seconds: 180));
+          final remaining = _calculateRemaining();
+          setState(() => _secondsRemaining = remaining);
+          if (remaining <= 0) {
+            _countdownTimer?.cancel();
+            _showWindowClosedDialog();
+            return;
+          }
+        } catch (_) {}
+      }
+
+      if (!_infoLoaded) {
+        _fetchSessionInfo(_sessionId!);
+      }
+    } catch (e) {
+      debugPrint('[QR_SCANNER] Error revalidating session: $e');
+    } finally {
+      _isRevalidating = false;
+    }
+  }
+
   void _startCountdown() {
+    _countdownTimer?.cancel();
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_secondsRemaining > 0) {
-        setState(() => _secondsRemaining--);
-        if (_secondsRemaining == 0) {
-          timer.cancel();
-          _showWindowClosedDialog();
-        }
+      if (!mounted || _hasNavigated) {
+        timer.cancel();
+        return;
+      }
+      final remaining = _calculateRemaining();
+      setState(() => _secondsRemaining = remaining);
+      if (remaining <= 0) {
+        timer.cancel();
+        _showWindowClosedDialog();
       }
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (mounted && !_hasNavigated) {
+        final remaining = _calculateRemaining();
+        setState(() => _secondsRemaining = remaining);
+        if (remaining <= 0) {
+          _countdownTimer?.cancel();
+          _showWindowClosedDialog();
+        } else {
+          _revalidateSession();
+        }
+      }
+    }
   }
 
   void _showWindowClosedDialog() {
@@ -411,6 +510,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _errorDismissTimer?.cancel();
     qrScannerReleaseCompleter = Completer<void>();
     Future(() async {

@@ -2271,10 +2271,12 @@ class _AttendanceBanner extends StatefulWidget {
 }
 
 class _AttendanceBannerState extends State<_AttendanceBanner>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   VoidCallback? get _onSessionFinalized => widget.onSessionFinalized;
 
   int _secondsRemaining = 0;
+  DateTime? _sessionDeadline;
+  bool _isSyncing = false;
   Timer? _countdownTimer;
   String? _activeSessionId;
   bool _isVisible = false;
@@ -2300,9 +2302,17 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   Timer? _pollingTimer;
   Timer? _finalizationPollingTimer;
 
+  int _calculateRemainingSeconds() {
+    if (_sessionDeadline == null) return 0;
+    final remaining =
+        _sessionDeadline!.difference(DateTime.now().toUtc()).inSeconds;
+    return math.max(0, remaining);
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _timerPulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 600),
@@ -2497,26 +2507,19 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   }
 
   Future<void> _syncAttendanceState({String? targetSessionId}) async {
-    if (_userClassId == null || !mounted) return;
+    if (_userClassId == null || !mounted || _isSyncing) return;
+    _isSyncing = true;
     final user = supabase.auth.currentUser;
-    if (user == null) return;
+    if (user == null) {
+      _isSyncing = false;
+      return;
+    }
 
     try {
       Map<String, dynamic>? currentSession;
 
-      // 1. If targetSessionId provided, query it directly
-      if (targetSessionId != null) {
-        currentSession = await supabase
-            .from('attendance_sessions')
-            .select(
-              'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at',
-            )
-            .eq('id', targetSessionId)
-            .maybeSingle();
-      }
-
-      // 2. Otherwise look for active or reviewing sessions for this class
-      currentSession ??= await supabase
+      // 1. Always prioritize the latest ACTIVE or REVIEWING session for this class
+      currentSession = await supabase
           .from('attendance_sessions')
           .select(
             'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at',
@@ -2527,7 +2530,19 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           .limit(1)
           .maybeSingle();
 
-      // 3. If no active/reviewing session, look for the latest finalized session
+      // 2. If no active/reviewing session and targetSessionId provided, query it
+      if (currentSession == null && targetSessionId != null) {
+        currentSession = await supabase
+            .from('attendance_sessions')
+            .select(
+              'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at',
+            )
+            .eq('id', targetSessionId)
+            .eq('class_id', _userClassId!)
+            .maybeSingle();
+      }
+
+      // 3. If still no session, look for the latest finalized session for this class
       currentSession ??= await supabase
           .from('attendance_sessions')
           .select(
@@ -2543,6 +2558,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
       if (currentSession == null) {
         // No session exists for this class
+        _sessionDeadline = null;
         if (!_hasMarkedAttendance &&
             !widget.teacherFinalized &&
             !widget.teacherFinalizedAbsent) {
@@ -2554,17 +2570,6 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       final sessionId = currentSession['id'] as String;
       final sessionStatus = currentSession['status'] as String?;
       final openedAtStr = currentSession['opened_at'] as String?;
-
-      // Check for new session transition (e.g. Session A -> Session B)
-      if (_activeSessionId != null &&
-          _activeSessionId != sessionId &&
-          sessionStatus == 'active') {
-        _activeSessionId = sessionId;
-        _hasMarkedAttendance = false;
-        widget.onNewSession?.call();
-      } else {
-        _activeSessionId = sessionId;
-      }
 
       // Query student's period_attendance record for THIS EXACT sessionId
       final attendanceRecord = await supabase
@@ -2585,26 +2590,45 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
       // 1. ACTIVE SESSION
       if (sessionStatus == 'active') {
+        final bool isNewSession =
+            _activeSessionId != null && _activeSessionId != sessionId;
+
+        if (openedAtStr != null) {
+          try {
+            final openedAt = DateTime.parse(openedAtStr).toUtc();
+            _sessionDeadline = openedAt.add(const Duration(seconds: 180));
+          } catch (_) {
+            _sessionDeadline = null;
+          }
+        } else {
+          _sessionDeadline = null;
+        }
+
+        final remainingSeconds = _calculateRemainingSeconds();
+
         if (studentStatus == 'present' && faceVerified) {
           // Submitted and verified -> waiting for teacher to finalize
+          _sessionDeadline = null;
           _countdownTimer?.cancel();
           _pollingTimer?.cancel();
           _pollingTimer = null;
+          _activeSessionId = sessionId;
+          if (isNewSession) {
+            widget.onNewSession?.call();
+          }
           setState(() {
+            _secondsRemaining = 0;
             _hasMarkedAttendance = true;
             _isVisible = true;
             _isClosed = false;
           });
         } else {
           // Not verified -> active QR scanning banner
-          int remainingSeconds = 180;
-          if (openedAtStr != null) {
-            final openedAt = DateTime.parse(openedAtStr).toLocal();
-            final elapsed = DateTime.now().difference(openedAt).inSeconds;
-            remainingSeconds = math.max(0, 180 - elapsed);
-          }
-
           if (remainingSeconds > 0) {
+            _activeSessionId = sessionId;
+            if (isNewSession) {
+              widget.onNewSession?.call();
+            }
             setState(() {
               _secondsRemaining = remainingSeconds;
               _hasMarkedAttendance = false;
@@ -2619,6 +2643,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       }
       // 2. REVIEWING SESSION
       else if (sessionStatus == 'reviewing') {
+        _activeSessionId = sessionId;
+        _sessionDeadline = null;
         _countdownTimer?.cancel();
         _pollingTimer?.cancel();
         _pollingTimer = null;
@@ -2626,6 +2652,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
         if (studentStatus == 'present' && faceVerified) {
           // Keep showing waiting for teacher to finalize
           setState(() {
+            _secondsRemaining = 0;
             _hasMarkedAttendance = true;
             _isVisible = true;
             _isClosed = false;
@@ -2633,6 +2660,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
         } else {
           // Active scanning is closed, but NOT final absent yet
           setState(() {
+            _secondsRemaining = 0;
             _hasMarkedAttendance = false;
             _isClosed = true;
             _isVisible = false;
@@ -2641,6 +2669,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       }
       // 3. FINALIZED SESSION
       else if (sessionStatus == 'finalized') {
+        _activeSessionId = sessionId;
+        _sessionDeadline = null;
         _countdownTimer?.cancel();
         _pollingTimer?.cancel();
         _pollingTimer = null;
@@ -2654,6 +2684,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
         if (studentStatus == 'present' && faceVerified) {
           setState(() {
+            _secondsRemaining = 0;
             _hasMarkedAttendance = false;
             _isClosed = false;
             _isVisible = true;
@@ -2669,6 +2700,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               ? _periodInfo
               : widget.absentPeriod;
           setState(() {
+            _secondsRemaining = 0;
             _hasMarkedAttendance = false;
             _isClosed = false;
             _isVisible = false;
@@ -2680,6 +2712,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       }
     } catch (e) {
       debugPrint('[BANNER] Error syncing attendance state: $e');
+    } finally {
+      _isSyncing = false;
     }
   }
 
@@ -2710,19 +2744,17 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   void _startTimer() {
     _countdownTimer?.cancel();
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_secondsRemaining > 0) {
-        if (!mounted) {
-          timer.cancel();
-          return;
-        }
-        setState(() => _secondsRemaining--);
-        _timerPulseController.forward().then((_) {
-          if (mounted) _timerPulseController.reverse();
-        });
-        if (_secondsRemaining <= 0) {
-          _closeBanner();
-        }
-      } else {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final remaining = _calculateRemainingSeconds();
+      setState(() => _secondsRemaining = remaining);
+      _timerPulseController.forward().then((_) {
+        if (mounted) _timerPulseController.reverse();
+      });
+      if (remaining <= 0) {
+        timer.cancel();
         _closeBanner();
       }
     });
@@ -2730,6 +2762,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
   void _closeBanner() {
     _activeSessionId = null;
+    _sessionDeadline = null;
     _countdownTimer?.cancel();
     if (!mounted) return;
     setState(() => _isClosed = true);
@@ -2739,7 +2772,21 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (mounted) {
+        final remaining = _calculateRemainingSeconds();
+        setState(() => _secondsRemaining = remaining);
+        if (_userClassId != null) {
+          _syncAttendanceState();
+        }
+      }
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _subscription?.unsubscribe();
     _attendanceSubscription?.unsubscribe();
     _pollingTimer?.cancel();
@@ -3041,6 +3088,11 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       );
     }
 
+    // Do not render active window if countdown is not initialized or expired
+    if (_secondsRemaining <= 0) {
+      return const SizedBox.shrink();
+    }
+
     final Color themeColor = _secondsRemaining <= 30
         ? AppStyles.errorRed
         : _secondsRemaining <= 60
@@ -3202,12 +3254,15 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               onTapDown: (_) => setState(() => _ctaPressed = true),
               onTapUp: (_) {
                 setState(() => _ctaPressed = false);
-                final endTime = DateTime.now().add(
-                  Duration(seconds: _secondsRemaining),
-                );
+                final endTime = _sessionDeadline ??
+                    DateTime.now().add(
+                      Duration(seconds: _secondsRemaining),
+                    );
                 Navigator.of(context).pushNamed(
                   '/qr-precheck',
                   arguments: {
+                    'session_id': _activeSessionId,
+                    'deadline': _sessionDeadline,
                     'end_time': endTime,
                     'subject_name': _subjectName,
                     'period_info': _periodInfo,

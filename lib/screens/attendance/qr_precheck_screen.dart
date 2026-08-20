@@ -188,11 +188,15 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
     if (!mounted) return;
 
     final args = ModalRoute.of(context)?.settings.arguments;
+    String? sessionId;
+    DateTime? deadline;
     DateTime? endTime;
     String? subjectName;
     String? periodInfo;
     String? periodTiming;
     if (args is Map) {
+      sessionId = args['session_id'] as String?;
+      deadline = args['deadline'] as DateTime?;
       endTime = args['end_time'] as DateTime?;
       subjectName = args['subject_name'] as String?;
       periodInfo = args['period_info'] as String?;
@@ -204,7 +208,9 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
     Navigator.of(context).pushReplacementNamed(
       '/qr-scanner',
       arguments: {
-        'end_time': endTime,
+        'session_id': sessionId,
+        'deadline': deadline,
+        'end_time': deadline ?? endTime,
         'subject_name': subjectName,
         'period_info': periodInfo,
         'period_timing': periodTiming,
