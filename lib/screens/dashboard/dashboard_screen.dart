@@ -2298,6 +2298,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
   RealtimeChannel? _attendanceSubscription;
   String? _userClassId;
   Timer? _pollingTimer;
+  Timer? _finalizationPollingTimer;
 
   @override
   void initState() {
@@ -2330,11 +2331,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       _userClassId = studentData['class_id'] as String;
       debugPrint('AttendanceBanner: Fetched user class_id = $_userClassId');
 
-      // 2. Fetch active session initially - call twice to handle race condition
-      _fetchActiveSession();
-      Future.delayed(const Duration(milliseconds: 1500), () {
-        if (mounted) _fetchActiveSession();
-      });
+      // 2. Initial authoritative state sync
+      _syncAttendanceState();
 
       // 3. Subscribe to period_attendance for this student
       _attendanceSubscription = supabase
@@ -2350,26 +2348,20 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             ),
             callback: (payload) {
               final newRecord = payload.newRecord;
-              final status = newRecord['status'] as String?;
-              final faceVerified = newRecord['face_verified'] as bool? ?? false;
-              // Student verified present while active -> show waiting for teacher finalization banner
-              if (status == 'present' && faceVerified && mounted) {
-                setState(() {
-                  _hasMarkedAttendance = true;
-                });
-                _countdownTimer?.cancel();
-                _pollingTimer?.cancel();
-                _pollingTimer = null;
-              } else if ((status == 'absent' || status == 'failed') && mounted) {
-                setState(() {
-                  _hasMarkedAttendance = false;
-                });
+              final recordSessionId = newRecord['session_id'] as String?;
+              debugPrint(
+                '[BANNER] period_attendance event: sessionId=$recordSessionId',
+              );
+              if (mounted) {
+                _syncAttendanceState(
+                  targetSessionId: recordSessionId ?? _activeSessionId,
+                );
               }
             },
           )
           .subscribe();
 
-      // 4. Single unified channel for attendance_sessions — handles active, reviewing, and finalized
+      // 4. Unified channel for attendance_sessions for student's class
       _subscription = supabase
           .channel('attendance_sessions_class_$_userClassId')
           .onPostgresChanges(
@@ -2381,7 +2373,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               column: 'class_id',
               value: _userClassId!,
             ),
-            callback: (payload) async {
+            callback: (payload) {
               final newRecord = payload.newRecord;
               final status = newRecord['status'] as String?;
               final sessionId = newRecord['id'] as String?;
@@ -2390,17 +2382,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                 '[BANNER] attendance_sessions event: status=$status sessionId=$sessionId',
               );
 
-              if (status == 'finalized' && mounted) {
-                debugPrint('[BANNER] Session finalized event received');
-                await _handleFinalization(sessionId);
-              } else if (status == 'active') {
-                _fetchActiveSession();
-              } else if (status == 'reviewing') {
-                // Reviewing: Active scanning is closed, teacher reviewing.
-                // Stop the active session timer/polling if still running.
-                _countdownTimer?.cancel();
-                _pollingTimer?.cancel();
-                _pollingTimer = null;
+              if (mounted) {
+                _syncAttendanceState(targetSessionId: sessionId);
               }
             },
           )
@@ -2408,171 +2391,307 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             debugPrint('[BANNER] Unified channel status: $status error=$error');
           });
 
-      // 5. Polling fallback — checks every 15s for latest finalized session
+      // 5. Polling fallback
       _startFinalizationPolling();
     } catch (e) {
       debugPrint('Error initializing realtime: $e');
     }
   }
 
-  Future<void> _handleFinalization(String? sessionId) async {
-    if (sessionId == null) return;
-    final user = supabase.auth.currentUser;
-    if (user == null) return;
+  Future<void> _fetchSessionMetadata(Map<String, dynamic> sessionData) async {
+    final subjectId = sessionData['subject_id'];
+    final periodId = sessionData['period_id'];
+    final teacherId = sessionData['teacher_id'];
 
-    debugPrint(
-      '[BANNER] Checking period_attendance for sessionId=$sessionId studentId=${user.id}',
-    );
-    final record = await supabase
-        .from('period_attendance')
-        .select('status, face_verified')
-        .eq('session_id', sessionId)
-        .eq('student_id', user.id)
-        .maybeSingle();
+    try {
+      final futures = <Future<dynamic>>[];
+      if (subjectId != null) {
+        futures.add(
+          supabase
+              .from('subjects')
+              .select('name')
+              .eq('id', subjectId)
+              .maybeSingle(),
+        );
+      } else {
+        futures.add(Future.value(null));
+      }
 
-    debugPrint('[BANNER] period_attendance result: $record');
-    final studentStatus = record?['status'] as String?;
-    final faceVerified = record?['face_verified'] as bool? ?? false;
-    debugPrint(
-      '[BANNER] Student status in finalized session: $studentStatus, faceVerified: $faceVerified',
-    );
+      if (periodId != null) {
+        futures.add(
+          supabase
+              .from('periods')
+              .select('period_number, start_time, end_time')
+              .eq('id', periodId)
+              .maybeSingle(),
+        );
+      } else {
+        futures.add(Future.value(null));
+      }
 
-    // Fetch subject and period info if not already loaded or for session details
-    String displaySubject = _subjectName;
-    String displayPeriod = _periodInfo;
+      if (teacherId != null) {
+        futures.add(
+          supabase
+              .from('teachers')
+              .select('id')
+              .eq('id', teacherId)
+              .maybeSingle()
+              .then((t) async {
+                if (t != null) {
+                  return await supabase
+                      .from('users')
+                      .select('full_name')
+                      .eq('id', teacherId)
+                      .maybeSingle();
+                }
+                return null;
+              }),
+        );
+      } else {
+        futures.add(Future.value(null));
+      }
 
-    if (displaySubject.isEmpty || displayPeriod.isEmpty) {
-      try {
-        final sessionData = await supabase
-            .from('attendance_sessions')
-            .select('subject_id, period_id')
-            .eq('id', sessionId)
-            .maybeSingle();
+      final results = await Future.wait(futures);
+      final subjectData = results[0] as Map<String, dynamic>?;
+      final periodData = results[1] as Map<String, dynamic>?;
+      final teacherData = results[2] as Map<String, dynamic>?;
 
-        if (sessionData != null) {
-          final subjectId = sessionData['subject_id'];
-          final periodId = sessionData['period_id'];
+      if (subjectData != null && subjectData['name'] != null) {
+        _subjectName = subjectData['name'] as String? ?? 'Unknown Subject';
+      }
 
-          final results = await Future.wait([
-            supabase
-                .from('subjects')
-                .select('name')
-                .eq('id', subjectId)
-                .maybeSingle(),
-            supabase
-                .from('periods')
-                .select('period_number')
-                .eq('id', periodId)
-                .maybeSingle(),
-          ]);
+      if (periodData != null) {
+        final int periodNum = periodData['period_number'] as int? ?? 1;
 
-          final sData = results[0];
-          final pData = results[1];
-
-          if (sData != null) {
-            displaySubject = sData['name'] as String? ?? '';
-          }
-          if (pData != null) {
-            final pNum = pData['period_number'] as int? ?? 1;
-            String getOrdinal(int n) {
-              if (n >= 11 && n <= 13) return 'th';
-              switch (n % 10) {
-                case 1:
-                  return 'st';
-                case 2:
-                  return 'nd';
-                case 3:
-                  return 'rd';
-                default:
-                  return 'th';
-              }
-            }
-            displayPeriod = '$pNum${getOrdinal(pNum)} Period';
+        String getOrdinal(int n) {
+          if (n >= 11 && n <= 13) return 'th';
+          switch (n % 10) {
+            case 1:
+              return 'st';
+            case 2:
+              return 'nd';
+            case 3:
+              return 'rd';
+            default:
+              return 'th';
           }
         }
-      } catch (e) {
-        debugPrint('[BANNER] Error fetching session details: $e');
+
+        _periodInfo = '$periodNum${getOrdinal(periodNum)} Period';
+
+        final rawStart = periodData['start_time'] as String? ?? '';
+        final rawEnd = periodData['end_time'] as String? ?? '';
+        if (rawStart.isNotEmpty && rawEnd.isNotEmpty) {
+          final s = rawStart.length >= 5 ? rawStart.substring(0, 5) : rawStart;
+          final e = rawEnd.length >= 5 ? rawEnd.substring(0, 5) : rawEnd;
+          _periodTiming = '$s - $e';
+        }
       }
-    }
 
-    final savedSubject = displaySubject.isNotEmpty
-        ? displaySubject
-        : widget.finalizedSubject;
-    final savedPeriod = displayPeriod.isNotEmpty
-        ? displayPeriod
-        : widget.finalizedPeriod;
-
-    if (studentStatus == 'present' && faceVerified && mounted) {
-      setState(() {
-        _hasMarkedAttendance = false;
-        _isClosed = false;
-        _isVisible = true;
-      });
-      debugPrint('[BANNER] Showing green confirmed card');
-      widget.onTeacherFinalized?.call(savedSubject, savedPeriod);
-      _onSessionFinalized?.call();
-    } else if (mounted) {
-      final absentSub = displaySubject.isNotEmpty
-          ? displaySubject
-          : widget.absentSubject;
-      final absentPer = displayPeriod.isNotEmpty
-          ? displayPeriod
-          : widget.absentPeriod;
-      setState(() {
-        _hasMarkedAttendance = false;
-        _isClosed = false;
-        _isVisible = false;
-      });
-      debugPrint('[BANNER] Student not present ($studentStatus) — showing absent card');
-      widget.onTeacherFinalizedAbsent?.call(absentSub, absentPer);
-      _onSessionFinalized?.call();
+      if (teacherData != null && teacherData['full_name'] != null) {
+        _teacherName = teacherData['full_name'] as String? ?? 'Unknown Teacher';
+      }
+    } catch (e) {
+      debugPrint('[BANNER] Error fetching session metadata: $e');
     }
   }
 
-  String? _lastCheckedFinalizedSessionId;
+  Future<void> _syncAttendanceState({String? targetSessionId}) async {
+    if (_userClassId == null || !mounted) return;
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    try {
+      Map<String, dynamic>? currentSession;
+
+      // 1. If targetSessionId provided, query it directly
+      if (targetSessionId != null) {
+        currentSession = await supabase
+            .from('attendance_sessions')
+            .select(
+              'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at',
+            )
+            .eq('id', targetSessionId)
+            .maybeSingle();
+      }
+
+      // 2. Otherwise look for active or reviewing sessions for this class
+      currentSession ??= await supabase
+          .from('attendance_sessions')
+          .select(
+            'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at',
+          )
+          .eq('class_id', _userClassId!)
+          .inFilter('status', ['active', 'reviewing'])
+          .order('opened_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      // 3. If no active/reviewing session, look for the latest finalized session
+      currentSession ??= await supabase
+          .from('attendance_sessions')
+          .select(
+            'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at',
+          )
+          .eq('class_id', _userClassId!)
+          .eq('status', 'finalized')
+          .order('finalized_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      if (!mounted) return;
+
+      if (currentSession == null) {
+        // No session exists for this class
+        if (!_hasMarkedAttendance &&
+            !widget.teacherFinalized &&
+            !widget.teacherFinalizedAbsent) {
+          _closeBanner();
+        }
+        return;
+      }
+
+      final sessionId = currentSession['id'] as String;
+      final sessionStatus = currentSession['status'] as String?;
+      final openedAtStr = currentSession['opened_at'] as String?;
+
+      // Check for new session transition (e.g. Session A -> Session B)
+      if (_activeSessionId != null &&
+          _activeSessionId != sessionId &&
+          sessionStatus == 'active') {
+        _activeSessionId = sessionId;
+        _hasMarkedAttendance = false;
+        widget.onNewSession?.call();
+      } else {
+        _activeSessionId = sessionId;
+      }
+
+      // Query student's period_attendance record for THIS EXACT sessionId
+      final attendanceRecord = await supabase
+          .from('period_attendance')
+          .select('status, face_verified')
+          .eq('session_id', sessionId)
+          .eq('student_id', user.id)
+          .maybeSingle();
+
+      final studentStatus = attendanceRecord?['status'] as String?;
+      final faceVerified = attendanceRecord?['face_verified'] as bool? ?? false;
+
+      // Fetch metadata for subject and period
+      await _fetchSessionMetadata(currentSession);
+      if (!mounted) return;
+
+      // ── EVALUATE AUTHORITATIVE LIFECYCLE ──
+
+      // 1. ACTIVE SESSION
+      if (sessionStatus == 'active') {
+        if (studentStatus == 'present' && faceVerified) {
+          // Submitted and verified -> waiting for teacher to finalize
+          _countdownTimer?.cancel();
+          _pollingTimer?.cancel();
+          _pollingTimer = null;
+          setState(() {
+            _hasMarkedAttendance = true;
+            _isVisible = true;
+            _isClosed = false;
+          });
+        } else {
+          // Not verified -> active QR scanning banner
+          int remainingSeconds = 180;
+          if (openedAtStr != null) {
+            final openedAt = DateTime.parse(openedAtStr).toLocal();
+            final elapsed = DateTime.now().difference(openedAt).inSeconds;
+            remainingSeconds = math.max(0, 180 - elapsed);
+          }
+
+          if (remainingSeconds > 0) {
+            setState(() {
+              _secondsRemaining = remainingSeconds;
+              _hasMarkedAttendance = false;
+              _isClosed = false;
+              _isVisible = true;
+            });
+            _startTimer();
+          } else {
+            _closeBanner();
+          }
+        }
+      }
+      // 2. REVIEWING SESSION
+      else if (sessionStatus == 'reviewing') {
+        _countdownTimer?.cancel();
+        _pollingTimer?.cancel();
+        _pollingTimer = null;
+
+        if (studentStatus == 'present' && faceVerified) {
+          // Keep showing waiting for teacher to finalize
+          setState(() {
+            _hasMarkedAttendance = true;
+            _isVisible = true;
+            _isClosed = false;
+          });
+        } else {
+          // Active scanning is closed, but NOT final absent yet
+          setState(() {
+            _hasMarkedAttendance = false;
+            _isClosed = true;
+            _isVisible = false;
+          });
+        }
+      }
+      // 3. FINALIZED SESSION
+      else if (sessionStatus == 'finalized') {
+        _countdownTimer?.cancel();
+        _pollingTimer?.cancel();
+        _pollingTimer = null;
+
+        final savedSubject = _subjectName.isNotEmpty
+            ? _subjectName
+            : widget.finalizedSubject;
+        final savedPeriod = _periodInfo.isNotEmpty
+            ? _periodInfo
+            : widget.finalizedPeriod;
+
+        if (studentStatus == 'present' && faceVerified) {
+          setState(() {
+            _hasMarkedAttendance = false;
+            _isClosed = false;
+            _isVisible = true;
+          });
+          debugPrint('[BANNER] Authoritative Finalized: Present');
+          widget.onTeacherFinalized?.call(savedSubject, savedPeriod);
+          _onSessionFinalized?.call();
+        } else {
+          final absentSub = _subjectName.isNotEmpty
+              ? _subjectName
+              : widget.absentSubject;
+          final absentPer = _periodInfo.isNotEmpty
+              ? _periodInfo
+              : widget.absentPeriod;
+          setState(() {
+            _hasMarkedAttendance = false;
+            _isClosed = false;
+            _isVisible = false;
+          });
+          debugPrint('[BANNER] Authoritative Finalized: Absent ($studentStatus)');
+          widget.onTeacherFinalizedAbsent?.call(absentSub, absentPer);
+          _onSessionFinalized?.call();
+        }
+      }
+    } catch (e) {
+      debugPrint('[BANNER] Error syncing attendance state: $e');
+    }
+  }
 
   void _startFinalizationPolling() {
-    // Poll every 15s as fallback for when realtime misses events
-    Timer.periodic(const Duration(seconds: 15), (timer) async {
+    _finalizationPollingTimer?.cancel();
+    _finalizationPollingTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       if (!mounted) {
         timer.cancel();
         return;
       }
       if (_userClassId == null) return;
-      // Only check if we're in a state where we might be waiting for finalization
-      if (!_hasMarkedAttendance &&
-          !widget.teacherFinalized &&
-          !widget.teacherFinalizedAbsent) {
-        return;
-      }
-
-      final user = supabase.auth.currentUser;
-      if (user == null) return;
-
-      try {
-        // Find the most recently finalized session for this class
-        final sessions = await supabase
-            .from('attendance_sessions')
-            .select('id')
-            .eq('class_id', _userClassId!)
-            .eq('status', 'finalized')
-            .order('finalized_at', ascending: false)
-            .limit(1);
-
-        if (sessions.isEmpty) return;
-        final latestId = sessions.first['id'] as String;
-
-        // Don't re-process the same session
-        if (latestId == _lastCheckedFinalizedSessionId) return;
-        _lastCheckedFinalizedSessionId = latestId;
-
-        debugPrint(
-          '[BANNER] Polling fallback: checking finalized session $latestId',
-        );
-        await _handleFinalization(latestId);
-      } catch (e) {
-        debugPrint('[BANNER] Polling fallback error: $e');
-      }
+      _syncAttendanceState();
     });
   }
 
@@ -2580,209 +2699,12 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     _pollingTimer?.cancel();
     _pollingTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
       if (!mounted) return;
-      _fetchActiveSession();
-    });
-  }
-
-  Future<void> _fetchActiveSession() async {
-    if (_userClassId == null || !mounted) return;
-    try {
-      // Step 1: Fetch active session without joins
-      final sessionData = await supabase
-          .from('attendance_sessions')
-          .select(
-            'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at',
-          )
-          .eq('class_id', _userClassId!)
-          .eq('status', 'active')
-          .order('opened_at', ascending: false)
-          .limit(1)
-          .maybeSingle();
-
-      if (!mounted) return;
-
-      if (sessionData != null) {
-        final fetchedSessionId = sessionData['id'] as String?;
-
-        // If we already know this session and attendance is marked, skip
-        if (fetchedSessionId == _activeSessionId &&
-            _isVisible &&
-            _hasMarkedAttendance) {
-          return;
-        }
-
-        // Check if student has already marked attendance for this session
-        final user = supabase.auth.currentUser;
-        if (user != null && fetchedSessionId != null && !_hasMarkedAttendance) {
-          debugPrint('Checking attendance for session id: $fetchedSessionId');
-          final attendanceRecord = await supabase
-              .from('period_attendance')
-              .select('status, face_verified')
-              .eq('session_id', fetchedSessionId)
-              .eq('student_id', user.id)
-              .maybeSingle();
-          debugPrint('Period attendance query result: $attendanceRecord');
-
-          if (attendanceRecord != null &&
-              attendanceRecord['status'] == 'present' &&
-              attendanceRecord['face_verified'] == true &&
-              mounted) {
-            debugPrint(
-              'Setting hasMarkedAttendance to true and stopping all timers',
-            );
-            // Student already marked and face verified — show waiting card
-            final subjectId = sessionData['subject_id'];
-            final subjectData = await supabase
-                .from('subjects')
-                .select('name')
-                .eq('id', subjectId)
-                .maybeSingle();
-
-            if (!mounted) return;
-
-            _hasMarkedAttendance = true;
-            _pollingTimer?.cancel();
-            _pollingTimer = null;
-            _countdownTimer?.cancel();
-
-            setState(() {
-              _activeSessionId = fetchedSessionId;
-              _subjectName =
-                  subjectData?['name'] as String? ?? 'Unknown Subject';
-              _isVisible = true;
-              _isClosed = false;
-            });
-            return;
-          }
-        }
-
-        // If session already visible and not yet marked, don't re-init banner
-        if (fetchedSessionId == _activeSessionId && _isVisible) {
-          return;
-        }
-
-        // Start 180 second flat countdown from when the active session is first seen
-        int remainingSeconds = 180;
-        final openedAtStr = sessionData['opened_at'] as String?;
-        if (openedAtStr != null) {
-          final openedAt = DateTime.parse(openedAtStr).toLocal();
-          final elapsed = DateTime.now().difference(openedAt).inSeconds;
-          remainingSeconds = math.max(0, 180 - elapsed);
-        }
-
-        if (remainingSeconds > 0) {
-          // Step 2: Parallel fetch for references
-          final subjectId = sessionData['subject_id'];
-          final periodId = sessionData['period_id'];
-          final teacherId = sessionData['teacher_id'];
-
-          final results = await Future.wait([
-            supabase
-                .from('subjects')
-                .select('name')
-                .eq('id', subjectId)
-                .maybeSingle(),
-            supabase
-                .from('periods')
-                .select('period_number, start_time, end_time')
-                .eq('id', periodId)
-                .maybeSingle(),
-            // Check if teacher exists in public.teachers, then get name from public.users
-            supabase
-                .from('teachers')
-                .select('id')
-                .eq('id', teacherId)
-                .maybeSingle()
-                .then((t) async {
-                  if (t != null) {
-                    return await supabase
-                        .from('users')
-                        .select('full_name')
-                        .eq('id', teacherId)
-                        .maybeSingle();
-                  }
-                  return null;
-                }),
-          ]);
-
-          if (!mounted) return;
-
-          final subjectData = results[0];
-          final periodData = results[1];
-          final teacherData = results[2];
-
-          debugPrint(
-            'AttendanceBanner: Found active session for class_id $_userClassId, subject: ${subjectData?['name']}',
-          );
-
-          String formattedPeriod = 'Unknown Period';
-          if (periodData != null) {
-            final int periodNum = periodData['period_number'] as int? ?? 1;
-
-            String getOrdinal(int n) {
-              if (n >= 11 && n <= 13) return 'th';
-              switch (n % 10) {
-                case 1:
-                  return 'st';
-                case 2:
-                  return 'nd';
-                case 3:
-                  return 'rd';
-                default:
-                  return 'th';
-              }
-            }
-
-            formattedPeriod = '$periodNum${getOrdinal(periodNum)} Period';
-          }
-
-            String formattedTiming = '';
-            if (periodData != null) {
-              final rawStart = periodData['start_time'] as String? ?? '';
-              final rawEnd = periodData['end_time'] as String? ?? '';
-              if (rawStart.isNotEmpty && rawEnd.isNotEmpty) {
-                final s = rawStart.length >= 5 ? rawStart.substring(0, 5) : rawStart;
-                final e = rawEnd.length >= 5 ? rawEnd.substring(0, 5) : rawEnd;
-                formattedTiming = '$s - $e';
-              }
-            }
-
-            setState(() {
-              _activeSessionId = fetchedSessionId;
-              _subjectName = subjectData?['name'] as String? ?? 'Unknown Subject';
-              _periodInfo = formattedPeriod;
-              _periodTiming = formattedTiming;
-            _teacherName =
-                teacherData?['full_name'] as String? ?? 'Unknown Teacher';
-            // We do not use qrTokenExpiresAt for banner logic anymore, but keep the assignment valid
-            _qrTokenExpiresAt = DateTime.now().add(
-              const Duration(seconds: 180),
-            );
-            _secondsRemaining = remainingSeconds;
-            _hasMarkedAttendance = false;
-
-            if (!_isVisible) {
-              debugPrint('AttendanceBanner: Setting banner to visible');
-            }
-            _isClosed = false;
-            _isVisible = true;
-          });
-          widget.onNewSession?.call();
-          _startTimer();
-        } else {
-          _closeBanner();
-        }
-      } else {
-        // Only close if student hasn't submitted attendance (don't clear "waiting" card)
-        if (!_hasMarkedAttendance &&
-            !widget.teacherFinalized &&
-            !widget.teacherFinalizedAbsent) {
-          _closeBanner();
-        }
+      if (!_hasMarkedAttendance &&
+          !widget.teacherFinalized &&
+          !widget.teacherFinalizedAbsent) {
+        _syncAttendanceState();
       }
-    } catch (e) {
-      debugPrint('Error fetching session data: $e');
-    }
+    });
   }
 
   void _startTimer() {
@@ -2794,7 +2716,6 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           return;
         }
         setState(() => _secondsRemaining--);
-        // Subtle pulse on each tick
         _timerPulseController.forward().then((_) {
           if (mounted) _timerPulseController.reverse();
         });
@@ -2812,7 +2733,6 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     _countdownTimer?.cancel();
     if (!mounted) return;
     setState(() => _isClosed = true);
-    // Auto-hide the closed banner after 4 seconds
     Future.delayed(const Duration(seconds: 4), () {
       if (mounted) setState(() => _isVisible = false);
     });
@@ -2823,6 +2743,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     _subscription?.unsubscribe();
     _attendanceSubscription?.unsubscribe();
     _pollingTimer?.cancel();
+    _finalizationPollingTimer?.cancel();
     _countdownTimer?.cancel();
     _timerPulseController.dispose();
     super.dispose();
