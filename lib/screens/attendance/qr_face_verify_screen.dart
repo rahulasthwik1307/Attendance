@@ -1608,7 +1608,6 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                 .update({
                   'face_verified': true,
                   'status': 'present',
-                  'scanned_at': DateTime.now().toUtc().toIso8601String(),
                 })
                 .eq('session_id', _sessionId!)
                 .eq('student_id', user.id);

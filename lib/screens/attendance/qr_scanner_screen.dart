@@ -214,7 +214,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         await supabase.from('period_attendance').upsert({
           'session_id': sessionId,
           'student_id': supabase.auth.currentUser!.id,
-          'scanned_at': DateTime.now().toIso8601String(),
+          'scanned_at': DateTime.now().toUtc().toIso8601String(),
           'face_verified': false,
           'status': 'pending',
         }, onConflict: 'session_id,student_id');
