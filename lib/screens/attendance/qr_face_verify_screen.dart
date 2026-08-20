@@ -112,6 +112,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   double _verificationThreshold = 0.68;
 
   int _attemptCount = 1;
+  bool _isTerminal = false;
 
   // Instruction / UI state
   String _instructionTitle = 'Setting up camera…';
@@ -275,6 +276,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
           .select('''
             subject_id,
             period_id,
+            status,
             subjects ( name ),
             periods ( period_number )
           ''')
@@ -282,6 +284,16 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
           .maybeSingle();
 
       if (data != null && mounted) {
+        final status = data['status'] as String?;
+        if (status != null && status != 'active') {
+          FaceLogger.ver(
+            _sessionId ?? 'QR_VER',
+            'Teacher session is not active: $status',
+          );
+          _navigateToTimeout(isTimeout: true);
+          return;
+        }
+
         final subjectData = data['subjects'] as Map<String, dynamic>?;
         final periodData = data['periods'] as Map<String, dynamic>?;
 
@@ -298,6 +310,53 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     } catch (e) {
       debugPrint('[QR_FACE_VER] Failed to fetch session info: $e');
     }
+  }
+
+  Future<bool> _isSessionActive() async {
+    if (_sessionId == null) return true;
+    try {
+      final data = await Supabase.instance.client
+          .from('attendance_sessions')
+          .select('status')
+          .eq('id', _sessionId!)
+          .maybeSingle();
+      if (data != null) {
+        final status = data['status'] as String?;
+        return status == 'active';
+      }
+    } catch (_) {}
+    return true;
+  }
+
+  void _navigateToTimeout({required bool isTimeout}) {
+    if (_isTerminal || !mounted) return;
+    _isTerminal = true;
+    _countdownTimer?.cancel();
+    _instructionDebounceTimer?.cancel();
+    try {
+      _cameraController?.stopImageStream();
+    } catch (_) {}
+    Navigator.of(
+      context,
+    ).pushReplacementNamed('/qr-timeout', arguments: isTimeout);
+  }
+
+  void _navigateToSuccess() {
+    if (_isTerminal || !mounted) return;
+    _isTerminal = true;
+    _countdownTimer?.cancel();
+    _instructionDebounceTimer?.cancel();
+    try {
+      _cameraController?.stopImageStream();
+    } catch (_) {}
+    Navigator.of(context).pushReplacementNamed(
+      '/qr-success',
+      arguments: {
+        'session_id': _sessionId,
+        'subject_name': _subjectName,
+        'period_info': _periodInfo,
+      },
+    );
   }
 
   String _ordinalSuffix(int n) {
@@ -1320,14 +1379,25 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
         if (_attemptCount < 2) {
           await Future.delayed(const Duration(seconds: 2));
-          if (mounted) await _onRetry();
+          if (!mounted || _isTerminal || _secondsRemaining <= 0) return;
+
+          final bool sessionActive = await _isSessionActive();
+          if (!sessionActive) {
+            FaceLogger.ver(
+              _sessionId ?? 'QR_VER',
+              'Teacher session expired during spoof retry delay',
+            );
+            _navigateToTimeout(isTimeout: true);
+            return;
+          }
+
+          if (!mounted || _isTerminal || _secondsRemaining <= 0) return;
+          await _onRetry();
           return;
         } else {
           await Future.delayed(const Duration(milliseconds: 600));
-          if (mounted) {
-            Navigator.of(
-              context,
-            ).pushReplacementNamed('/qr-timeout', arguments: true);
+          if (mounted && !_isTerminal) {
+            _navigateToTimeout(isTimeout: false);
           }
           return;
         }
@@ -1344,12 +1414,42 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       if (_validFrameCount < 3 && framesAboveThresholdCount < 2) {
         FaceLogger.ver(
           _sessionId ?? 'QR_VER',
-          'Backend rejected frames due to quality. Failing gracefully to avoid user loop.',
+          'Backend rejected frames due to quality. Handling failure/retry.',
         );
-        _setError(
-          'Image quality was too low. Please ensure good lighting and hold the phone steady, then try again.',
-        );
-        return;
+        if (_attemptCount < 2) {
+          setState(() => _borderColor = AppStyles.errorRed);
+          _updateInstruction(
+            'Verification Failed',
+            subtitle: 'Image quality was too low. Retrying…',
+          );
+          await Future.delayed(const Duration(milliseconds: 1500));
+          if (!mounted || _isTerminal || _secondsRemaining <= 0) return;
+
+          final bool sessionActive = await _isSessionActive();
+          if (!sessionActive) {
+            FaceLogger.ver(
+              _sessionId ?? 'QR_VER',
+              'Teacher session expired during quality retry delay',
+            );
+            _navigateToTimeout(isTimeout: true);
+            return;
+          }
+
+          if (!mounted || _isTerminal || _secondsRemaining <= 0) return;
+          await _onRetry();
+          return;
+        } else {
+          setState(() => _borderColor = AppStyles.errorRed);
+          _updateInstruction(
+            'Verification Failed',
+            subtitle: 'Image quality was too low',
+          );
+          await Future.delayed(const Duration(milliseconds: 600));
+          if (mounted && !_isTerminal) {
+            _navigateToTimeout(isTimeout: false);
+          }
+          return;
+        }
       }
 
       _validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
@@ -1448,11 +1548,6 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       );
       debugPrint('[QR_FACE][VERIFY] =========================');
 
-      final double avgQuality = topResults.isEmpty
-          ? 80.0
-          : topResults.map((e) => e.rawQualityScore).reduce((a, b) => a + b) /
-              topResults.length;
-
       if (isMatch) {
         // ── Success ──
         setState(() => _borderColor = AppStyles.successGreen);
@@ -1468,7 +1563,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         _updateInstruction('Verified!', subtitle: 'Face matched successfully');
 
         await Future.delayed(const Duration(milliseconds: 600));
-        if (!mounted) return;
+        if (!mounted || _isTerminal) return;
 
         _countdownTimer?.cancel();
 
@@ -1501,59 +1596,44 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
           );
         }
 
-        if (!mounted) return;
-        Navigator.of(context).pushReplacementNamed(
-          '/qr-success',
-          arguments: {
-            'session_id': _sessionId,
-            'subject_name': _subjectName,
-            'period_info': _periodInfo,
-          },
-        );
+        if (!mounted || _isTerminal) return;
+        _navigateToSuccess();
       } else {
-        // ── Failure & Close-Score Retry Check ──
+        // ── Face Mismatch / Verification Failure ──
         setState(() => _borderColor = AppStyles.errorRed);
         _updateInstruction(
           'Verification Failed',
           subtitle: 'Face did not match',
         );
 
-        final bool hasSeverePoseWarning = topResults.any(
-          (r) => r.yaw.abs() > 20.0 || r.pitch.abs() > 15.0,
-        );
-        final bool meetsRetryConditions =
-            score >= (_verificationThreshold - 0.03) &&
-            score < _verificationThreshold &&
-            avgQuality >= 65.0 &&
-            !hasSeverePoseWarning;
-
-        if (_attemptCount < 2 && meetsRetryConditions) {
+        if (_attemptCount < 2) {
           FaceLogger.ver(
             _sessionId ?? 'QR_VER',
-            'Retry conditions met: score=${score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, pose=OK. Triggering retry.',
+            'Attempt $_attemptCount failed (score=${score.toStringAsFixed(4)}, threshold=${_verificationThreshold.toStringAsFixed(4)}). Starting Attempt 2 retry.',
           );
           await Future.delayed(const Duration(milliseconds: 1200));
-          if (!mounted) return;
+          if (!mounted || _isTerminal || _secondsRemaining <= 0) return;
 
+          final bool sessionActive = await _isSessionActive();
+          if (!sessionActive) {
+            FaceLogger.ver(
+              _sessionId ?? 'QR_VER',
+              'Teacher session expired during retry delay',
+            );
+            _navigateToTimeout(isTimeout: true);
+            return;
+          }
+
+          if (!mounted || _isTerminal || _secondsRemaining <= 0) return;
           await _onRetry();
         } else {
-          // 2 attempts exhausted or retry conditions not met
-          if (!meetsRetryConditions) {
-            FaceLogger.ver(
-              _sessionId ?? 'QR_VER',
-              'Retry conditions not met: score=${score.toStringAsFixed(4)}, avgQuality=${avgQuality.toStringAsFixed(1)}, poseWarning=$hasSeverePoseWarning. Rejecting verification.',
-            );
-          } else {
-            FaceLogger.ver(
-              _sessionId ?? 'QR_VER',
-              '2 attempts exhausted — rejecting verification.',
-            );
-          }
+          FaceLogger.ver(
+            _sessionId ?? 'QR_VER',
+            'Attempt $_attemptCount failed — 2 attempts exhausted. Rejecting verification.',
+          );
           await Future.delayed(const Duration(milliseconds: 600));
-          if (mounted) {
-            Navigator.of(
-              context,
-            ).pushReplacementNamed('/qr-timeout', arguments: true);
+          if (mounted && !_isTerminal) {
+            _navigateToTimeout(isTimeout: false);
           }
         }
       }
@@ -1569,6 +1649,8 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   }
 
   Future<void> _onRetry() async {
+    if (_isTerminal || !mounted || _secondsRemaining <= 0) return;
+
     debugPrint('[QR_FACE][RETRY] stopping image stream');
     if (_cameraController != null && _cameraController!.value.isInitialized) {
       if (_cameraController!.value.isStreamingImages) {
@@ -1580,6 +1662,8 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       }
     }
     debugPrint('[QR_FACE][RETRY] image stream stopped');
+
+    if (_isTerminal || !mounted || _secondsRemaining <= 0) return;
 
     debugPrint('[QR_FACE][RETRY] verification state reset');
     _attemptCount++;
@@ -1644,7 +1728,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       });
     }
 
-    // Restart the 60-second screen timer
+    // Resume the 60-second screen timer countdown (does not reset _secondsRemaining)
     _startCountdownTimer();
 
     // Restart camera stream safely and await completion
@@ -1672,6 +1756,10 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   void _startCountdownTimer() {
     _countdownTimer?.cancel();
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || _isTerminal) {
+        timer.cancel();
+        return;
+      }
       if (_secondsRemaining > 1) {
         setState(() => _secondsRemaining--);
         _timerPulseController.forward().then((_) {
@@ -1680,10 +1768,12 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       } else {
         setState(() => _secondsRemaining = 0);
         timer.cancel();
-        if (mounted && _phase != _Phase.done) {
-          Navigator.of(
-            context,
-          ).pushReplacementNamed('/qr-timeout', arguments: true);
+        if (mounted && !_isTerminal && _phase != _Phase.done) {
+          FaceLogger.ver(
+            _sessionId ?? 'QR_VER',
+            '60-second face verification timer expired',
+          );
+          _navigateToTimeout(isTimeout: true);
         }
       }
     });
@@ -2146,6 +2236,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
   @override
   void dispose() {
+    _isTerminal = true;
     _countdownTimer?.cancel();
     _instructionDebounceTimer?.cancel();
 
