@@ -1283,13 +1283,15 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
 
         final records = await supabase
             .from('period_attendance')
-            .select('status')
+            .select('status, face_verified')
             .eq('student_id', user.id)
             .inFilter('session_id', finalizedIds)
             .inFilter('status', ['present', 'absent']);
 
         int total = records.length;
-        int present = records.where((r) => r['status'] == 'present').length;
+        int present = records
+            .where((r) => r['status'] == 'present' && (r['face_verified'] == true))
+            .length;
         double pct = total > 0 ? present / total : 0.0;
         debugPrint('[DASH_PCT] total=$total present=$present pct=$pct');
 
@@ -1814,6 +1816,7 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
   List<Map<String, dynamic>> _scheduleItems = [];
   bool _scheduleLoading = true;
   RealtimeChannel? _scheduleChannel;
+  RealtimeChannel? _attendanceChannel;
 
   Future<void> _fetchSchedule() async {
     try {
@@ -1917,11 +1920,13 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
       if (todaySessionIds.isNotEmpty) {
         final pa = await supabase
             .from('period_attendance')
-            .select('session_id, status')
+            .select('session_id, status, face_verified')
             .eq('student_id', user.id)
             .inFilter('session_id', todaySessionIds);
         for (final a in pa) {
-          studentAttendance[a['session_id'] as String] = a['status'] as String;
+          final isPresent = (a['status'] == 'present') && (a['face_verified'] == true);
+          studentAttendance[a['session_id'] as String] =
+              isPresent ? 'present' : (a['status'] as String? ?? 'absent');
         }
       }
 
@@ -1969,10 +1974,9 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
             : null;
 
         String cardStatus = 'upcoming';
-        if (sessionStatus == 'active') {
-          cardStatus = 'current';
-        } else if (sessionStatus == 'finalized' ||
-            sessionStatus == 'reviewing') {
+        if (sessionStatus == 'active' || sessionStatus == 'reviewing') {
+          cardStatus = studentStatus == 'present' ? 'done' : 'current';
+        } else if (sessionStatus == 'finalized') {
           cardStatus = studentStatus == 'present' ? 'done' : 'absent';
         }
 
@@ -1998,6 +2002,25 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
               type: PostgresChangeFilterType.eq,
               column: 'class_id',
               value: classId,
+            ),
+            callback: (payload) {
+              if (mounted) _fetchSchedule();
+            },
+          )
+          .subscribe();
+
+      // Subscribe to period_attendance changes for this student
+      _attendanceChannel?.unsubscribe();
+      _attendanceChannel = supabase
+          .channel('schedule_attendance_${user.id}')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'period_attendance',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'student_id',
+              value: user.id,
             ),
             callback: (payload) {
               if (mounted) _fetchSchedule();
@@ -2049,6 +2072,7 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
   @override
   void dispose() {
     _scheduleChannel?.unsubscribe();
+    _attendanceChannel?.unsubscribe();
     _expandController.dispose();
     super.dispose();
   }
@@ -2327,20 +2351,25 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             callback: (payload) {
               final newRecord = payload.newRecord;
               final status = newRecord['status'] as String?;
-              // Student scanned + face verified → show pending banner
-              if ((status == 'present' || status == 'pending') && mounted) {
+              final faceVerified = newRecord['face_verified'] as bool? ?? false;
+              // Student verified present while active -> show waiting for teacher finalization banner
+              if (status == 'present' && faceVerified && mounted) {
                 setState(() {
                   _hasMarkedAttendance = true;
                 });
                 _countdownTimer?.cancel();
                 _pollingTimer?.cancel();
                 _pollingTimer = null;
+              } else if ((status == 'absent' || status == 'failed') && mounted) {
+                setState(() {
+                  _hasMarkedAttendance = false;
+                });
               }
             },
           )
           .subscribe();
 
-      // 4. Single unified channel for attendance_sessions — handles both active and finalized
+      // 4. Single unified channel for attendance_sessions — handles active, reviewing, and finalized
       _subscription = supabase
           .channel('attendance_sessions_class_$_userClassId')
           .onPostgresChanges(
@@ -2366,6 +2395,12 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                 await _handleFinalization(sessionId);
               } else if (status == 'active') {
                 _fetchActiveSession();
+              } else if (status == 'reviewing') {
+                // Reviewing: Active scanning is closed, teacher reviewing.
+                // Stop the active session timer/polling if still running.
+                _countdownTimer?.cancel();
+                _pollingTimer?.cancel();
+                _pollingTimer = null;
               }
             },
           )
@@ -2390,22 +2425,84 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     );
     final record = await supabase
         .from('period_attendance')
-        .select('status')
+        .select('status, face_verified')
         .eq('session_id', sessionId)
         .eq('student_id', user.id)
         .maybeSingle();
 
     debugPrint('[BANNER] period_attendance result: $record');
     final studentStatus = record?['status'] as String?;
-    debugPrint('[BANNER] Student status in finalized session: $studentStatus');
+    final faceVerified = record?['face_verified'] as bool? ?? false;
+    debugPrint(
+      '[BANNER] Student status in finalized session: $studentStatus, faceVerified: $faceVerified',
+    );
 
-    if (studentStatus == 'present' && mounted) {
-      final savedSubject = _subjectName.isNotEmpty
-          ? _subjectName
-          : widget.finalizedSubject;
-      final savedPeriod = _periodInfo.isNotEmpty
-          ? _periodInfo
-          : widget.finalizedPeriod;
+    // Fetch subject and period info if not already loaded or for session details
+    String displaySubject = _subjectName;
+    String displayPeriod = _periodInfo;
+
+    if (displaySubject.isEmpty || displayPeriod.isEmpty) {
+      try {
+        final sessionData = await supabase
+            .from('attendance_sessions')
+            .select('subject_id, period_id')
+            .eq('id', sessionId)
+            .maybeSingle();
+
+        if (sessionData != null) {
+          final subjectId = sessionData['subject_id'];
+          final periodId = sessionData['period_id'];
+
+          final results = await Future.wait([
+            supabase
+                .from('subjects')
+                .select('name')
+                .eq('id', subjectId)
+                .maybeSingle(),
+            supabase
+                .from('periods')
+                .select('period_number')
+                .eq('id', periodId)
+                .maybeSingle(),
+          ]);
+
+          final sData = results[0];
+          final pData = results[1];
+
+          if (sData != null) {
+            displaySubject = sData['name'] as String? ?? '';
+          }
+          if (pData != null) {
+            final pNum = pData['period_number'] as int? ?? 1;
+            String getOrdinal(int n) {
+              if (n >= 11 && n <= 13) return 'th';
+              switch (n % 10) {
+                case 1:
+                  return 'st';
+                case 2:
+                  return 'nd';
+                case 3:
+                  return 'rd';
+                default:
+                  return 'th';
+              }
+            }
+            displayPeriod = '$pNum${getOrdinal(pNum)} Period';
+          }
+        }
+      } catch (e) {
+        debugPrint('[BANNER] Error fetching session details: $e');
+      }
+    }
+
+    final savedSubject = displaySubject.isNotEmpty
+        ? displaySubject
+        : widget.finalizedSubject;
+    final savedPeriod = displayPeriod.isNotEmpty
+        ? displayPeriod
+        : widget.finalizedPeriod;
+
+    if (studentStatus == 'present' && faceVerified && mounted) {
       setState(() {
         _hasMarkedAttendance = false;
         _isClosed = false;
@@ -2414,16 +2511,20 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       debugPrint('[BANNER] Showing green confirmed card');
       widget.onTeacherFinalized?.call(savedSubject, savedPeriod);
       _onSessionFinalized?.call();
-    } else if (studentStatus == 'absent' && mounted) {
-      final savedSubject = _subjectName.isNotEmpty ? _subjectName : '';
-      final savedPeriod = _periodInfo.isNotEmpty ? _periodInfo : '';
+    } else if (mounted) {
+      final absentSub = displaySubject.isNotEmpty
+          ? displaySubject
+          : widget.absentSubject;
+      final absentPer = displayPeriod.isNotEmpty
+          ? displayPeriod
+          : widget.absentPeriod;
       setState(() {
         _hasMarkedAttendance = false;
         _isClosed = false;
         _isVisible = false;
       });
-      debugPrint('[BANNER] Student absent — showing absent card');
-      widget.onTeacherFinalizedAbsent?.call(savedSubject, savedPeriod);
+      debugPrint('[BANNER] Student not present ($studentStatus) — showing absent card');
+      widget.onTeacherFinalizedAbsent?.call(absentSub, absentPer);
       _onSessionFinalized?.call();
     }
   }
@@ -2516,22 +2617,20 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           debugPrint('Checking attendance for session id: $fetchedSessionId');
           final attendanceRecord = await supabase
               .from('period_attendance')
-              .select('status')
+              .select('status, face_verified')
               .eq('session_id', fetchedSessionId)
               .eq('student_id', user.id)
-              .inFilter('status', ['present', 'pending'])
               .maybeSingle();
           debugPrint('Period attendance query result: $attendanceRecord');
 
           if (attendanceRecord != null &&
-              (attendanceRecord['status'] == 'present' ||
-                  attendanceRecord['status'] == 'pending') &&
+              attendanceRecord['status'] == 'present' &&
+              attendanceRecord['face_verified'] == true &&
               mounted) {
             debugPrint(
               'Setting hasMarkedAttendance to true and stopping all timers',
             );
-            // Student already marked — show green card
-            // Still need to fetch subject info for display
+            // Student already marked and face verified — show waiting card
             final subjectId = sessionData['subject_id'];
             final subjectData = await supabase
                 .from('subjects')
@@ -3647,12 +3746,14 @@ class _MotivationalMessageState extends State<_MotivationalMessage> {
       }
       final records = await supabase
           .from('period_attendance')
-          .select('status')
+          .select('status, face_verified')
           .eq('student_id', user.id)
           .inFilter('session_id', ids)
           .inFilter('status', ['present', 'absent']);
       final total = records.length;
-      final present = records.where((r) => r['status'] == 'present').length;
+      final present = records
+          .where((r) => r['status'] == 'present' && (r['face_verified'] == true))
+          .length;
       if (mounted) {
         setState(() {
           _pct = total > 0 ? present / total : 0;

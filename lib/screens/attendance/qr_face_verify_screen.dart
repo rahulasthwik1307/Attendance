@@ -313,7 +313,7 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   }
 
   Future<bool> _isSessionActive() async {
-    if (_sessionId == null) return true;
+    if (_sessionId == null) return false;
     try {
       final data = await Supabase.instance.client
           .from('attendance_sessions')
@@ -324,8 +324,10 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         final status = data['status'] as String?;
         return status == 'active';
       }
-    } catch (_) {}
-    return true;
+    } catch (e) {
+      debugPrint('[QR_FACE_VER] Error checking session status: $e');
+    }
+    return false;
   }
 
   void _navigateToTimeout({required bool isTimeout}) {
@@ -1549,6 +1551,19 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       debugPrint('[QR_FACE][VERIFY] =========================');
 
       if (isMatch) {
+        // Step A: Pre-check session status before transitioning to success phase
+        final bool sessionActiveInitial = await _isSessionActive();
+        if (!sessionActiveInitial) {
+          FaceLogger.ver(
+            _sessionId ?? 'QR_VER',
+            'Face matched, but attendance session is no longer active. Refusing to mark present.',
+          );
+          if (mounted && !_isTerminal) {
+            _navigateToTimeout(isTimeout: true);
+          }
+          return;
+        }
+
         // ── Success ──
         setState(() => _borderColor = AppStyles.successGreen);
 
@@ -1567,7 +1582,20 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
         _countdownTimer?.cancel();
 
-        // Update period_attendance — set face_verified = true
+        // Step B: Re-verify session status immediately before attendance update (race condition guard)
+        final bool sessionStillActive = await _isSessionActive();
+        if (!sessionStillActive) {
+          FaceLogger.ver(
+            _sessionId ?? 'QR_VER',
+            'Attendance session closed immediately before DB write. Refusing to mark present.',
+          );
+          if (mounted && !_isTerminal) {
+            _navigateToTimeout(isTimeout: true);
+          }
+          return;
+        }
+
+        // Update period_attendance — set face_verified = true and status = present
         try {
           final user = Supabase.instance.client.auth.currentUser;
           FaceLogger.ver(
