@@ -5,7 +5,15 @@ import '../../widgets/fade_slide_y.dart';
 
 class QrTimeoutScreen extends StatefulWidget {
   final bool isTimeout;
-  const QrTimeoutScreen({super.key, required this.isTimeout});
+  final String? customTitle;
+  final String? customMessage;
+
+  const QrTimeoutScreen({
+    super.key,
+    required this.isTimeout,
+    this.customTitle,
+    this.customMessage,
+  });
 
   @override
   State<QrTimeoutScreen> createState() => _QrTimeoutScreenState();
@@ -51,10 +59,14 @@ class _QrTimeoutScreenState extends State<QrTimeoutScreen>
     final IconData heroIcon = isTimeout
         ? Icons.timer_off_rounded
         : Icons.face_retouching_off_rounded;
-    final String title = isTimeout ? 'Session Expired' : 'Verification Failed';
-    final String message = isTimeout
+    final String defaultTitle =
+        isTimeout ? 'Session Expired' : 'Verification Failed';
+    final String defaultMessage = isTimeout
         ? 'You did not complete face verification within the allowed time. Please restart the attendance process.'
         : 'Face verification could not be confirmed. Your attendance could not be marked for this period.';
+
+    final String title = widget.customTitle ?? defaultTitle;
+    final String message = widget.customMessage ?? defaultMessage;
 
     return PopScope(
       canPop: false,

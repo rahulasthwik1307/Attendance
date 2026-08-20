@@ -53,13 +53,13 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   late AnimationController _successBounceController;
   late AnimationController _particleController;
 
-  // ─── Timer ring (Authoritative attendance session window) ────────────────
+  // ─── Timer ring (Dedicated 60s face verification window) ──────────────────
   // Deliberately separate from the liveness challenge countdown timer.
   late AnimationController _timerPulseController;
   late Animation<double> _timerPulseAnim;
   late AnimationController _ringController;
   late Animation<double> _ringProgress;
-  static const int _totalSeconds = 180;
+  static const int _totalSeconds = 60;
   int _secondsRemaining = _totalSeconds;
   DateTime? _sessionDeadline;
   DateTime? _verificationDeadline;
@@ -68,14 +68,10 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
   Timer? _countdownTimer;
 
   int _calculateRemainingSeconds() {
-    if (_sessionDeadline != null) {
-      final remaining =
-          _sessionDeadline!.difference(DateTime.now().toUtc()).inSeconds;
-      return math.max(0, remaining);
-    }
     if (_verificationDeadline != null) {
-      final remaining =
-          _verificationDeadline!.difference(DateTime.now().toUtc()).inSeconds;
+      final diffMs =
+          _verificationDeadline!.difference(DateTime.now()).inMilliseconds;
+      final remaining = (diffMs / 1000.0).ceil();
       return math.max(0, remaining);
     }
     return _totalSeconds;
@@ -2799,14 +2795,12 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                                                         key: const ValueKey('session_ring'),
                                                         animation: Listenable.merge([_ringProgress, _timerPulseAnim]),
                                                         builder: (context, _) {
-                                                          final Color ringColor = _secondsRemaining <= 30
+                                                          final Color ringColor = _secondsRemaining <= 15
                                                               ? AppStyles.errorRed
-                                                              : _secondsRemaining <= 60
+                                                              : _secondsRemaining <= 30
                                                               ? AppStyles.amberWarning
                                                               : AppStyles.primaryBlue;
-                                                          final String mm = (_secondsRemaining ~/ 60).toString().padLeft(2, '0');
-                                                          final String ss = (_secondsRemaining % 60).toString().padLeft(2, '0');
-                                                          final double progress = (_secondsRemaining / 180.0).clamp(0.0, 1.0);
+                                                          final double progress = (_secondsRemaining / _totalSeconds.toDouble()).clamp(0.0, 1.0);
                                                           return ScaleTransition(
                                                             scale: _timerPulseAnim,
                                                             child: Container(
@@ -2841,10 +2835,10 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
                                                                       );
                                                                     },
                                                                     child: Text(
-                                                                      '$mm:$ss',
+                                                                      '$_secondsRemaining',
                                                                       key: ValueKey<int>(_secondsRemaining),
                                                                       style: const TextStyle(
-                                                                        fontSize: 11.5,
+                                                                        fontSize: 16,
                                                                         fontWeight: FontWeight.w800,
                                                                         color: Color(0xFF0F172A),
                                                                         letterSpacing: -0.3,

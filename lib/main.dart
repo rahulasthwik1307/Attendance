@@ -12,8 +12,10 @@ import 'screens/face/face_capture_preview_screen.dart' as preview;
 import 'screens/dashboard/dashboard_screen.dart' as dashboard;
 import 'screens/dashboard/history_screen.dart' as history;
 import 'screens/face/face_verification_screen.dart' as verify;
-import 'screens/face/face_calibration_verification_screen.dart' as calibration_verify;
-import 'screens/face/face_calibration_preview_screen.dart' as calibration_preview;
+import 'screens/face/face_calibration_verification_screen.dart'
+    as calibration_verify;
+import 'screens/face/face_calibration_preview_screen.dart'
+    as calibration_preview;
 import 'screens/attendance/attendance_success_screen.dart' as att_success;
 import 'screens/attendance/attendance_failed_screen.dart' as att_fail;
 import 'screens/attendance/location_error_screen.dart' as loc_error;
@@ -72,13 +74,15 @@ void main() async {
 
   await flutterLocalNotificationsPlugin
       .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>()
+        AndroidFlutterLocalNotificationsPlugin
+      >()
       ?.createNotificationChannel(attendanceChannel);
 
   const AndroidInitializationSettings androidInit =
       AndroidInitializationSettings('@mipmap/ic_launcher');
-  const InitializationSettings initSettings =
-      InitializationSettings(android: androidInit);
+  const InitializationSettings initSettings = InitializationSettings(
+    android: androidInit,
+  );
   await flutterLocalNotificationsPlugin.initialize(settings: initSettings);
 
   FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
@@ -89,7 +93,9 @@ void main() async {
       final prefs = await SharedPreferences.getInstance();
       final bool enabled = prefs.getBool('notifications_enabled') ?? true;
       if (!enabled) {
-        debugPrint('[FCM] Notification blocked because notifications are disabled');
+        debugPrint(
+          '[FCM] Notification blocked because notifications are disabled',
+        );
         return;
       }
       flutterLocalNotificationsPlugin.show(
@@ -113,8 +119,7 @@ void main() async {
     }
   });
 
-  await FirebaseMessaging.instance
-      .setForegroundNotificationPresentationOptions(
+  await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
     alert: true,
     badge: true,
     sound: true,
@@ -195,7 +200,8 @@ class SmartAttendanceApp extends StatelessWidget {
                 page = const verify.FaceVerificationScreen();
                 break;
               case '/face_calibration_verify':
-                page = const calibration_verify.FaceCalibrationVerificationScreen();
+                page =
+                    const calibration_verify.FaceCalibrationVerificationScreen();
                 break;
               case '/face_calibration_preview':
                 page = const calibration_preview.FaceCalibrationPreviewScreen();
@@ -231,8 +237,32 @@ class SmartAttendanceApp extends StatelessWidget {
                 page = const qr_success.QrSuccessScreen();
                 break;
               case '/qr-timeout':
-                final isTimeout = routeSettings.arguments as bool? ?? true;
-                page = qr_timeout.QrTimeoutScreen(isTimeout: isTimeout);
+                final args = routeSettings.arguments;
+                final bool isTimeout;
+                String? customTitle;
+                String? customMessage;
+                if (args is bool) {
+                  isTimeout = args;
+                } else if (args is Map) {
+                  isTimeout = args['isTimeout'] as bool? ?? true;
+                  if (args['customTitle'] is String) {
+                    customTitle = args['customTitle'] as String;
+                  } else if (args['isVerificationExpired'] == true) {
+                    customTitle = 'Face Verification Time Expired';
+                    customMessage =
+                        'The verification window has ended. Please scan the QR code again to retry.';
+                  }
+                  if (args['customMessage'] is String) {
+                    customMessage = args['customMessage'] as String;
+                  }
+                } else {
+                  isTimeout = true;
+                }
+                page = qr_timeout.QrTimeoutScreen(
+                  isTimeout: isTimeout,
+                  customTitle: customTitle,
+                  customMessage: customMessage,
+                );
                 break;
               // ── Auth & password reset flow ───────────────────────────────
               case '/sign_in':
