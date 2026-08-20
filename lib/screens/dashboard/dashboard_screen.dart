@@ -1952,8 +1952,12 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
             .substring(0, 5);
         // Empty when unassigned — the schedule card simply omits the teacher line,
         // matching how commercial student apps handle missing faculty assignment
-        final title = teacherId != null ? (teacherTitles[teacherId] ?? 'Mr') : '';
-        final fullName = teacherId != null ? (teacherFullNames[teacherId] ?? '') : '';
+        final title = teacherId != null
+            ? (teacherTitles[teacherId] ?? 'Mr')
+            : '';
+        final fullName = teacherId != null
+            ? (teacherFullNames[teacherId] ?? '')
+            : '';
         final facultyName = fullName.isNotEmpty ? '$title. $fullName' : '';
 
         final key = subjectId;
@@ -2260,6 +2264,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
   String _subjectName = '';
   String _periodInfo = '';
+  String _periodTiming = '';
   // ignore: unused_field
   String _teacherName = '';
   // ignore: unused_field
@@ -2632,10 +2637,22 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             formattedPeriod = '$periodNum${getOrdinal(periodNum)} Period';
           }
 
-          setState(() {
-            _activeSessionId = fetchedSessionId;
-            _subjectName = subjectData?['name'] as String? ?? 'Unknown Subject';
-            _periodInfo = formattedPeriod;
+            String formattedTiming = '';
+            if (periodData != null) {
+              final rawStart = periodData['start_time'] as String? ?? '';
+              final rawEnd = periodData['end_time'] as String? ?? '';
+              if (rawStart.isNotEmpty && rawEnd.isNotEmpty) {
+                final s = rawStart.length >= 5 ? rawStart.substring(0, 5) : rawStart;
+                final e = rawEnd.length >= 5 ? rawEnd.substring(0, 5) : rawEnd;
+                formattedTiming = '$s - $e';
+              }
+            }
+
+            setState(() {
+              _activeSessionId = fetchedSessionId;
+              _subjectName = subjectData?['name'] as String? ?? 'Unknown Subject';
+              _periodInfo = formattedPeriod;
+              _periodTiming = formattedTiming;
             _teacherName =
                 teacherData?['full_name'] as String? ?? 'Unknown Teacher';
             // We do not use qrTokenExpiresAt for banner logic anymore, but keep the assignment valid
@@ -3122,13 +3139,14 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
             // ── Row 2: Period info on a single auto-scaled line ─────
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8.5),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8.5,
+              ),
               decoration: BoxDecoration(
                 color: AppStyles.backgroundLight,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: Colors.black.withValues(alpha: 0.04),
-                ),
+                border: Border.all(color: Colors.black.withValues(alpha: 0.04)),
               ),
               child: Row(
                 children: [
@@ -3167,11 +3185,15 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                 final endTime = DateTime.now().add(
                   Duration(seconds: _secondsRemaining),
                 );
-                Navigator.of(context).pushNamed('/qr-precheck', arguments: {
-                  'end_time': endTime,
-                  'subject_name': _subjectName,
-                  'period_info': _periodInfo,
-                });
+                Navigator.of(context).pushNamed(
+                  '/qr-precheck',
+                  arguments: {
+                    'end_time': endTime,
+                    'subject_name': _subjectName,
+                    'period_info': _periodInfo,
+                    'period_timing': _periodTiming,
+                  },
+                );
               },
               onTapCancel: () => setState(() => _ctaPressed = false),
               child: AnimatedScale(
@@ -3513,7 +3535,8 @@ class _ScheduleCardState extends State<_ScheduleCard>
                                 height: 1.25,
                               ),
                             ),
-                            if ((widget.item['teacher'] as String? ?? '').isNotEmpty) ...[
+                            if ((widget.item['teacher'] as String? ?? '')
+                                .isNotEmpty) ...[
                               const SizedBox(height: 5),
                               // Faculty name — always directly below subject when assigned
                               Text(

@@ -191,19 +191,25 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
     DateTime? endTime;
     String? subjectName;
     String? periodInfo;
+    String? periodTiming;
     if (args is Map) {
       endTime = args['end_time'] as DateTime?;
       subjectName = args['subject_name'] as String?;
       periodInfo = args['period_info'] as String?;
+      periodTiming = args['period_timing'] as String?;
     } else if (args is DateTime) {
       // Backward-compat: old callers that still pass a raw DateTime
       endTime = args;
     }
-    Navigator.of(context).pushReplacementNamed('/qr-scanner', arguments: {
-      'end_time': endTime,
-      'subject_name': subjectName,
-      'period_info': periodInfo,
-    });
+    Navigator.of(context).pushReplacementNamed(
+      '/qr-scanner',
+      arguments: {
+        'end_time': endTime,
+        'subject_name': subjectName,
+        'period_info': periodInfo,
+        'period_timing': periodTiming,
+      },
+    );
   }
 
   void _handleFailure() {
@@ -232,7 +238,10 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
         child: Center(
           child: SingleChildScrollView(
             physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24.0,
+              vertical: 12.0,
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
@@ -529,9 +538,7 @@ class _CheckRow extends StatelessWidget {
     switch (state) {
       case _CheckState.pending:
       case _CheckState.checking:
-        bgColor = isDark
-            ? Colors.white.withValues(alpha: 0.04)
-            : Colors.white;
+        bgColor = isDark ? Colors.white.withValues(alpha: 0.04) : Colors.white;
         borderColor = isDark
             ? Colors.white.withValues(alpha: 0.08)
             : const Color(0xFFE2E8F0);
