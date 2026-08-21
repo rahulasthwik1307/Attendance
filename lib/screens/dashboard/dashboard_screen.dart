@@ -2819,96 +2819,115 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       return const SizedBox.shrink();
     }
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     // Teacher finalized — green confirmed card (persists until next session)
     if (widget.teacherFinalized) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 12.0, top: 4),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: AppStyles.successGreen.withValues(alpha: 0.4),
-              width: 1.5,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: AppStyles.successGreen.withValues(alpha: 0.2),
-                blurRadius: 16,
-                spreadRadius: 2,
-                offset: const Offset(0, 4),
+        child: TweenAnimationBuilder<double>(
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOutCubic,
+          tween: Tween<double>(begin: 0.0, end: 1.0),
+          builder: (context, value, child) {
+            return Opacity(
+              opacity: value,
+              child: Transform.translate(
+                offset: Offset(0, 8 * (1 - value)),
+                child: child,
               ),
-            ],
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      AppStyles.successGreen,
-                      AppStyles.successGreen.withValues(alpha: 0.8),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: AppStyles.successGreen.withValues(
+                  alpha: isDark ? 0.35 : 0.25,
+                ),
+                width: 1.2,
+              ),
+              boxShadow: isDark
+                  ? [
+                      BoxShadow(
+                        color: AppStyles.successGreen.withValues(alpha: 0.12),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : [
+                      BoxShadow(
+                        color: AppStyles.successGreen.withValues(alpha: 0.10),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.03),
+                        blurRadius: 6,
+                        offset: const Offset(0, 1),
+                      ),
                     ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppStyles.successGreen.withValues(alpha: 0.3),
-                      blurRadius: 8,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
+            ),
+            child: Row(
+              children: [
+                const _AnimatedAttendanceStatusIcon(
+                  isSuccess: true,
+                  color: AppStyles.successGreen,
+                  icon: Icons.check_rounded,
                 ),
-                child: const Icon(
-                  Icons.check_rounded,
-                  color: Colors.white,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Attendance Confirmed',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                        color: AppStyles.successGreen,
-                        letterSpacing: -0.3,
-                      ),
-                    ),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        '${widget.finalizedPeriod} — ${widget.finalizedSubject}',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppStyles.textGray,
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Attendance Confirmed',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          color: AppStyles.successGreen,
+                          letterSpacing: -0.3,
                         ),
-                        maxLines: 1,
                       ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Marked present by teacher',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: AppStyles.successGreen.withValues(alpha: 0.9),
+                      const SizedBox(height: 3),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '${widget.finalizedPeriod} — ${widget.finalizedSubject}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: isDark
+                                ? const Color(0xFFCBD5E1)
+                                : AppStyles.textGray,
+                          ),
+                          maxLines: 1,
+                        ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      Text(
+                        'Marked present by teacher',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: isDark
+                              ? AppStyles.successGreen.withValues(alpha: 0.95)
+                              : AppStyles.successGreen.withValues(alpha: 0.9),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       );
@@ -2917,71 +2936,110 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     // Teacher finalized — red absent card (persists until next session)
     if (widget.teacherFinalizedAbsent) {
       return Padding(
-        padding: const EdgeInsets.only(bottom: 10.0),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-            color: AppStyles.errorRed.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: AppStyles.errorRed.withValues(alpha: 0.25),
-              width: 1.5,
+        padding: const EdgeInsets.only(bottom: 12.0, top: 4),
+        child: TweenAnimationBuilder<double>(
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOutCubic,
+          tween: Tween<double>(begin: 0.0, end: 1.0),
+          builder: (context, value, child) {
+            return Opacity(
+              opacity: value,
+              child: Transform.translate(
+                offset: Offset(0, 8 * (1 - value)),
+                child: child,
+              ),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: AppStyles.errorRed.withValues(
+                  alpha: isDark ? 0.35 : 0.25,
+                ),
+                width: 1.2,
+              ),
+              boxShadow: isDark
+                  ? [
+                      BoxShadow(
+                        color: AppStyles.errorRed.withValues(alpha: 0.12),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : [
+                      BoxShadow(
+                        color: AppStyles.errorRed.withValues(alpha: 0.10),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.03),
+                        blurRadius: 6,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
             ),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppStyles.errorRed.withValues(alpha: 0.15),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.cancel_rounded,
+            child: Row(
+              children: [
+                const _AnimatedAttendanceStatusIcon(
+                  isSuccess: false,
                   color: AppStyles.errorRed,
-                  size: 22,
+                  icon: Icons.close_rounded,
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Marked Absent',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 15,
-                        color: AppStyles.errorRed,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        '${widget.absentPeriod} — ${widget.absentSubject}',
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Marked Absent',
                         style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: AppStyles.errorRed.withValues(alpha: 0.8),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          color: AppStyles.errorRed,
+                          letterSpacing: -0.3,
                         ),
-                        maxLines: 1,
                       ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'You were not present for this class',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: AppStyles.errorRed.withValues(alpha: 0.7),
+                      const SizedBox(height: 3),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '${widget.absentPeriod} — ${widget.absentSubject}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: isDark
+                                ? const Color(0xFFCBD5E1)
+                                : AppStyles.textGray,
+                          ),
+                          maxLines: 1,
+                        ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      Text(
+                        'You were not present for this class',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: isDark
+                              ? AppStyles.errorRed.withValues(alpha: 0.95)
+                              : AppStyles.errorRed.withValues(alpha: 0.85),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       );
@@ -3321,6 +3379,156 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Animated Attendance Status Icon (One-time scale/fade & subtle pulse)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _AnimatedAttendanceStatusIcon extends StatefulWidget {
+  final bool isSuccess;
+  final Color color;
+  final IconData icon;
+
+  const _AnimatedAttendanceStatusIcon({
+    required this.isSuccess,
+    required this.color,
+    required this.icon,
+  });
+
+  @override
+  State<_AnimatedAttendanceStatusIcon> createState() =>
+      _AnimatedAttendanceStatusIconState();
+}
+
+class _AnimatedAttendanceStatusIconState
+    extends State<_AnimatedAttendanceStatusIcon>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _containerScale;
+  late Animation<double> _containerOpacity;
+  late Animation<double> _iconScale;
+  late Animation<double> _iconOpacity;
+  late Animation<double> _glowSpread;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 650),
+    );
+
+    // 1. Container circle scale & fade (0 - 55%)
+    _containerScale = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.0, 0.55, curve: Curves.easeOutBack),
+      ),
+    );
+    _containerOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.0, 0.35, curve: Curves.easeOut),
+      ),
+    );
+
+    // 2. Icon scale & fade (35% - 85%)
+    _iconScale = Tween<double>(begin: 0.2, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.35, 0.85, curve: Curves.easeOutBack),
+      ),
+    );
+    _iconOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.35, 0.70, curve: Curves.easeOut),
+      ),
+    );
+
+    // 3. Subtle glow pulse & settle (55% - 100%)
+    _glowSpread = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween<double>(begin: 0.0, end: 3.0).chain(
+          CurveTween(curve: Curves.easeOut),
+        ),
+        weight: 50,
+      ),
+      TweenSequenceItem(
+        tween: Tween<double>(begin: 3.0, end: 0.0).chain(
+          CurveTween(curve: Curves.easeIn),
+        ),
+        weight: 50,
+      ),
+    ]).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.55, 1.0),
+      ),
+    );
+
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Opacity(
+          opacity: _containerOpacity.value,
+          child: Transform.scale(
+            scale: _containerScale.value,
+            child: Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    widget.color,
+                    widget.color.withValues(alpha: 0.82),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: widget.color.withValues(
+                      alpha: 0.25 + (_glowSpread.value * 0.05),
+                    ),
+                    blurRadius: 8 + (_glowSpread.value * 2),
+                    spreadRadius: _glowSpread.value * 0.5,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Opacity(
+                  opacity: _iconOpacity.value,
+                  child: Transform.scale(
+                    scale: _iconScale.value,
+                    child: Icon(
+                      widget.icon,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

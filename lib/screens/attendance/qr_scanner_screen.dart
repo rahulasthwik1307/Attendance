@@ -27,6 +27,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   DateTime? _sessionDeadline;
   bool _isRevalidating = false;
   Timer? _countdownTimer;
+  Timer? _sessionMonitorTimer;
   Timer? _errorDismissTimer;
   bool _hasNavigated = false;
   bool _timerInitialized = false;
@@ -40,8 +41,9 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
   int _calculateRemaining() {
     if (_sessionDeadline == null) return _secondsRemaining;
-    final remaining =
-        _sessionDeadline!.difference(DateTime.now().toUtc()).inSeconds;
+    final remaining = _sessionDeadline!
+        .difference(DateTime.now().toUtc())
+        .inSeconds;
     return math.max(0, remaining);
   }
 
@@ -150,7 +152,6 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     return _infoLoaded ? 'Period' : 'Loading...';
   }
 
-  // ignore: unused_element
   String get _timingText {
     if (_forwardedPeriodTiming != null && _forwardedPeriodTiming!.isNotEmpty) {
       return _forwardedPeriodTiming!;
@@ -211,15 +212,18 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       // ── Step 2: Verify attendance session is active ─────────────────
       final sessionRows = await supabase
           .from('attendance_sessions')
-          .select()
+          .select('status, opened_at, subject_id, period_id')
           .eq('id', sessionId)
-          .eq('status', 'active')
           .limit(1);
 
-      if (sessionRows.isEmpty) {
-        _showError('QR session has ended.');
+      if (sessionRows.isEmpty || sessionRows[0]['status'] != 'active') {
+        _countdownTimer?.cancel();
+        _sessionMonitorTimer?.cancel();
+        _showWindowClosedDialog();
         return;
       }
+
+      _sessionId ??= sessionId;
 
       final sessionRecord = sessionRows[0];
       final openedAtStr = sessionRecord['opened_at'] as String?;
@@ -232,10 +236,13 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       }
 
       if (sessionDeadline != null) {
-        final remaining =
-            sessionDeadline.difference(DateTime.now().toUtc()).inSeconds;
+        final remaining = sessionDeadline
+            .difference(DateTime.now().toUtc())
+            .inSeconds;
         if (remaining <= 0) {
-          _showError('Attendance window has closed.');
+          _countdownTimer?.cancel();
+          _sessionMonitorTimer?.cancel();
+          _showWindowClosedDialog();
           return;
         }
       }
@@ -265,6 +272,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       // ── Step 6: Navigate to face verification ───────────────────────
       if (mounted && !_hasNavigated) {
         _hasNavigated = true;
+        _countdownTimer?.cancel();
+        _sessionMonitorTimer?.cancel();
         // Explicitly cancel error timer and wipe any lingering error state before pushing
         _errorDismissTimer?.cancel();
         _errorMessage = null;
@@ -358,11 +367,12 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         _revalidateSession();
       }
       _startCountdown();
+      _startSessionMonitoring();
     }
   }
 
   Future<void> _revalidateSession() async {
-    if (_sessionId == null || !mounted || _isRevalidating) return;
+    if (_sessionId == null || !mounted || _isRevalidating || _hasNavigated) return;
     _isRevalidating = true;
     try {
       final sessionData = await supabase
@@ -374,6 +384,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
       if (!mounted || _hasNavigated) return;
       if (sessionData == null || sessionData['status'] != 'active') {
         _countdownTimer?.cancel();
+        _sessionMonitorTimer?.cancel();
         _showWindowClosedDialog();
         return;
       }
@@ -387,6 +398,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
           setState(() => _secondsRemaining = remaining);
           if (remaining <= 0) {
             _countdownTimer?.cancel();
+            _sessionMonitorTimer?.cancel();
             _showWindowClosedDialog();
             return;
           }
@@ -399,8 +411,23 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     } catch (e) {
       debugPrint('[QR_SCANNER] Error revalidating session: $e');
     } finally {
-      _isRevalidating = false;
+      if (mounted) {
+        _isRevalidating = false;
+      }
     }
+  }
+
+  void _startSessionMonitoring() {
+    _sessionMonitorTimer?.cancel();
+    _sessionMonitorTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+      if (!mounted || _hasNavigated) {
+        timer.cancel();
+        return;
+      }
+      if (_sessionId != null && !_isRevalidating) {
+        _revalidateSession();
+      }
+    });
   }
 
   void _startCountdown() {
@@ -427,6 +454,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
         setState(() => _secondsRemaining = remaining);
         if (remaining <= 0) {
           _countdownTimer?.cancel();
+          _sessionMonitorTimer?.cancel();
           _showWindowClosedDialog();
         } else {
           _revalidateSession();
@@ -436,7 +464,12 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   }
 
   void _showWindowClosedDialog() {
-    if (!mounted) return;
+    if (!mounted || _hasNavigated) return;
+    _hasNavigated = true;
+    _countdownTimer?.cancel();
+    _sessionMonitorTimer?.cancel();
+    _errorDismissTimer?.cancel();
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -513,6 +546,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _errorDismissTimer?.cancel();
+    _countdownTimer?.cancel();
+    _sessionMonitorTimer?.cancel();
     qrScannerReleaseCompleter = Completer<void>();
     Future(() async {
       try {
@@ -525,7 +560,6 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     _scanLineController.dispose();
     _bracketGlowController.dispose();
     _timerPulseController.dispose();
-    _countdownTimer?.cancel();
     super.dispose();
   }
 
@@ -601,7 +635,8 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 
     // ── 1. Top Info Card Geometry ──────────────────────────────────────────
     final double infoCardTop = topSafe + kToolbarHeight + 14.0;
-    const double infoCardHeight = 130.0; // increased to accommodate variable content
+    const double infoCardHeight =
+        130.0; // increased to accommodate variable content
     final double infoCardBottom = infoCardTop + infoCardHeight;
     final double cardHorizontalMargin = math.max(
       34.0,
@@ -821,127 +856,54 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                   borderRadius: BorderRadius.circular(16.8),
                   child: Stack(
                     children: [
-                      
                       // Content
                       Padding(
                         padding: const EdgeInsets.only(
-                          left: 12,
-                          right: 13,
-                          top: 10,
-                          bottom: 10,
+                          left: 14,
+                          right: 14,
+                          top: 11,
+                          bottom: 11,
                         ),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            // ── LEFT: Period + Active pill group (top row) & Subject (below) ──
+                            // ── LEFT: Period badge + Subject + Active Indicator & Timing ──
                             Expanded(
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // Top-left row: "5th Period" pill + "Active" pill
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.center,
-                                    children: [
-                                      // Period label — elegant styled metadata badge
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 7.5,
-                                          vertical: 2.2,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: isDark
-                                              ? subjectTheme.darkBadgeBg
-                                              : subjectTheme.lightBadgeBg,
-                                          borderRadius: BorderRadius.circular(6),
-                                          border: Border.all(
-                                            color: isDark
-                                                ? subjectTheme.darkBadgeBorder
-                                                : subjectTheme.lightBadgeBorder,
-                                            width: 0.9,
-                                          ),
-                                        ),
-                                        child: Text(
-                                          _periodText,
-                                          style: TextStyle(
-                                            fontSize: 10.5,
-                                            fontWeight: FontWeight.w700,
-                                            color: isDark
-                                                ? subjectTheme.darkBadgeText
-                                                : subjectTheme.lightBadgeText,
-                                            letterSpacing: 0.2,
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
+                                  // Period label — elegant styled metadata badge
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8.0,
+                                      vertical: 2.5,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: isDark
+                                          ? subjectTheme.darkBadgeBg
+                                          : subjectTheme.lightBadgeBg,
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: isDark
+                                            ? subjectTheme.darkBadgeBorder
+                                            : subjectTheme.lightBadgeBorder,
+                                        width: 0.9,
                                       ),
-
-                                      const SizedBox(width: 6.0),
-
-                                      // Green "Active" status pill with continuous subtle glow/pulse
-                                      AnimatedBuilder(
-                                        animation: _timerPulseAnimation,
-                                        builder: (context, _) {
-                                          final double pulseVal = _timerPulseAnimation.value;
-                                          final double glow = ((pulseVal - 1.0) / 0.05).clamp(0.0, 1.0);
-                                          return Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8.5,
-                                              vertical: 2.5,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: isDark
-                                                  ? const Color(0xFF059669).withValues(alpha: 0.20 + 0.06 * glow)
-                                                  : const Color(0xFF10B981).withValues(alpha: 0.12 + 0.05 * glow),
-                                              borderRadius: BorderRadius.circular(6),
-                                              border: Border.all(
-                                                color: isDark
-                                                    ? const Color(0xFF34D399).withValues(alpha: 0.40 + 0.15 * glow)
-                                                    : const Color(0xFF10B981).withValues(alpha: 0.35 + 0.15 * glow),
-                                                width: 1.0,
-                                              ),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: isDark
-                                                      ? const Color(0xFF059669).withValues(alpha: 0.20 + 0.10 * glow)
-                                                      : const Color(0xFF10B981).withValues(alpha: 0.12 + 0.10 * glow),
-                                                  blurRadius: 6.0 + 2.0 * glow,
-                                                  spreadRadius: 0.2,
-                                                ),
-                                              ],
-                                            ),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              crossAxisAlignment: CrossAxisAlignment.center,
-                                              children: [
-                                                Container(
-                                                  width: 5.5,
-                                                  height: 5.5,
-                                                  decoration: const BoxDecoration(
-                                                    shape: BoxShape.circle,
-                                                    color: Color(0xFF10B981),
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 4.5),
-                                                Text(
-                                                  'Active',
-                                                  style: TextStyle(
-                                                    fontSize: 10.5,
-                                                    fontWeight: FontWeight.w700,
-                                                    color: isDark
-                                                        ? const Color(0xFF6EE7B7)
-                                                        : const Color(0xFF047857),
-                                                    letterSpacing: 0.2,
-                                                    height: 1.0,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          );
-                                        },
+                                    ),
+                                    child: Text(
+                                      _periodText,
+                                      style: TextStyle(
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w700,
+                                        color: isDark
+                                            ? subjectTheme.darkBadgeText
+                                            : subjectTheme.lightBadgeText,
+                                        letterSpacing: 0.2,
                                       ),
-                                    ],
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ),
 
                                   const SizedBox(height: 3.5),
@@ -953,7 +915,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                                     child: Text(
                                       _subjectText,
                                       style: TextStyle(
-                                        fontSize: 15.5,
+                                        fontSize: 16.0,
                                         fontWeight: FontWeight.w800,
                                         color: isDark
                                             ? Colors.white
@@ -964,11 +926,45 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                                       maxLines: 1,
                                     ),
                                   ),
+
+                                  const SizedBox(height: 4.0),
+
+                                  // Visual Active Status Indicator + Period Timings on one line
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
+                                    children: [
+                                      _ActivePulseDot(
+                                        pulseAnimation: _timerPulseAnimation,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Flexible(
+                                        child: Text(
+                                          _timingText.isNotEmpty
+                                              ? _timingText
+                                              : (_infoLoaded
+                                                    ? 'Active Session'
+                                                    : 'Loading...'),
+                                          style: TextStyle(
+                                            fontSize: 11.5,
+                                            fontWeight: FontWeight.w600,
+                                            color: isDark
+                                                ? const Color(0xFFCBD5E1)
+                                                : const Color(0xFF64748B),
+                                            letterSpacing: 0.15,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ],
                               ),
                             ),
 
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 12),
 
                             // ── RIGHT: Premium circular countdown ─────────────────────
                             _PremiumCircularCountdown(
@@ -1110,7 +1106,6 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 // Active Status Indicator — Subtle breathing pulse dot for active session
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ignore: unused_element
 class _ActivePulseDot extends StatelessWidget {
   final Animation<double> pulseAnimation;
 
@@ -1131,7 +1126,7 @@ class _ActivePulseDot extends StatelessWidget {
               height: 12.0 * scale,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF22C55E).withValues(alpha: 0.22 * scale),
+                color: const Color(0xFF10B981).withValues(alpha: 0.25 * scale),
               ),
             ),
             // Inner solid green center dot
@@ -1140,7 +1135,7 @@ class _ActivePulseDot extends StatelessWidget {
               height: 6.0,
               decoration: const BoxDecoration(
                 shape: BoxShape.circle,
-                color: Color(0xFF22C55E),
+                color: Color(0xFF10B981),
               ),
             ),
           ],
@@ -1198,8 +1193,8 @@ class _PremiumCircularCountdown extends StatelessWidget {
     return ScaleTransition(
       scale: pulseAnimation,
       child: SizedBox(
-        width: 56,
-        height: 56,
+        width: 62,
+        height: 62,
         child: CustomPaint(
           painter: _CircularTimerPainter(
             progress: secondsRemaining / 180.0,
@@ -1212,12 +1207,12 @@ class _PremiumCircularCountdown extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.timer_outlined, size: 9.0, color: textColor),
-                const SizedBox(height: 1.0),
+                Icon(Icons.timer_outlined, size: 10.5, color: textColor),
+                const SizedBox(height: 1.5),
                 Text(
                   '$mm:$ss',
                   style: TextStyle(
-                    fontSize: 11.5,
+                    fontSize: 12.5,
                     fontWeight: FontWeight.w800,
                     color: textColor,
                     letterSpacing: 0.2,
@@ -1253,13 +1248,13 @@ class _CircularTimerPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.width / 2) - 3.5;
-    const strokeW = 2.8;
+    final radius = (size.width / 2) - 4.0;
+    const strokeW = 3.0;
 
     // ── 1. Subtle drop-shadow for the ring ─────────────────────────────
     if (!isDark) {
       final shadowPaint = Paint()
-        ..color = ringColor.withValues(alpha: 0.10)
+        ..color = ringColor.withValues(alpha: 0.12)
         ..style = PaintingStyle.stroke
         ..strokeWidth = strokeW + 2.5
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
@@ -1580,4 +1575,3 @@ _SubjectColorTheme _getSubjectColorTheme(String subjectName) {
   final index = _hashStringToNumber(cleanName) % _kSubjectColorThemes.length;
   return _kSubjectColorThemes[index];
 }
-
