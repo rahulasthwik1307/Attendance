@@ -1920,13 +1920,15 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
       if (todaySessionIds.isNotEmpty) {
         final pa = await supabase
             .from('period_attendance')
-            .select('session_id, status, face_verified')
+            .select('session_id, status, face_verified, override_by_teacher')
             .eq('student_id', user.id)
             .inFilter('session_id', todaySessionIds);
         for (final a in pa) {
           final isPresent = (a['status'] == 'present') && (a['face_verified'] == true);
+          final overrideByTeacher = a['override_by_teacher'] as bool? ?? false;
+          final isGenuine = isPresent && !overrideByTeacher;
           studentAttendance[a['session_id'] as String] =
-              isPresent ? 'present' : (a['status'] as String? ?? 'absent');
+              isGenuine ? 'verified' : (isPresent ? 'present' : (a['status'] as String? ?? 'absent'));
         }
       }
 
@@ -1974,10 +1976,12 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
             : null;
 
         String cardStatus = 'upcoming';
-        if (sessionStatus == 'active' || sessionStatus == 'reviewing') {
-          cardStatus = studentStatus == 'present' ? 'done' : 'current';
+        if (sessionStatus == 'active') {
+          cardStatus = (studentStatus == 'verified' || studentStatus == 'present') ? 'done' : 'current';
+        } else if (sessionStatus == 'reviewing') {
+          cardStatus = studentStatus == 'verified' ? 'done' : 'current';
         } else if (sessionStatus == 'finalized') {
-          cardStatus = studentStatus == 'present' ? 'done' : 'absent';
+          cardStatus = (studentStatus == 'present' || studentStatus == 'verified') ? 'done' : 'absent';
         }
 
         items.add({
@@ -2574,13 +2578,17 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       // Query student's period_attendance record for THIS EXACT sessionId
       final attendanceRecord = await supabase
           .from('period_attendance')
-          .select('status, face_verified')
+          .select('status, face_verified, override_by_teacher')
           .eq('session_id', sessionId)
           .eq('student_id', user.id)
           .maybeSingle();
 
       final studentStatus = attendanceRecord?['status'] as String?;
       final faceVerified = attendanceRecord?['face_verified'] as bool? ?? false;
+      final overrideByTeacher =
+          attendanceRecord?['override_by_teacher'] as bool? ?? false;
+      final bool isGenuineStudent =
+          (studentStatus == 'present' && faceVerified && !overrideByTeacher);
 
       // Fetch metadata for subject and period
       await _fetchSessionMetadata(currentSession);
@@ -2606,7 +2614,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
         final remainingSeconds = _calculateRemainingSeconds();
 
-        if (studentStatus == 'present' && faceVerified) {
+        if (isGenuineStudent) {
           // Submitted and verified -> waiting for teacher to finalize
           _sessionDeadline = null;
           _countdownTimer?.cancel();
@@ -2643,14 +2651,20 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       }
       // 2. REVIEWING SESSION
       else if (sessionStatus == 'reviewing') {
+        final bool isNewSession =
+            _activeSessionId != null && _activeSessionId != sessionId;
+        if (isNewSession) {
+          _hasMarkedAttendance = false;
+          widget.onNewSession?.call();
+        }
         _activeSessionId = sessionId;
         _sessionDeadline = null;
         _countdownTimer?.cancel();
         _pollingTimer?.cancel();
         _pollingTimer = null;
 
-        if (studentStatus == 'present' && faceVerified) {
-          // Keep showing waiting for teacher to finalize
+        if (_hasMarkedAttendance || isGenuineStudent) {
+          // Case A: Student genuinely completed face verification -> keep showing waiting for teacher approval
           setState(() {
             _secondsRemaining = 0;
             _hasMarkedAttendance = true;
@@ -2658,11 +2672,12 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             _isClosed = false;
           });
         } else {
-          // Active scanning is closed, but NOT final absent yet
+          // Case B: No successful student verification / unresolved / manual-only override
+          // Keep neutral dashboard state (do not show result banner or waiting state)
           setState(() {
             _secondsRemaining = 0;
             _hasMarkedAttendance = false;
-            _isClosed = true;
+            _isClosed = false;
             _isVisible = false;
           });
         }

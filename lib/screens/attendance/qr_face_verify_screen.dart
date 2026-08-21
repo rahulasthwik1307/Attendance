@@ -298,9 +298,27 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
             _subjectName = forwardedSubject;
             _periodInfo = cleanPeriod;
           });
+          // Verify session status & deadline before camera initialization
+          final bool sessionActive = await _isSessionActive();
+          if (!sessionActive) {
+            FaceLogger.ver(
+              _sessionId ?? 'QR_VER',
+              'Session is not active or deadline expired on mount',
+            );
+            if (mounted && !_isTerminal) {
+              _navigateToTimeout(
+                isTimeout: true,
+                customTitle: 'Session Ended',
+                customMessage:
+                    'The attendance session has ended. Verification cannot be completed.',
+              );
+            }
+            return;
+          }
         } else {
           // Fallback only if not forwarded — e.g. deep link or old nav path
           await _fetchSessionInfo();
+          if (_isTerminal) return;
         }
       }
       await _initializeCamera();
@@ -327,19 +345,28 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       if (data != null && mounted) {
         final status = data['status'] as String?;
         final openedAtStr = data['opened_at'] as String?;
-        if (openedAtStr != null && _sessionDeadline == null) {
+        if (openedAtStr != null) {
           try {
             final openedAt = DateTime.parse(openedAtStr).toUtc();
             _sessionDeadline = openedAt.add(const Duration(seconds: 180));
             _sessionSecondsRemaining = _calculateSessionRemainingSeconds();
           } catch (_) {}
         }
-        if (status != null && status != 'active') {
+        final bool isExpired = _sessionDeadline != null &&
+            (DateTime.now().toUtc().isAfter(_sessionDeadline!) ||
+                DateTime.now().toUtc().isAtSameMomentAs(_sessionDeadline!));
+
+        if (status != 'active' || isExpired) {
           FaceLogger.ver(
             _sessionId ?? 'QR_VER',
-            'Teacher session is not active: $status',
+            'Teacher session is not active ($status) or expired ($isExpired)',
           );
-          _navigateToTimeout(isTimeout: true);
+          _navigateToTimeout(
+            isTimeout: true,
+            customTitle: isExpired ? 'Session Expired' : 'Session Ended',
+            customMessage:
+                'The attendance session has ended. Verification cannot be completed.',
+          );
           return;
         }
 
@@ -366,12 +393,40 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     try {
       final data = await Supabase.instance.client
           .from('attendance_sessions')
-          .select('status')
+          .select('status, opened_at')
           .eq('id', _sessionId!)
           .maybeSingle();
       if (data != null) {
         final status = data['status'] as String?;
-        return status == 'active';
+        if (status != 'active') return false;
+
+        final openedAtStr = data['opened_at'] as String?;
+        if (openedAtStr != null) {
+          try {
+            final openedAt = DateTime.parse(openedAtStr).toUtc();
+            final deadline = openedAt.add(const Duration(seconds: 180));
+            _sessionDeadline = deadline;
+            final nowUtc = DateTime.now().toUtc();
+            if (nowUtc.isAfter(deadline) || nowUtc.isAtSameMomentAs(deadline)) {
+              FaceLogger.ver(
+                _sessionId ?? 'QR_VER',
+                'Session authoritative 180s deadline has expired (deadline: $deadline, now: $nowUtc)',
+              );
+              return false;
+            }
+          } catch (_) {}
+        } else if (_sessionDeadline != null) {
+          final nowUtc = DateTime.now().toUtc();
+          if (nowUtc.isAfter(_sessionDeadline!) ||
+              nowUtc.isAtSameMomentAs(_sessionDeadline!)) {
+            FaceLogger.ver(
+              _sessionId ?? 'QR_VER',
+              'Session local deadline has expired (deadline: $_sessionDeadline, now: $nowUtc)',
+            );
+            return false;
+          }
+        }
+        return true;
       }
     } catch (e) {
       debugPrint('[QR_FACE_VER] Error checking session status: $e');
@@ -379,7 +434,11 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     return false;
   }
 
-  void _navigateToTimeout({required bool isTimeout}) {
+  void _navigateToTimeout({
+    required bool isTimeout,
+    String? customTitle,
+    String? customMessage,
+  }) {
     if (_isTerminal || !mounted) return;
     _isTerminal = true;
     _countdownTimer?.cancel();
@@ -387,9 +446,19 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
     try {
       _cameraController?.stopImageStream();
     } catch (_) {}
-    Navigator.of(
-      context,
-    ).pushReplacementNamed('/qr-timeout', arguments: isTimeout);
+    if (customTitle != null || customMessage != null) {
+      final Map<String, dynamic> args = {'isTimeout': isTimeout};
+      if (customTitle != null) args['customTitle'] = customTitle;
+      if (customMessage != null) args['customMessage'] = customMessage;
+      Navigator.of(context).pushReplacementNamed(
+        '/qr-timeout',
+        arguments: args,
+      );
+    } else {
+      Navigator.of(
+        context,
+      ).pushReplacementNamed('/qr-timeout', arguments: isTimeout);
+    }
   }
 
   void _navigateToSuccess() {
@@ -1436,9 +1505,14 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
           if (!sessionActive) {
             FaceLogger.ver(
               _sessionId ?? 'QR_VER',
-              'Teacher session expired during spoof retry delay',
+              'Teacher session expired or deadline passed during spoof retry delay',
             );
-            _navigateToTimeout(isTimeout: true);
+            _navigateToTimeout(
+              isTimeout: true,
+              customTitle: 'Session Ended',
+              customMessage:
+                  'The attendance session has ended during retry.',
+            );
             return;
           }
 
@@ -1480,9 +1554,14 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
           if (!sessionActive) {
             FaceLogger.ver(
               _sessionId ?? 'QR_VER',
-              'Teacher session expired during quality retry delay',
+              'Teacher session expired or deadline passed during quality retry delay',
             );
-            _navigateToTimeout(isTimeout: true);
+            _navigateToTimeout(
+              isTimeout: true,
+              customTitle: 'Session Ended',
+              customMessage:
+                  'The attendance session has ended during retry.',
+            );
             return;
           }
 
@@ -1609,15 +1688,20 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       debugPrint('[QR_FACE][VERIFY] =========================');
 
       if (isMatch) {
-        // Step A: Pre-check session status before transitioning to success phase
+        // Step A: Pre-check session status and deadline before transitioning to success phase
         final bool sessionActiveInitial = await _isSessionActive();
         if (!sessionActiveInitial) {
           FaceLogger.ver(
             _sessionId ?? 'QR_VER',
-            'Face matched, but attendance session is no longer active. Refusing to mark present.',
+            'Face matched, but attendance session is no longer active or deadline expired. Refusing to mark present.',
           );
           if (mounted && !_isTerminal) {
-            _navigateToTimeout(isTimeout: true);
+            _navigateToTimeout(
+              isTimeout: true,
+              customTitle: 'Session Ended',
+              customMessage:
+                  'The attendance session has ended. Verification cannot be completed.',
+            );
           }
           return;
         }
@@ -1640,15 +1724,20 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
 
         _countdownTimer?.cancel();
 
-        // Step B: Re-verify session status immediately before attendance update (race condition guard)
+        // Step B: Re-verify session status and deadline immediately before attendance update (race condition guard)
         final bool sessionStillActive = await _isSessionActive();
         if (!sessionStillActive) {
           FaceLogger.ver(
             _sessionId ?? 'QR_VER',
-            'Attendance session closed immediately before DB write. Refusing to mark present.',
+            'Attendance session closed or deadline expired immediately before DB write. Refusing to mark present.',
           );
           if (mounted && !_isTerminal) {
-            _navigateToTimeout(isTimeout: true);
+            _navigateToTimeout(
+              isTimeout: true,
+              customTitle: 'Session Ended',
+              customMessage:
+                  'The attendance session has ended. Verification cannot be completed.',
+            );
           }
           return;
         }
@@ -1700,9 +1789,14 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
           if (!sessionActive) {
             FaceLogger.ver(
               _sessionId ?? 'QR_VER',
-              'Teacher session expired during retry delay',
+              'Teacher session expired or deadline passed during retry delay',
             );
-            _navigateToTimeout(isTimeout: true);
+            _navigateToTimeout(
+              isTimeout: true,
+              customTitle: 'Session Ended',
+              customMessage:
+                  'The attendance session has ended during retry.',
+            );
             return;
           }
 
@@ -1848,6 +1942,26 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
         _secondsRemaining = remaining;
         _sessionSecondsRemaining = sessionRemaining;
       });
+
+      // Authoritative 180s session window check
+      if (_sessionDeadline != null && sessionRemaining <= 0) {
+        timer.cancel();
+        if (mounted && !_isTerminal && _phase != _Phase.done) {
+          FaceLogger.ver(
+            _sessionId ?? 'QR_VER',
+            '180-second attendance session timer expired',
+          );
+          _navigateToTimeout(
+            isTimeout: true,
+            customTitle: 'Session Expired',
+            customMessage:
+                'The attendance window has ended. Verification could not be completed.',
+          );
+        }
+        return;
+      }
+
+      // Dedicated 60s face verification window check
       if (remaining > 0) {
         _timerPulseController.forward().then((_) {
           if (mounted) _timerPulseController.reverse();
@@ -2330,13 +2444,19 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
           _secondsRemaining = remaining;
           _sessionSecondsRemaining = sessionRemaining;
         });
-        if (remaining <= 0) {
+        if (remaining <= 0 ||
+            (_sessionDeadline != null && sessionRemaining <= 0)) {
           _countdownTimer?.cancel();
           FaceLogger.ver(
             _sessionId ?? 'QR_VER',
-            '60-second face verification timer expired while in background',
+            'Session or face verification timer expired while in background',
           );
-          _navigateToTimeout(isTimeout: true);
+          _navigateToTimeout(
+            isTimeout: true,
+            customTitle: 'Session Expired',
+            customMessage:
+                'The attendance session has expired while in background.',
+          );
         } else {
           _revalidateSessionOnResume();
         }
@@ -2352,9 +2472,14 @@ class _QrFaceVerifyScreenState extends State<QrFaceVerifyScreen>
       if (!isActive && mounted && !_isTerminal && _phase != _Phase.done) {
         FaceLogger.ver(
           _sessionId ?? 'QR_VER',
-          'Teacher attendance session closed while app was backgrounded',
+          'Teacher attendance session closed or deadline expired while app was backgrounded',
         );
-        _navigateToTimeout(isTimeout: true);
+        _navigateToTimeout(
+          isTimeout: true,
+          customTitle: 'Session Ended',
+          customMessage:
+              'The attendance session has ended. Verification cannot be completed.',
+        );
       }
     } catch (e) {
       debugPrint('[QR_FACE_VER] Error revalidating session on resume: $e');
