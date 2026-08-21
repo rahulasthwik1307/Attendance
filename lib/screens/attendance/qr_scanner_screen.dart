@@ -150,6 +150,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
     return _infoLoaded ? 'Period' : 'Loading...';
   }
 
+  // ignore: unused_element
   String get _timingText {
     if (_forwardedPeriodTiming != null && _forwardedPeriodTiming!.isNotEmpty) {
       return _forwardedPeriodTiming!;
@@ -832,45 +833,119 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            // ── LEFT: Period badge + Subject + Active Indicator/Timing ──
+                            // ── LEFT: Period + Active pill group (top row) & Subject (below) ──
                             Expanded(
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // Period label — elegant styled metadata badge
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 7.5,
-                                      vertical: 2.2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: isDark
-                                          ? subjectTheme.darkBadgeBg
-                                          : subjectTheme.lightBadgeBg,
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(
-                                        color: isDark
-                                            ? subjectTheme.darkBadgeBorder
-                                            : subjectTheme.lightBadgeBorder,
-                                        width: 0.9,
+                                  // Top-left row: "5th Period" pill + "Active" pill
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    children: [
+                                      // Period label — elegant styled metadata badge
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 7.5,
+                                          vertical: 2.2,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: isDark
+                                              ? subjectTheme.darkBadgeBg
+                                              : subjectTheme.lightBadgeBg,
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(
+                                            color: isDark
+                                                ? subjectTheme.darkBadgeBorder
+                                                : subjectTheme.lightBadgeBorder,
+                                            width: 0.9,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          _periodText,
+                                          style: TextStyle(
+                                            fontSize: 10.5,
+                                            fontWeight: FontWeight.w700,
+                                            color: isDark
+                                                ? subjectTheme.darkBadgeText
+                                                : subjectTheme.lightBadgeText,
+                                            letterSpacing: 0.2,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
                                       ),
-                                    ),
-                                    child: Text(
-                                      _periodText,
-                                      style: TextStyle(
-                                        fontSize: 10.5,
-                                        fontWeight: FontWeight.w700,
-                                        color: isDark
-                                            ? subjectTheme.darkBadgeText
-                                            : subjectTheme.lightBadgeText,
-                                        letterSpacing: 0.2,
+
+                                      const SizedBox(width: 6.0),
+
+                                      // Green "Active" status pill with continuous subtle glow/pulse
+                                      AnimatedBuilder(
+                                        animation: _timerPulseAnimation,
+                                        builder: (context, _) {
+                                          final double pulseVal = _timerPulseAnimation.value;
+                                          final double glow = ((pulseVal - 1.0) / 0.05).clamp(0.0, 1.0);
+                                          return Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8.5,
+                                              vertical: 2.5,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: isDark
+                                                  ? const Color(0xFF059669).withValues(alpha: 0.20 + 0.06 * glow)
+                                                  : const Color(0xFF10B981).withValues(alpha: 0.12 + 0.05 * glow),
+                                              borderRadius: BorderRadius.circular(6),
+                                              border: Border.all(
+                                                color: isDark
+                                                    ? const Color(0xFF34D399).withValues(alpha: 0.40 + 0.15 * glow)
+                                                    : const Color(0xFF10B981).withValues(alpha: 0.35 + 0.15 * glow),
+                                                width: 1.0,
+                                              ),
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: isDark
+                                                      ? const Color(0xFF059669).withValues(alpha: 0.20 + 0.10 * glow)
+                                                      : const Color(0xFF10B981).withValues(alpha: 0.12 + 0.10 * glow),
+                                                  blurRadius: 6.0 + 2.0 * glow,
+                                                  spreadRadius: 0.2,
+                                                ),
+                                              ],
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              crossAxisAlignment: CrossAxisAlignment.center,
+                                              children: [
+                                                Container(
+                                                  width: 5.5,
+                                                  height: 5.5,
+                                                  decoration: const BoxDecoration(
+                                                    shape: BoxShape.circle,
+                                                    color: Color(0xFF10B981),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 4.5),
+                                                Text(
+                                                  'Active',
+                                                  style: TextStyle(
+                                                    fontSize: 10.5,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: isDark
+                                                        ? const Color(0xFF6EE7B7)
+                                                        : const Color(0xFF047857),
+                                                    letterSpacing: 0.2,
+                                                    height: 1.0,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                        },
                                       ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
+                                    ],
                                   ),
+
                                   const SizedBox(height: 3.5),
+
                                   // Subject name — responsive hero typography (never clips)
                                   FittedBox(
                                     fit: BoxFit.scaleDown,
@@ -888,35 +963,6 @@ class _QrScannerScreenState extends State<QrScannerScreen>
                                       ),
                                       maxLines: 1,
                                     ),
-                                  ),
-                                  const SizedBox(height: 4.0),
-                                  // Visual Active Status Indicator + Period Timings on one line
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.center,
-                                    children: [
-                                      _ActivePulseDot(
-                                        pulseAnimation: _timerPulseAnimation,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Flexible(
-                                        child: Text(
-                                          _timingText.isNotEmpty
-                                              ? _timingText
-                                              : '',
-                                          style: TextStyle(
-                                            fontSize: 11.5,
-                                            fontWeight: FontWeight.w600,
-                                            color: isDark
-                                                ? const Color(0xFFCBD5E1)
-                                                : const Color(0xFF64748B),
-                                            letterSpacing: 0.15,
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                    ],
                                   ),
                                 ],
                               ),
@@ -1064,6 +1110,7 @@ class _QrScannerScreenState extends State<QrScannerScreen>
 // Active Status Indicator — Subtle breathing pulse dot for active session
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ignore: unused_element
 class _ActivePulseDot extends StatelessWidget {
   final Animation<double> pulseAnimation;
 
