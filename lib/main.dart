@@ -41,6 +41,7 @@ import 'screens/auth/password_change_success_screen.dart' as pw_change_success;
 import 'screens/face/face_updated_success_screen.dart' as face_updated_success;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'services/face_landmark_service.dart';
+import 'services/notification_service.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -48,20 +49,40 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+
+  debugPrint('[FCM-BG] Background message received: ${message.data}');
+
+  if (message.data['type'] == 'attendance_opened') {
+    final prefs = await SharedPreferences.getInstance();
+    final bool enabled = prefs.getBool('notifications_enabled') ?? true;
+    if (!enabled) {
+      debugPrint(
+        '[FCM-BG] Notification suppressed because notifications are disabled',
+      );
+      return;
+    }
+
+    final bgNotificationsPlugin = FlutterLocalNotificationsPlugin();
+    const AndroidInitializationSettings androidInit =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initSettings = InitializationSettings(
+      android: androidInit,
+    );
+    await bgNotificationsPlugin.initialize(settings: initSettings);
+    await NotificationService.createNotificationChannel(bgNotificationsPlugin);
+
+    await NotificationService.showAttendanceNotification(
+      plugin: bgNotificationsPlugin,
+      data: message.data,
+    );
+    debugPrint('[FCM-BG] Background attendance notification displayed');
+  }
 }
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-    FlutterLocalNotificationsPlugin();
-
-const AndroidNotificationChannel attendanceChannel = AndroidNotificationChannel(
-  'attendance_alerts',
-  'Attendance Alerts',
-  description: 'Notifications for attendance window opening',
-  importance: Importance.max,
-  playSound: true,
-  enableVibration: true,
-);
+    NotificationService.localNotificationsPlugin;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -72,50 +93,35 @@ void main() async {
   await Firebase.initializeApp();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-  await flutterLocalNotificationsPlugin
-      .resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin
-      >()
-      ?.createNotificationChannel(attendanceChannel);
-
   const AndroidInitializationSettings androidInit =
       AndroidInitializationSettings('@mipmap/ic_launcher');
   const InitializationSettings initSettings = InitializationSettings(
     android: androidInit,
   );
   await flutterLocalNotificationsPlugin.initialize(settings: initSettings);
+  await NotificationService.createNotificationChannel(
+    flutterLocalNotificationsPlugin,
+  );
 
   FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-    final notification = message.notification;
-    final android = message.notification?.android;
-    if (notification != null && android != null) {
+    debugPrint('[FCM-FG] Foreground message received: ${message.data}');
+
+    if (message.data['type'] == 'attendance_opened') {
       // Check user preference before showing foreground notification
       final prefs = await SharedPreferences.getInstance();
       final bool enabled = prefs.getBool('notifications_enabled') ?? true;
       if (!enabled) {
         debugPrint(
-          '[FCM] Notification blocked because notifications are disabled',
+          '[FCM-FG] Notification blocked because notifications are disabled',
         );
         return;
       }
-      flutterLocalNotificationsPlugin.show(
-        id: notification.hashCode,
-        title: notification.title,
-        body: notification.body,
-        notificationDetails: NotificationDetails(
-          android: AndroidNotificationDetails(
-            attendanceChannel.id,
-            attendanceChannel.name,
-            channelDescription: attendanceChannel.description,
-            importance: Importance.max,
-            priority: Priority.high,
-            icon: '@mipmap/ic_launcher',
-            playSound: true,
-            enableVibration: true,
-          ),
-        ),
+
+      await NotificationService.showAttendanceNotification(
+        plugin: flutterLocalNotificationsPlugin,
+        data: message.data,
       );
-      debugPrint('[FCM] Notification displayed');
+      debugPrint('[FCM-FG] Foreground attendance notification displayed');
     }
   });
 

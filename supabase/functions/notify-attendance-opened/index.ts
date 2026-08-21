@@ -135,7 +135,7 @@ serve(async (req: Request) => {
       .select("name")
       .eq("id", subjectId)
       .maybeSingle();
-    const subjectName = subjectData?.name ?? "Class";
+    const subjectName = subjectData?.name ?? "";
 
     // Get period number
     const { data: periodData } = await supabase
@@ -212,21 +212,16 @@ serve(async (req: Request) => {
         const fcmPayload = {
           message: {
             token: token,
-            notification: {
-              title: "📋 Attendance Open",
-              body: `${subjectName} · Period ${periodNum}\nScan the QR code now to mark your attendance.`,
-            },
             android: {
               priority: "high",
-              notification: {
-                channel_id: "attendance_alerts",
-                sound: "default",
-              },
             },
             data: {
               type: "attendance_opened",
-              session_id: sessionId,
-              class_id: classId,
+              session_id: String(sessionId),
+              class_id: String(classId),
+              subject_name: String(subjectName ?? ""),
+              period_number:
+                periodNum != null && periodNum !== "" ? String(periodNum) : "",
             },
           },
         };
