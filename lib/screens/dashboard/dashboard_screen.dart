@@ -5235,39 +5235,46 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
                           )
                         : isAbsent
                         ? AnimatedBuilder(
-                            animation: _fireScaleAnim,
+                            animation: Listenable.merge([
+                              _glowAnim,
+                              _fireScaleAnim,
+                            ]),
                             builder: (context, child) {
                               return Container(
                                 width: 38,
                                 height: 38,
                                 decoration: BoxDecoration(
                                   color: color.withValues(
-                                    alpha: isDark ? 0.12 : 0.08,
+                                    alpha: isDark ? 0.18 : 0.13,
                                   ),
                                   shape: BoxShape.circle,
                                   border: Border.all(
                                     color: color.withValues(
-                                      alpha: isDark ? 0.35 : 0.28,
+                                      alpha: isDark ? 0.60 : 0.48,
                                     ),
-                                    width: 2.0,
+                                    width: 2.2,
                                   ),
                                   boxShadow: [
                                     BoxShadow(
                                       color: color.withValues(
-                                        alpha: isDark ? 0.08 : 0.04,
+                                        alpha: isDark
+                                            ? (0.12 + _glowAnim.value * 0.20)
+                                            : (0.08 + _glowAnim.value * 0.15),
                                       ),
-                                      blurRadius: 4,
-                                      offset: const Offset(0, 1.5),
+                                      blurRadius: 6 + (_glowAnim.value * 5),
+                                      spreadRadius: 0.5,
                                     ),
                                   ],
                                 ),
                                 child: Center(
-                                  child: Transform.scale(
-                                    scale: 0.94 +
-                                        (_fireScaleAnim.value - 0.88) * 0.25,
-                                    child: const Text(
-                                      '❄️',
-                                      style: TextStyle(fontSize: 15.5),
+                                  child: Transform.rotate(
+                                    angle: (_fireScaleAnim.value - 1.0) * 0.65,
+                                    child: Transform.scale(
+                                      scale: _fireScaleAnim.value,
+                                      child: const Text(
+                                        '❄️',
+                                        style: TextStyle(fontSize: 16.5),
+                                      ),
                                     ),
                                   ),
                                 ),
