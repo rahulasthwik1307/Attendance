@@ -1432,6 +1432,109 @@ class _CampusStatusIconWidgetState extends State<_CampusStatusIconWidget>
   }
 }
 
+class _PeriodStatusIconWidget extends StatefulWidget {
+  final IconData icon;
+  final Color primaryColor;
+  final Color secondaryColor;
+  final bool isDark;
+  final bool isSuccess;
+
+  const _PeriodStatusIconWidget({
+    required this.icon,
+    required this.primaryColor,
+    required this.secondaryColor,
+    required this.isDark,
+    this.isSuccess = true,
+  });
+
+  @override
+  State<_PeriodStatusIconWidget> createState() =>
+      _PeriodStatusIconWidgetState();
+}
+
+class _PeriodStatusIconWidgetState extends State<_PeriodStatusIconWidget>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _animController;
+  late Animation<double> _scaleAnimation;
+  late Animation<double> _glowAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    );
+    _scaleAnimation = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween<double>(begin: 1.0, end: 1.07)
+            .chain(CurveTween(curve: Curves.easeInOutCubic)),
+        weight: 50,
+      ),
+      TweenSequenceItem(
+        tween: Tween<double>(begin: 1.07, end: 1.0)
+            .chain(CurveTween(curve: Curves.easeInOutCubic)),
+        weight: 50,
+      ),
+    ]).animate(_animController);
+
+    _glowAnimation = Tween<double>(begin: 3.0, end: 9.0).animate(
+      CurvedAnimation(parent: _animController, curve: Curves.easeInOut),
+    );
+
+    _animController.repeat();
+  }
+
+  @override
+  void dispose() {
+    _animController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _animController,
+      builder: (context, child) {
+        return Transform.scale(
+          scale: _scaleAnimation.value,
+          child: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  widget.primaryColor,
+                  widget.secondaryColor,
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(15),
+              boxShadow: [
+                BoxShadow(
+                  color: widget.primaryColor
+                      .withValues(alpha: widget.isDark ? 0.40 : 0.28),
+                  blurRadius: _glowAnimation.value * 1.5,
+                  spreadRadius: _glowAnimation.value * 0.15,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Center(
+              child: Icon(
+                widget.icon,
+                color: Colors.white,
+                size: 24,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _AttendancePercentageCard extends StatefulWidget {
   final ThemeData theme;
   final bool isDark;
@@ -3348,7 +3451,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // Teacher finalized — green confirmed card (persists until next session)
+    // Teacher finalized — Electric Royal Blue/Indigo confirmed card (persists until next session)
     if (widget.teacherFinalized) {
       final periodText = widget.finalizedPeriod.isNotEmpty
           ? widget.finalizedPeriod
@@ -3357,7 +3460,10 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           ? widget.finalizedSubject
           : 'Class Attendance';
 
-      final color = AppStyles.successGreen;
+      final primaryColor = const Color(0xFF2563EB); // Royal Blue
+      final secondaryColor = const Color(0xFF4F46E5); // Deep Indigo
+      final tagColor =
+          isDark ? const Color(0xFF60A5FA) : const Color(0xFF2563EB);
 
       return Padding(
         padding: const EdgeInsets.only(bottom: 12.0, top: 4),
@@ -3380,13 +3486,15 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
-              color: color.withValues(alpha: isDark ? 0.14 : 0.06),
+              color: tagColor.withValues(alpha: isDark ? 0.14 : 0.06),
               borderRadius: BorderRadius.circular(18),
-              border:
-                  Border.all(color: color.withValues(alpha: 0.28), width: 1.5),
+              border: Border.all(
+                color: tagColor.withValues(alpha: 0.30),
+                width: 1.5,
+              ),
               boxShadow: [
                 BoxShadow(
-                  color: color.withValues(alpha: isDark ? 0.14 : 0.07),
+                  color: primaryColor.withValues(alpha: isDark ? 0.15 : 0.08),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
@@ -3394,18 +3502,19 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             ),
             child: Row(
               children: [
-                _CampusStatusIconWidget(
-                  icon: Icons.verified_user_rounded,
-                  color: color,
-                  shouldPulse: false,
+                _PeriodStatusIconWidget(
+                  icon: Icons.task_alt_rounded,
+                  primaryColor: primaryColor,
+                  secondaryColor: secondaryColor,
                   isDark: isDark,
+                  isSuccess: true,
                 ),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildPeriodCategoryTag(color, isDark),
+                      _buildPeriodCategoryTag(tagColor, isDark),
                       const SizedBox(height: 5),
                       _buildTwoToneTitle(periodText, subjectText, isDark),
                       const SizedBox(height: 3),
@@ -3414,7 +3523,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: color,
+                          color: tagColor,
                         ),
                       ),
                     ],
@@ -3427,7 +3536,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       );
     }
 
-    // Teacher finalized — red absent card (persists until next session)
+    // Teacher finalized — Coral/Rose absent card (persists until next session)
     if (widget.teacherFinalizedAbsent) {
       final periodText = widget.absentPeriod.isNotEmpty
           ? widget.absentPeriod
@@ -3436,7 +3545,10 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           ? widget.absentSubject
           : 'Class Attendance';
 
-      final color = const Color(0xFFEF4444);
+      final primaryColor = const Color(0xFFF43F5E); // Coral Rose
+      final secondaryColor = const Color(0xFFE11D48); // Deep Rose
+      final tagColor =
+          isDark ? const Color(0xFFFB7185) : const Color(0xFFF43F5E);
 
       return Padding(
         padding: const EdgeInsets.only(bottom: 12.0, top: 4),
@@ -3459,13 +3571,15 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
-              color: color.withValues(alpha: isDark ? 0.14 : 0.06),
+              color: tagColor.withValues(alpha: isDark ? 0.14 : 0.06),
               borderRadius: BorderRadius.circular(18),
-              border:
-                  Border.all(color: color.withValues(alpha: 0.28), width: 1.5),
+              border: Border.all(
+                color: tagColor.withValues(alpha: 0.30),
+                width: 1.5,
+              ),
               boxShadow: [
                 BoxShadow(
-                  color: color.withValues(alpha: isDark ? 0.14 : 0.07),
+                  color: primaryColor.withValues(alpha: isDark ? 0.15 : 0.08),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
@@ -3473,18 +3587,19 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             ),
             child: Row(
               children: [
-                _CampusStatusIconWidget(
-                  icon: Icons.event_busy_rounded,
-                  color: color,
-                  shouldPulse: true,
+                _PeriodStatusIconWidget(
+                  icon: Icons.cancel_presentation_rounded,
+                  primaryColor: primaryColor,
+                  secondaryColor: secondaryColor,
                   isDark: isDark,
+                  isSuccess: false,
                 ),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildPeriodCategoryTag(color, isDark),
+                      _buildPeriodCategoryTag(tagColor, isDark),
                       const SizedBox(height: 5),
                       _buildTwoToneTitle(periodText, subjectText, isDark),
                       const SizedBox(height: 3),
@@ -3493,7 +3608,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: color,
+                          color: tagColor,
                         ),
                       ),
                     ],
