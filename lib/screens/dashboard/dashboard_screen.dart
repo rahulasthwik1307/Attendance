@@ -49,11 +49,39 @@ class _DashboardScreenState extends State<DashboardScreen>
   static String _cachedTimeDisplay = '--:-- --';
   static String _cachedDateDisplay = 'No attendance yet';
   static double _cachedMotivationalPct = -1.0;
+
+  // ── Period confirmation static cache (date-aware) ─────────
+  static String? _cachedPeriodDate;
+  static bool _cachedPeriodFinalized = false;
+  static String _cachedPeriodFinalizedSubject = '';
+  static String _cachedPeriodFinalizedPeriod = '';
+  static bool _cachedPeriodFinalizedAbsent = false;
+  static String _cachedPeriodAbsentSubject = '';
+  static String _cachedPeriodAbsentPeriod = '';
   // ─────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
+    final todayStr =
+        "${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}";
+    if (_cachedPeriodDate == todayStr) {
+      _teacherFinalized = _cachedPeriodFinalized;
+      _finalizedSubject = _cachedPeriodFinalizedSubject;
+      _finalizedPeriod = _cachedPeriodFinalizedPeriod;
+      _teacherFinalizedAbsent = _cachedPeriodFinalizedAbsent;
+      _absentSubject = _cachedPeriodAbsentSubject;
+      _absentPeriod = _cachedPeriodAbsentPeriod;
+    } else {
+      _cachedPeriodDate = todayStr;
+      _cachedPeriodFinalized = false;
+      _cachedPeriodFinalizedSubject = '';
+      _cachedPeriodFinalizedPeriod = '';
+      _cachedPeriodFinalizedAbsent = false;
+      _cachedPeriodAbsentSubject = '';
+      _cachedPeriodAbsentPeriod = '';
+    }
+
     _fetchProfile();
     _fetchUpcomingPeriod();
     _fetchAttendanceStreak();
@@ -743,6 +771,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                         _teacherFinalizedAbsent = false;
                         _absentSubject = '';
                         _absentPeriod = '';
+
+                        _cachedPeriodFinalized = true;
+                        _cachedPeriodFinalizedSubject = subject;
+                        _cachedPeriodFinalizedPeriod = period;
+                        _cachedPeriodFinalizedAbsent = false;
+                        _cachedPeriodAbsentSubject = '';
+                        _cachedPeriodAbsentPeriod = '';
                       });
                     }
                   },
@@ -755,6 +790,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                         _teacherFinalizedAbsent = true;
                         _absentSubject = subject;
                         _absentPeriod = period;
+
+                        _cachedPeriodFinalized = false;
+                        _cachedPeriodFinalizedSubject = '';
+                        _cachedPeriodFinalizedPeriod = '';
+                        _cachedPeriodFinalizedAbsent = true;
+                        _cachedPeriodAbsentSubject = subject;
+                        _cachedPeriodAbsentPeriod = period;
                       });
                     }
                   },
@@ -767,6 +809,32 @@ class _DashboardScreenState extends State<DashboardScreen>
                         _teacherFinalizedAbsent = false;
                         _absentSubject = '';
                         _absentPeriod = '';
+
+                        _cachedPeriodFinalized = false;
+                        _cachedPeriodFinalizedSubject = '';
+                        _cachedPeriodFinalizedPeriod = '';
+                        _cachedPeriodFinalizedAbsent = false;
+                        _cachedPeriodAbsentSubject = '';
+                        _cachedPeriodAbsentPeriod = '';
+                      });
+                    }
+                  },
+                  onClearFinalized: () {
+                    if (mounted) {
+                      setState(() {
+                        _teacherFinalized = false;
+                        _finalizedSubject = '';
+                        _finalizedPeriod = '';
+                        _teacherFinalizedAbsent = false;
+                        _absentSubject = '';
+                        _absentPeriod = '';
+
+                        _cachedPeriodFinalized = false;
+                        _cachedPeriodFinalizedSubject = '';
+                        _cachedPeriodFinalizedPeriod = '';
+                        _cachedPeriodFinalizedAbsent = false;
+                        _cachedPeriodAbsentSubject = '';
+                        _cachedPeriodAbsentPeriod = '';
                       });
                     }
                   },
@@ -900,10 +968,10 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
       end: 1.0,
     ).animate(CurvedAnimation(parent: _cardController, curve: Curves.easeOut));
 
-    _scaleAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
+    _scaleAnim = Tween<double>(begin: 0.95, end: 1.0).animate(
       CurvedAnimation(
         parent: _cardController,
-        curve: const Interval(0.2, 1.0, curve: Curves.easeOutBack),
+        curve: const Interval(0.1, 1.0, curve: Curves.easeOutCubic),
       ),
     );
 
@@ -985,6 +1053,43 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
     super.dispose();
   }
 
+  Widget _buildCategoryTag(Color tagColor) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+      decoration: BoxDecoration(
+        color: tagColor.withValues(alpha: widget.isDark ? 0.20 : 0.10),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: tagColor.withValues(alpha: 0.35),
+          width: 0.8,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 5,
+            height: 5,
+            decoration: BoxDecoration(
+              color: tagColor,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 4.5),
+          Text(
+            'COLLEGE ATTENDANCE',
+            style: TextStyle(
+              fontSize: 9.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.6,
+              color: tagColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -998,45 +1103,51 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
 
     // Sunday — no college
     if (DateTime.now().weekday == 7) {
+      final blueColor = AppStyles.primaryBlue;
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: AppStyles.primaryBlue.withValues(
-            alpha: widget.isDark ? 0.15 : 0.07,
+          color: blueColor.withValues(
+            alpha: widget.isDark ? 0.14 : 0.06,
           ),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: AppStyles.primaryBlue.withValues(alpha: 0.3),
+            color: blueColor.withValues(alpha: 0.28),
             width: 1.5,
           ),
+          boxShadow: [
+            BoxShadow(
+              color: blueColor.withValues(alpha: widget.isDark ? 0.12 : 0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
         ),
         child: Row(
           children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(
-                  alpha: widget.isDark ? 0.15 : 0.9,
-                ),
-                shape: BoxShape.circle,
-              ),
-              child: const Text('😴', style: TextStyle(fontSize: 22)),
+            _CampusStatusIconWidget(
+              icon: Icons.weekend_rounded,
+              color: blueColor,
+              shouldPulse: false,
+              isDark: widget.isDark,
             ),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  _buildCategoryTag(blueColor),
+                  const SizedBox(height: 5),
                   Text(
                     'No College Today',
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: 15.5,
                       fontWeight: FontWeight.w800,
                       letterSpacing: -0.3,
                       color: widget.isDark ? Colors.white : AppStyles.textDark,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 3),
                   Text(
                     'Today is Sunday — enjoy your day!',
                     style: TextStyle(
@@ -1055,47 +1166,55 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
       );
     }
 
-    final color = _isPresentToday
+    final Color color = _isPresentToday
         ? AppStyles.successGreen
         : (!_isPresentToday && _isPastCutoff)
-        ? AppStyles.errorRed
+        ? const Color(0xFFEF4444)
         : AppStyles.amberWarning;
-    final message = _isPresentToday
+
+    final String message = _isPresentToday
         ? 'You are Present Today'
         : (!_isPresentToday && _isPastCutoff)
         ? 'Absent Today'
         : 'Not Yet Marked';
-    final iconData = _isPresentToday
+
+    final IconData iconData = _isPresentToday
         ? Icons.verified_user_rounded
         : (!_isPresentToday && _isPastCutoff)
-        ? Icons.cancel_rounded
-        : Icons.pending_actions_rounded;
-    final subtitle = _isPresentToday
+        ? Icons.event_busy_rounded
+        : Icons.access_time_filled_rounded;
+
+    final String subtitle = _isPresentToday
         ? 'Marked at $_markedAtTime'
         : (!_isPresentToday && _isPastCutoff)
-        ? 'Attendance window has closed'
+        ? 'Attendance closed for today'
         : 'College hours end at 4:00 PM';
+
+    final bool shouldPulse = !_isPresentToday;
 
     return AnimatedBuilder(
       animation: _cardController,
       builder: (context, child) {
         return Opacity(
           opacity: _fadeAnim.value,
-          child: Transform.translate(
-            offset: Offset(0, 8 * (1 - _fadeAnim.value)),
-            child: child,
+          child: Transform.scale(
+            scale: _scaleAnim.value,
+            child: Transform.translate(
+              offset: Offset(0, 8 * (1 - _fadeAnim.value)),
+              child: child,
+            ),
           ),
         );
       },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: widget.isDark ? 0.15 : 0.07),
+          color: color.withValues(alpha: widget.isDark ? 0.14 : 0.06),
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: color.withValues(alpha: 0.3), width: 1.5),
+          border: Border.all(color: color.withValues(alpha: 0.28), width: 1.5),
           boxShadow: [
             BoxShadow(
-              color: color.withValues(alpha: widget.isDark ? 0.15 : 0.08),
+              color: color.withValues(alpha: widget.isDark ? 0.14 : 0.07),
               blurRadius: 12,
               offset: const Offset(0, 4),
             ),
@@ -1103,44 +1222,29 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
         ),
         child: Row(
           children: [
-            AnimatedBuilder(
-              animation: _scaleAnim,
-              builder: (context, child) {
-                return Transform.scale(scale: _scaleAnim.value, child: child);
-              },
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(
-                    alpha: widget.isDark ? 0.15 : 0.9,
-                  ),
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: color.withValues(alpha: 0.2),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Icon(iconData, color: color, size: 24),
-              ),
+            _CampusStatusIconWidget(
+              icon: iconData,
+              color: color,
+              shouldPulse: shouldPulse,
+              isDark: widget.isDark,
             ),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  _buildCategoryTag(color),
+                  const SizedBox(height: 5),
                   Text(
                     message,
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: 15.5,
                       fontWeight: FontWeight.w800,
                       letterSpacing: -0.3,
                       color: widget.isDark ? Colors.white : AppStyles.textDark,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 3),
                   Text(
                     subtitle,
                     style: TextStyle(
@@ -1161,6 +1265,111 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
           ],
         ),
       ),
+    );
+  }
+}
+
+class _CampusStatusIconWidget extends StatefulWidget {
+  final IconData icon;
+  final Color color;
+  final bool shouldPulse;
+  final bool isDark;
+
+  const _CampusStatusIconWidget({
+    required this.icon,
+    required this.color,
+    this.shouldPulse = false,
+    required this.isDark,
+  });
+
+  @override
+  State<_CampusStatusIconWidget> createState() =>
+      _CampusStatusIconWidgetState();
+}
+
+class _CampusStatusIconWidgetState extends State<_CampusStatusIconWidget>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulseController;
+  late Animation<double> _scaleAnimation;
+  late Animation<double> _glowAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    );
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.06).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+    _glowAnimation = Tween<double>(begin: 2.0, end: 7.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+    if (widget.shouldPulse) {
+      _pulseController.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _CampusStatusIconWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.shouldPulse && !_pulseController.isAnimating) {
+      _pulseController.repeat(reverse: true);
+    } else if (!widget.shouldPulse && _pulseController.isAnimating) {
+      _pulseController.stop();
+      _pulseController.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _pulseController,
+      builder: (context, child) {
+        final scale = widget.shouldPulse ? _scaleAnimation.value : 1.0;
+        final glow = widget.shouldPulse ? _glowAnimation.value : 3.0;
+        return Transform.scale(
+          scale: scale,
+          child: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  widget.color,
+                  widget.color.withValues(alpha: 0.82),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: widget.color
+                      .withValues(alpha: widget.isDark ? 0.35 : 0.22),
+                  blurRadius: glow * 1.6,
+                  spreadRadius: glow * 0.2,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Center(
+              child: Icon(
+                widget.icon,
+                color: Colors.white,
+                size: 24,
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -1894,41 +2103,65 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
         }
       }
 
-      // Fetch today's attendance sessions for this class
-      final today = DateTime.now().toIso8601String().split('T')[0];
-      final todaySessions = await supabase
-          .from('attendance_sessions')
-          .select('id, subject_id, period_id, status')
-          .eq('class_id', classId)
-          .eq('session_date', today);
+      // Fetch today's attendance sessions for this class safely
+      final Map<String, Map<String, dynamic>> sessionMap = {};
+      try {
+        final today = DateTime.now().toIso8601String().split('T')[0];
+        final todaySessions = await supabase
+            .from('attendance_sessions')
+            .select('id, subject_id, period_id, status, opened_at, finalized_at')
+            .eq('class_id', classId)
+            .eq('session_date', today);
 
-      // Map: "subjectId" → { sessionId, status }
-      final Map<String, Map<String, String>> sessionMap = {};
-      for (final s in todaySessions) {
-        final key = s['subject_id'] as String;
-        sessionMap[key] = {
-          'sessionId': s['id'] as String,
-          'status': s['status'] as String,
-        };
+        // Group sessions by composite key: "$subjectId|$periodId"
+        // Pick the most recent session for that exact period/date (Req 7 & Req 8)
+        for (final s in (todaySessions as List)) {
+          final subjectId = s['subject_id'] as String?;
+          final periodId = s['period_id'] as String?;
+          if (subjectId == null || periodId == null) continue;
+          final key = '$subjectId|$periodId';
+
+          final existing = sessionMap[key];
+          if (existing == null) {
+            sessionMap[key] = Map<String, dynamic>.from(s);
+          } else {
+            // Compare authoritative timestamps (finalized_at, opened_at)
+            final existingTime = (existing['finalized_at'] ??
+                    existing['opened_at'] ??
+                    '') as String;
+            final newTime =
+                (s['finalized_at'] ?? s['opened_at'] ?? '') as String;
+            if (newTime.compareTo(existingTime) >= 0) {
+              sessionMap[key] = Map<String, dynamic>.from(s);
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('[SCHEDULE] Failed to fetch attendance_sessions: $e');
       }
 
-      // Fetch student's period_attendance for today's sessions
-      final todaySessionIds = todaySessions
-          .map((s) => s['id'] as String)
+      // Fetch student's period_attendance for today's selected sessions safely
+      final Map<String, Map<String, dynamic>> studentAttendance = {};
+      final todaySessionIds = sessionMap.values
+          .map((s) => s['id'] as String?)
+          .where((id) => id != null)
+          .cast<String>()
           .toList();
-      Map<String, String> studentAttendance = {};
       if (todaySessionIds.isNotEmpty) {
-        final pa = await supabase
-            .from('period_attendance')
-            .select('session_id, status, face_verified, override_by_teacher')
-            .eq('student_id', user.id)
-            .inFilter('session_id', todaySessionIds);
-        for (final a in pa) {
-          final isPresent = (a['status'] == 'present') && (a['face_verified'] == true);
-          final overrideByTeacher = a['override_by_teacher'] as bool? ?? false;
-          final isGenuine = isPresent && !overrideByTeacher;
-          studentAttendance[a['session_id'] as String] =
-              isGenuine ? 'verified' : (isPresent ? 'present' : (a['status'] as String? ?? 'absent'));
+        try {
+          final pa = await supabase
+              .from('period_attendance')
+              .select('session_id, status, face_verified, override_by_teacher')
+              .eq('student_id', user.id)
+              .inFilter('session_id', todaySessionIds);
+          for (final a in (pa as List)) {
+            final sId = a['session_id'] as String?;
+            if (sId != null) {
+              studentAttendance[sId] = Map<String, dynamic>.from(a);
+            }
+          }
+        } catch (e) {
+          debugPrint('[SCHEDULE] Failed to fetch period_attendance: $e');
         }
       }
 
@@ -1941,24 +2174,38 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
           return aN.compareTo(bN);
         });
 
+      int parseTimeToMinutes(String timeStr) {
+        try {
+          final parts = timeStr.split(':');
+          return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+        } catch (_) {
+          return 0;
+        }
+      }
+
+      final now = DateTime.now();
+      final nowMinutes = (now.hour < 7) ? 0 : (now.hour * 60 + now.minute);
+      final isSunday = now.weekday == 7;
+
       final List<Map<String, dynamic>> items = [];
       for (final row in sortedRows) {
         final subjectId = row['subject_id'] as String;
-
+        final periodId = row['period_id'] as String;
         final teacherId = row['teacher_id'] as String?;
         final subjectName =
             (row['subject'] as Map?)?['name'] as String? ?? 'Unknown';
         final periodNumber =
             (row['period'] as Map?)?['period_number'] as int? ?? 0;
-        final startTime =
-            ((row['period'] as Map?)?['start_time'] as String? ?? '').substring(
-              0,
-              5,
-            );
-        final endTime = ((row['period'] as Map?)?['end_time'] as String? ?? '')
-            .substring(0, 5);
-        // Empty when unassigned — the schedule card simply omits the teacher line,
-        // matching how commercial student apps handle missing faculty assignment
+        final rawStartTime =
+            (row['period'] as Map?)?['start_time'] as String? ?? '00:00';
+        final rawEndTime =
+            (row['period'] as Map?)?['end_time'] as String? ?? '00:00';
+        final startTime = rawStartTime.length >= 5
+            ? rawStartTime.substring(0, 5)
+            : rawStartTime;
+        final endTime = rawEndTime.length >= 5
+            ? rawEndTime.substring(0, 5)
+            : rawEndTime;
         final title = teacherId != null
             ? (teacherTitles[teacherId] ?? 'Mr')
             : '';
@@ -1967,21 +2214,41 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
             : '';
         final facultyName = fullName.isNotEmpty ? '$title. $fullName' : '';
 
-        final key = subjectId;
+        final key = '$subjectId|$periodId';
         final session = sessionMap[key];
-        final sessionStatus = session?['status'];
-        final sessionId = session?['sessionId'];
-        final studentStatus = sessionId != null
-            ? studentAttendance[sessionId]
-            : null;
+        final sessionStatus = session?['status'] as String?;
+        final sessionId = session?['id'] as String?;
+        final attRecord =
+            sessionId != null ? studentAttendance[sessionId] : null;
+        final studentStatus = attRecord?['status'] as String?;
 
-        String cardStatus = 'upcoming';
-        if (sessionStatus == 'active') {
-          cardStatus = (studentStatus == 'verified' || studentStatus == 'present') ? 'done' : 'current';
-        } else if (sessionStatus == 'reviewing') {
-          cardStatus = studentStatus == 'verified' ? 'done' : 'current';
-        } else if (sessionStatus == 'finalized') {
-          cardStatus = (studentStatus == 'present' || studentStatus == 'verified') ? 'done' : 'absent';
+        final startMinutes = parseTimeToMinutes(rawStartTime);
+        final endMinutes = parseTimeToMinutes(rawEndTime);
+
+        String cardStatus;
+        // Priority 1: Actual student record exists and status == 'present' (regardless of face_verified)
+        if (studentStatus == 'present') {
+          cardStatus = 'done';
+        }
+        // Priority 2: Actual student record exists and status == 'absent'
+        else if (studentStatus == 'absent') {
+          cardStatus = 'absent';
+        }
+        // Priority 3: No student attendance record AND matching session is active or reviewing
+        else if (sessionStatus == 'active' || sessionStatus == 'reviewing') {
+          cardStatus = 'current';
+        }
+        // Priority 4: No student attendance record AND period has not started yet
+        else if (isSunday || (now.hour < 7) || nowMinutes < startMinutes) {
+          cardStatus = 'upcoming';
+        }
+        // Priority 5: No student attendance record AND scheduled period has already ended
+        else if (nowMinutes > endMinutes || sessionStatus == 'finalized') {
+          cardStatus = 'not_recorded';
+        }
+        // Ongoing time window without an active session
+        else {
+          cardStatus = 'upcoming';
         }
 
         items.add({
@@ -2212,6 +2479,7 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                             final bool isDone = status == 'done';
                             final bool isCurrent = status == 'current';
                             final bool isAbsent = status == 'absent';
+                            final bool isNotRecorded = status == 'not_recorded';
                             final int periodNum =
                                 item['periodNumber'] as int? ?? 0;
                             final String startTime =
@@ -2226,6 +2494,7 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
                               isCurrent: isCurrent,
                               isDone: isDone,
                               isAbsent: isAbsent,
+                              isNotRecorded: isNotRecorded,
                               periodNum: periodNum,
                               startTime: startTime,
                               endTime: endTime,
@@ -2250,6 +2519,7 @@ class _AttendanceBanner extends StatefulWidget {
   final void Function(String subject, String period)? onTeacherFinalized;
   final void Function(String subject, String period)? onTeacherFinalizedAbsent;
   final VoidCallback? onNewSession;
+  final VoidCallback? onClearFinalized;
   final bool teacherFinalized;
   final String finalizedSubject;
   final String finalizedPeriod;
@@ -2262,6 +2532,7 @@ class _AttendanceBanner extends StatefulWidget {
     this.onTeacherFinalized,
     this.onTeacherFinalizedAbsent,
     this.onNewSession,
+    this.onClearFinalized,
     this.teacherFinalized = false,
     this.finalizedSubject = '',
     this.finalizedPeriod = '',
@@ -2510,6 +2781,51 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     }
   }
 
+  bool _isConfirmationDisplayValid(Map<String, dynamic> sessionData) {
+    final now = DateTime.now();
+    final todayStr =
+        "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+
+    final sessionDate = sessionData['session_date'] as String?;
+    final finalizedAtStr =
+        (sessionData['finalized_at'] ?? sessionData['opened_at']) as String?;
+
+    // Period confirmation is strictly for TODAY
+    if (sessionDate != null && sessionDate != todayStr) {
+      return false;
+    }
+
+    if (finalizedAtStr == null || finalizedAtStr.isEmpty) {
+      return true;
+    }
+
+    try {
+      final finalizedTime = DateTime.parse(finalizedAtStr).toLocal();
+      if (finalizedTime.year != now.year ||
+          finalizedTime.month != now.month ||
+          finalizedTime.day != now.day) {
+        return false;
+      }
+
+      final finalizedHour = finalizedTime.hour;
+      final isNormalClassHours = finalizedHour >= 7 && finalizedHour < 18;
+
+      if (isNormalClassHours) {
+        // Normal scheduled class-time attendance: remains visible throughout the day's attendance workflow
+        final isCurrentTimeWithinDay = now.hour < 19;
+        if (isCurrentTimeWithinDay) {
+          return true;
+        }
+      }
+
+      // Out-of-schedule / demo attendance (e.g. 10:30 PM): visible for ~10 minutes from finalization
+      final diffMinutes = now.difference(finalizedTime).inMinutes.abs();
+      return diffMinutes < 10;
+    } catch (_) {
+      return true;
+    }
+  }
+
   Future<void> _syncAttendanceState({String? targetSessionId}) async {
     if (_userClassId == null || !mounted || _isSyncing) return;
     _isSyncing = true;
@@ -2526,7 +2842,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
       currentSession = await supabase
           .from('attendance_sessions')
           .select(
-            'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at',
+            'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at, session_date',
           )
           .eq('class_id', _userClassId!)
           .inFilter('status', ['active', 'reviewing'])
@@ -2539,24 +2855,57 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
         currentSession = await supabase
             .from('attendance_sessions')
             .select(
-              'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at',
+              'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at, session_date',
             )
             .eq('id', targetSessionId)
             .eq('class_id', _userClassId!)
             .maybeSingle();
       }
 
-      // 3. If still no session, look for the latest finalized session for this class
-      currentSession ??= await supabase
-          .from('attendance_sessions')
-          .select(
-            'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at',
-          )
-          .eq('class_id', _userClassId!)
-          .eq('status', 'finalized')
-          .order('finalized_at', ascending: false)
-          .limit(1)
-          .maybeSingle();
+      // 3. If still no active/reviewing session, look for today's finalized sessions for this class
+      if (currentSession == null) {
+        final today = DateTime.now().toIso8601String().split('T')[0];
+        final finalizedSessions = await supabase
+            .from('attendance_sessions')
+            .select(
+              'id, subject_id, period_id, teacher_id, current_qr_token, qr_token_expires_at, status, opened_at, finalized_at, session_date',
+            )
+            .eq('class_id', _userClassId!)
+            .eq('status', 'finalized')
+            .eq('session_date', today)
+            .order('finalized_at', ascending: false)
+            .limit(10);
+
+        if ((finalizedSessions as List).isNotEmpty) {
+          final sessionIds = finalizedSessions
+              .map((s) => s['id'] as String)
+              .toList();
+          final userRecords = await supabase
+              .from('period_attendance')
+              .select('session_id, status, face_verified, override_by_teacher')
+              .eq('student_id', user.id)
+              .inFilter('session_id', sessionIds);
+
+          final userRecordsBySession = <String, Map<String, dynamic>>{};
+          for (final rec in (userRecords as List)) {
+            final sId = rec['session_id'] as String?;
+            if (sId != null) {
+              userRecordsBySession[sId] = Map<String, dynamic>.from(rec);
+            }
+          }
+
+          // Pick the latest finalized session where student actually has an attendance record
+          for (final sess in finalizedSessions) {
+            final sId = sess['id'] as String;
+            if (userRecordsBySession.containsKey(sId)) {
+              currentSession = sess;
+              break;
+            }
+          }
+
+          currentSession ??= finalizedSessions.first;
+        }
+      }
 
       if (!mounted) return;
 
@@ -2697,31 +3046,63 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
             ? _periodInfo
             : widget.finalizedPeriod;
 
-        if (studentStatus == 'present' && faceVerified) {
-          setState(() {
-            _secondsRemaining = 0;
-            _hasMarkedAttendance = false;
-            _isClosed = false;
-            _isVisible = true;
-          });
-          debugPrint('[BANNER] Authoritative Finalized: Present');
-          widget.onTeacherFinalized?.call(savedSubject, savedPeriod);
+        final isDisplayValid = _isConfirmationDisplayValid(currentSession);
+
+        if (studentStatus == 'present') {
+          if (isDisplayValid) {
+            setState(() {
+              _secondsRemaining = 0;
+              _hasMarkedAttendance = false;
+              _isClosed = false;
+              _isVisible = true;
+            });
+            debugPrint('[BANNER] Authoritative Finalized: Present');
+            widget.onTeacherFinalized?.call(savedSubject, savedPeriod);
+          } else {
+            setState(() {
+              _secondsRemaining = 0;
+              _hasMarkedAttendance = false;
+              _isClosed = false;
+              _isVisible = false;
+            });
+            widget.onClearFinalized?.call();
+          }
           _onSessionFinalized?.call();
-        } else {
+        } else if (studentStatus == 'absent') {
           final absentSub = _subjectName.isNotEmpty
               ? _subjectName
               : widget.absentSubject;
           final absentPer = _periodInfo.isNotEmpty
               ? _periodInfo
               : widget.absentPeriod;
+          if (isDisplayValid) {
+            setState(() {
+              _secondsRemaining = 0;
+              _hasMarkedAttendance = false;
+              _isClosed = false;
+              _isVisible = true;
+            });
+            debugPrint('[BANNER] Authoritative Finalized: Absent ($studentStatus)');
+            widget.onTeacherFinalizedAbsent?.call(absentSub, absentPer);
+          } else {
+            setState(() {
+              _secondsRemaining = 0;
+              _hasMarkedAttendance = false;
+              _isClosed = false;
+              _isVisible = false;
+            });
+            widget.onClearFinalized?.call();
+          }
+          _onSessionFinalized?.call();
+        } else {
+          // No record for this student in this finalized session -> do not fabricate absent
           setState(() {
             _secondsRemaining = 0;
             _hasMarkedAttendance = false;
             _isClosed = false;
             _isVisible = false;
           });
-          debugPrint('[BANNER] Authoritative Finalized: Absent ($studentStatus)');
-          widget.onTeacherFinalizedAbsent?.call(absentSub, absentPer);
+          widget.onClearFinalized?.call();
           _onSessionFinalized?.call();
         }
       }
@@ -3583,6 +3964,7 @@ class _ScheduleCard extends StatefulWidget {
   final bool isCurrent;
   final bool isDone;
   final bool isAbsent;
+  final bool isNotRecorded;
   final int periodNum;
   final String startTime;
   final String endTime;
@@ -3596,6 +3978,7 @@ class _ScheduleCard extends StatefulWidget {
     required this.isCurrent,
     required this.isDone,
     required this.isAbsent,
+    this.isNotRecorded = false,
     required this.periodNum,
     required this.startTime,
     required this.endTime,
@@ -3653,6 +4036,10 @@ class _ScheduleCardState extends State<_ScheduleCard>
     final isCurrent = widget.isCurrent;
     final isDone = widget.isDone;
     final isAbsent = widget.isAbsent;
+    final isNotRecorded = widget.isNotRecorded;
+
+    final Color neutralSlate =
+        isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
 
     // ── Colors ──────────────────────────────────────────
     final Color accentColor = isCurrent
@@ -3661,6 +4048,8 @@ class _ScheduleCardState extends State<_ScheduleCard>
         ? AppStyles.successGreen
         : isAbsent
         ? AppStyles.errorRed
+        : isNotRecorded
+        ? neutralSlate
         : theme.primaryColor;
 
     final Color cardBg = isCurrent
@@ -3669,6 +4058,10 @@ class _ScheduleCardState extends State<_ScheduleCard>
         ? AppStyles.successGreen.withValues(alpha: isDark ? 0.18 : 0.07)
         : isAbsent
         ? AppStyles.errorRed.withValues(alpha: isDark ? 0.18 : 0.07)
+        : isNotRecorded
+        ? (isDark
+            ? const Color(0xFF1E293B).withValues(alpha: 0.5)
+            : const Color(0xFFF1F5F9))
         : theme.primaryColor.withValues(alpha: isDark ? 0.10 : 0.05);
 
     // Subject name color
@@ -3678,6 +4071,8 @@ class _ScheduleCardState extends State<_ScheduleCard>
         ? AppStyles.successGreen
         : isAbsent
         ? AppStyles.errorRed
+        : isNotRecorded
+        ? (isDark ? Colors.white70 : AppStyles.textDark.withValues(alpha: 0.85))
         : theme.primaryColor;
 
     // Period info + teacher name color
@@ -3687,6 +4082,8 @@ class _ScheduleCardState extends State<_ScheduleCard>
         ? AppStyles.successGreen.withValues(alpha: 0.75)
         : isAbsent
         ? AppStyles.errorRed.withValues(alpha: 0.75)
+        : isNotRecorded
+        ? neutralSlate.withValues(alpha: 0.85)
         : AppStyles.textGray;
 
     // ── Strip config ─────────────────────────────────────
@@ -3696,10 +4093,14 @@ class _ScheduleCardState extends State<_ScheduleCard>
         ? AppStyles.successGreen
         : isAbsent
         ? AppStyles.errorRed
+        : isNotRecorded
+        ? (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0))
         : theme.primaryColor.withValues(alpha: isDark ? 0.18 : 0.10);
 
     final Color stripText = isCurrent || isDone || isAbsent
         ? Colors.white
+        : isNotRecorded
+        ? neutralSlate
         : theme.primaryColor;
 
     final String stripLabel = isCurrent
@@ -3708,15 +4109,19 @@ class _ScheduleCardState extends State<_ScheduleCard>
         ? '✓  Attended'
         : isAbsent
         ? '✗  Absent'
+        : isNotRecorded
+        ? '—  Not Recorded'
         : 'Upcoming';
 
-    // ── Watermark icon for done/absent ───────────────────
+    // ── Watermark icon for done/absent/current/notRecorded ───────────────────
     final IconData? watermarkIcon = isDone
         ? Icons.check_circle_outline_rounded
         : isAbsent
         ? Icons.cancel_outlined
         : isCurrent
         ? Icons.radio_button_checked_rounded
+        : isNotRecorded
+        ? Icons.remove_circle_outline_rounded
         : null;
 
     Widget card = GestureDetector(
