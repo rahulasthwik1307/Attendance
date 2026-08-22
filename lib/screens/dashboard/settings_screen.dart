@@ -79,141 +79,25 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   void _showAboutDialog() {
-    final theme = Theme.of(context);
-  
-    showDialog(
+    showGeneralDialog(
       context: context,
-      builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        backgroundColor: theme.cardTheme.color ?? Colors.white,
-        elevation: 8,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 24), // Better side padding
-        child: Container(
-          constraints: BoxConstraints(
-            maxWidth: 380,           // Prevents it from becoming too wide on tablets
-            maxHeight: MediaQuery.of(context).size.height * 0.75,
+      barrierDismissible: true,
+      barrierLabel: 'Dismiss About',
+      barrierColor: Colors.black.withValues(alpha: 0.54),
+      transitionDuration: const Duration(milliseconds: 280),
+      pageBuilder: (ctx, anim1, anim2) {
+        return const _AboutAppDialog();
+      },
+      transitionBuilder: (ctx, anim1, anim2, child) {
+        final curved = Curves.easeOutCubic.transform(anim1.value);
+        return Transform.scale(
+          scale: 0.92 + (0.08 * curved),
+          child: Opacity(
+            opacity: anim1.value.clamp(0.0, 1.0),
+            child: child,
           ),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Icon
-                Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                    color: theme.primaryColor.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                  child: Icon(
-                    Icons.school_rounded,
-                    size: 36,
-                    color: theme.primaryColor,
-                  ),
-                ),
-                const SizedBox(height: 18),
-  
-                Text(
-                  'Factor Attendance',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                    color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
-                  ),
-                ),
-                Text(
-                  'Version 1.0.0',
-                  style: TextStyle(
-                    fontSize: 13.5,
-                    color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
-                  ),
-                ),
-  
-                const SizedBox(height: 20),
-  
-                // Premium Info Container
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: theme.primaryColor.withValues(alpha: 0.07),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: theme.primaryColor.withValues(alpha: 0.22),
-                      width: 1.3,
-                    ),
-                  ),
-                  child: Column(
-                    children: [
-                      _AboutRow(
-                        icon: Icons.location_city_rounded,
-                        label: "College",
-                        value: "NNRG College, Hyderabad",
-                        theme: theme,
-                      ),
-                      _AboutRow(
-                        icon: Icons.security_rounded,
-                        label: "Authentication",
-                        value: "Face Recognition + Geofence",
-                        theme: theme,
-                      ),
-                      _AboutRow(
-                        icon: Icons.cloud_outlined,
-                        label: "Backend",
-                        value: "Supabase + Next.js",
-                        theme: theme,
-                      ),
-                      _AboutRow(
-                        icon: Icons.code_rounded,
-                        label: "Built with",
-                        value: "Flutter + TensorFlow Lite",
-                        theme: theme,
-                      ),
-                    ],
-                  ),
-                ),
-  
-                const SizedBox(height: 20),
-  
-                // Description
-                Text(
-                  'Smart attendance management for NNRG College. Secure, fast and reliable with AI-powered face verification.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 13.5,
-                    height: 1.55,
-                    color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
-                  ),
-                ),
-  
-                const SizedBox(height: 24),
-  
-                // Close Button
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: theme.primaryColor,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      elevation: 0,
-                    ),
-                    child: const Text(
-                      'Close',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -700,54 +584,442 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 }
 
-class _AboutRow extends StatelessWidget {
+class _AboutAppDialog extends StatefulWidget {
+  const _AboutAppDialog();
+
+  @override
+  State<_AboutAppDialog> createState() => _AboutAppDialogState();
+}
+
+class _AboutAppDialogState extends State<_AboutAppDialog>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animController;
+  late final Animation<double> _headerFade;
+  late final Animation<Offset> _headerSlide;
+  late final Animation<double> _infoFade;
+  late final Animation<Offset> _infoSlide;
+  late final Animation<double> _descFade;
+  late final Animation<double> _buttonFade;
+
+  @override
+  void initState() {
+    super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+
+    _headerFade = CurvedAnimation(
+      parent: _animController,
+      curve: const Interval(0.0, 0.55, curve: Curves.easeOutCubic),
+    );
+    _headerSlide = Tween<Offset>(
+      begin: const Offset(0, 0.08),
+      end: Offset.zero,
+    ).animate(
+      CurvedAnimation(
+        parent: _animController,
+        curve: const Interval(0.0, 0.55, curve: Curves.easeOutCubic),
+      ),
+    );
+
+    _infoFade = CurvedAnimation(
+      parent: _animController,
+      curve: const Interval(0.20, 0.75, curve: Curves.easeOutCubic),
+    );
+    _infoSlide = Tween<Offset>(
+      begin: const Offset(0, 0.06),
+      end: Offset.zero,
+    ).animate(
+      CurvedAnimation(
+        parent: _animController,
+        curve: const Interval(0.20, 0.75, curve: Curves.easeOutCubic),
+      ),
+    );
+
+    _descFade = CurvedAnimation(
+      parent: _animController,
+      curve: const Interval(0.40, 0.88, curve: Curves.easeOutCubic),
+    );
+
+    _buttonFade = CurvedAnimation(
+      parent: _animController,
+      curve: const Interval(0.55, 1.0, curve: Curves.easeOutCubic),
+    );
+
+    _animController.forward();
+  }
+
+  @override
+  void dispose() {
+    _animController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final primaryColor = theme.primaryColor;
+    final surfaceColor = isDark
+        ? const Color(0xFF1E1E20)
+        : (theme.cardTheme.color ?? Colors.white);
+    final textDarkColor = isDark
+        ? Colors.white
+        : (theme.textTheme.displayLarge?.color ?? AppStyles.textDark);
+    final textGrayColor = isDark
+        ? Colors.white.withValues(alpha: 0.65)
+        : (theme.textTheme.bodyMedium?.color ?? AppStyles.textGray);
+    final borderColor = isDark
+        ? Colors.white.withValues(alpha: 0.1)
+        : const Color(0xFFE2E8F0);
+    final groupBgColor = isDark
+        ? const Color(0xFF252529)
+        : const Color(0xFFF8FAFC);
+    final groupBorderColor = isDark
+        ? primaryColor.withValues(alpha: 0.35)
+        : primaryColor.withValues(alpha: 0.28);
+    final dividerColor = isDark
+        ? Colors.white.withValues(alpha: 0.12)
+        : primaryColor.withValues(alpha: 0.16);
+
+    return Center(
+      child: Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: 390,
+            maxHeight: MediaQuery.sizeOf(context).height * 0.88,
+          ),
+          decoration: BoxDecoration(
+            color: surfaceColor,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: borderColor, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.08),
+                blurRadius: 24,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // 1. App Identity Header
+                  FadeTransition(
+                    opacity: _headerFade,
+                    child: SlideTransition(
+                      position: _headerSlide,
+                      child: Column(
+                        children: [
+                          Container(
+                            width: 60,
+                            height: 60,
+                            decoration: BoxDecoration(
+                              color: primaryColor.withValues(
+                                alpha: isDark ? 0.18 : 0.1,
+                              ),
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(
+                                color: primaryColor.withValues(
+                                  alpha: isDark ? 0.3 : 0.2,
+                                ),
+                                width: 1.2,
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.school_rounded,
+                              size: 30,
+                              color: primaryColor,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Factor Attendance',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 21,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.3,
+                              color: textDarkColor,
+                            ),
+                          ),
+                          const SizedBox(height: 5),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? Colors.white.withValues(alpha: 0.08)
+                                  : const Color(0xFFEDF2F7),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              'Version 1.0.0',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: textGrayColor,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 5),
+                          Text(
+                            'Smart Attendance System',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w500,
+                              color: textGrayColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+                  Divider(height: 1, color: borderColor),
+                  const SizedBox(height: 12),
+
+                  // 2. System & Technology Section (One Cohesive Outer Card)
+                  FadeTransition(
+                    opacity: _infoFade,
+                    child: SlideTransition(
+                      position: _infoSlide,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(left: 2, bottom: 8),
+                            child: Text(
+                              'SYSTEM & TECHNOLOGY',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 1.2,
+                                color: textGrayColor,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: groupBgColor,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: groupBorderColor,
+                                width: 1.3,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: primaryColor.withValues(
+                                    alpha: isDark ? 0.08 : 0.05,
+                                  ),
+                                  blurRadius: 12,
+                                  spreadRadius: 1,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ],
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 4,
+                            ),
+                            child: Column(
+                              children: [
+                                _AboutInfoTile(
+                                  icon: Icons.account_balance_rounded,
+                                  accentColor: const Color(0xFF2563EB),
+                                  label: 'College',
+                                  value: 'NNRG College, Hyderabad',
+                                  isDark: isDark,
+                                  textDarkColor: textDarkColor,
+                                ),
+                                Container(
+                                  height: 1.3,
+                                  color: dividerColor,
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 2,
+                                  ),
+                                ),
+                                _AboutInfoTile(
+                                  icon: Icons.security_rounded,
+                                  accentColor: const Color(0xFF6366F1),
+                                  label: 'Authentication',
+                                  value: 'Face Recognition + Geofence',
+                                  isDark: isDark,
+                                  textDarkColor: textDarkColor,
+                                ),
+                                Container(
+                                  height: 1.3,
+                                  color: dividerColor,
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 2,
+                                  ),
+                                ),
+                                _AboutInfoTile(
+                                  icon: Icons.cloud_outlined,
+                                  accentColor: const Color(0xFF0D9488),
+                                  label: 'Backend',
+                                  value: 'Supabase + Next.js',
+                                  isDark: isDark,
+                                  textDarkColor: textDarkColor,
+                                ),
+                                Container(
+                                  height: 1.3,
+                                  color: dividerColor,
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 2,
+                                  ),
+                                ),
+                                _AboutInfoTile(
+                                  icon: Icons.code_rounded,
+                                  accentColor: const Color(0xFF8B5CF6),
+                                  label: 'Built with',
+                                  value: 'Flutter + TensorFlow Lite',
+                                  isDark: isDark,
+                                  textDarkColor: textDarkColor,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  // 3. Description
+                  FadeTransition(
+                    opacity: _descFade,
+                    child: Text(
+                      'Smart attendance management for NNRG College. Secure, fast and reliable with AI-powered face verification.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        height: 1.45,
+                        color: textGrayColor,
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // 4. Close Button
+                  FadeTransition(
+                    opacity: _buttonFade,
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: primaryColor,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          elevation: 0,
+                        ),
+                        child: const Text(
+                          'Close',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AboutInfoTile extends StatelessWidget {
   final IconData icon;
+  final Color accentColor;
   final String label;
   final String value;
-  final ThemeData theme;
+  final bool isDark;
+  final Color textDarkColor;
 
-  const _AboutRow({
+  const _AboutInfoTile({
     required this.icon,
+    required this.accentColor,
     required this.label,
     required this.value,
-    required this.theme,
+    required this.isDark,
+    required this.textDarkColor,
   });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 11),
+      padding: const EdgeInsets.symmetric(vertical: 9),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
-            padding: const EdgeInsets.all(8),
+            width: 38,
+            height: 38,
             decoration: BoxDecoration(
-              color: theme.primaryColor.withValues(alpha: 0.1),
+              color: accentColor.withValues(alpha: isDark ? 0.18 : 0.10),
               borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: accentColor.withValues(alpha: isDark ? 0.30 : 0.20),
+                width: 1,
+              ),
             ),
-            child: Icon(icon, size: 20, color: theme.primaryColor),
+            child: Icon(
+              icon,
+              size: 19,
+              color: accentColor,
+            ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 13),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  label,
+                  label.toUpperCase(),
                   style: TextStyle(
-                    fontSize: 14.5,
+                    fontSize: 10.5,
                     fontWeight: FontWeight.w700,
-                    color: theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
+                    letterSpacing: 1.0,
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.5)
+                        : const Color(0xFF64748B),
                   ),
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 2),
                 Text(
                   value,
                   style: TextStyle(
-                    fontSize: 13.5,
-                    height: 1.4,
-                    color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    height: 1.3,
+                    color: textDarkColor,
                   ),
                 ),
               ],
@@ -758,3 +1030,5 @@ class _AboutRow extends StatelessWidget {
     );
   }
 }
+
+
