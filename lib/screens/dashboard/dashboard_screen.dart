@@ -5234,24 +5234,45 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
                             },
                           )
                         : isAbsent
-                        ? Container(
-                            width: 38,
-                            height: 38,
-                            decoration: BoxDecoration(
-                              color: Colors.red.shade50,
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.red.shade400,
-                                width: 2.5,
-                              ),
-                            ),
-                            child: Center(
-                              child: Icon(
-                                Icons.close_rounded,
-                                size: 18,
-                                color: Colors.red.shade500,
-                              ),
-                            ),
+                        ? AnimatedBuilder(
+                            animation: _fireScaleAnim,
+                            builder: (context, child) {
+                              return Container(
+                                width: 38,
+                                height: 38,
+                                decoration: BoxDecoration(
+                                  color: color.withValues(
+                                    alpha: isDark ? 0.12 : 0.08,
+                                  ),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: color.withValues(
+                                      alpha: isDark ? 0.35 : 0.28,
+                                    ),
+                                    width: 2.0,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: color.withValues(
+                                        alpha: isDark ? 0.08 : 0.04,
+                                      ),
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 1.5),
+                                    ),
+                                  ],
+                                ),
+                                child: Center(
+                                  child: Transform.scale(
+                                    scale: 0.94 +
+                                        (_fireScaleAnim.value - 0.88) * 0.25,
+                                    child: const Text(
+                                      '❄️',
+                                      style: TextStyle(fontSize: 15.5),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
                           )
                         : Container(
                             width: 38,
@@ -5273,11 +5294,12 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
                       _dayLabels[i],
                       style: TextStyle(
                         fontSize: 10,
-                        fontWeight: FontWeight.w700,
+                        fontWeight:
+                            isPresent ? FontWeight.w700 : FontWeight.w600,
                         color: isPresent
                             ? color
                             : isAbsent
-                            ? Colors.red.shade500
+                            ? color.withValues(alpha: isDark ? 0.70 : 0.65)
                             : AppStyles.textGray,
                       ),
                     ),
