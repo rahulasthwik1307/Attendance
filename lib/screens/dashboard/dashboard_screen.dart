@@ -1273,12 +1273,14 @@ class _CampusStatusIconWidget extends StatefulWidget {
   final IconData icon;
   final Color color;
   final bool shouldPulse;
+  final bool shouldSpin;
   final bool isDark;
 
   const _CampusStatusIconWidget({
     required this.icon,
     required this.color,
     this.shouldPulse = false,
+    this.shouldSpin = false,
     required this.isDark,
   });
 
@@ -1288,10 +1290,13 @@ class _CampusStatusIconWidget extends StatefulWidget {
 }
 
 class _CampusStatusIconWidgetState extends State<_CampusStatusIconWidget>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late AnimationController _pulseController;
   late Animation<double> _scaleAnimation;
   late Animation<double> _glowAnimation;
+
+  AnimationController? _spinController;
+  Animation<double>? _spinAnimation;
 
   @override
   void initState() {
@@ -1309,6 +1314,41 @@ class _CampusStatusIconWidgetState extends State<_CampusStatusIconWidget>
     if (widget.shouldPulse) {
       _pulseController.repeat(reverse: true);
     }
+
+    if (widget.shouldSpin) {
+      _initSpinController();
+    }
+  }
+
+  void _initSpinController() {
+    _spinController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2200),
+    )..repeat();
+    _spinAnimation = TweenSequence<double>([
+      // Pause upright while sand drops
+      TweenSequenceItem(
+        tween: ConstantTween<double>(0.0),
+        weight: 35,
+      ),
+      // Rotate 180 degrees (0.5 turns)
+      TweenSequenceItem(
+        tween: Tween<double>(begin: 0.0, end: 0.5)
+            .chain(CurveTween(curve: Curves.easeInOutBack)),
+        weight: 25,
+      ),
+      // Pause upside down
+      TweenSequenceItem(
+        tween: ConstantTween<double>(0.5),
+        weight: 35,
+      ),
+      // Rotate back to 360 degrees (1.0 turn)
+      TweenSequenceItem(
+        tween: Tween<double>(begin: 0.5, end: 1.0)
+            .chain(CurveTween(curve: Curves.easeInOutBack)),
+        weight: 25,
+      ),
+    ]).animate(_spinController!);
   }
 
   @override
@@ -1320,11 +1360,20 @@ class _CampusStatusIconWidgetState extends State<_CampusStatusIconWidget>
       _pulseController.stop();
       _pulseController.reset();
     }
+
+    if (widget.shouldSpin && _spinController == null) {
+      _initSpinController();
+    } else if (!widget.shouldSpin && _spinController != null) {
+      _spinController?.dispose();
+      _spinController = null;
+      _spinAnimation = null;
+    }
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    _spinController?.dispose();
     super.dispose();
   }
 
@@ -1361,11 +1410,20 @@ class _CampusStatusIconWidgetState extends State<_CampusStatusIconWidget>
               ],
             ),
             child: Center(
-              child: Icon(
-                widget.icon,
-                color: Colors.white,
-                size: 24,
-              ),
+              child: _spinAnimation != null
+                  ? RotationTransition(
+                      turns: _spinAnimation!,
+                      child: Icon(
+                        widget.icon,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    )
+                  : Icon(
+                      widget.icon,
+                      color: Colors.white,
+                      size: 24,
+                    ),
             ),
           ),
         );
@@ -3192,6 +3250,94 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     super.dispose();
   }
 
+  Widget _buildPeriodCategoryTag(Color tagColor, bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+      decoration: BoxDecoration(
+        color: tagColor.withValues(alpha: isDark ? 0.20 : 0.10),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: tagColor.withValues(alpha: 0.35),
+          width: 0.8,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 5,
+            height: 5,
+            decoration: BoxDecoration(
+              color: tagColor,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 4.5),
+          Text(
+            'PERIOD ATTENDANCE',
+            style: TextStyle(
+              fontSize: 9.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.6,
+              color: tagColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTwoToneTitle(String period, String subject, bool isDark) {
+    final periodStr = period.trim();
+    final subjectStr = subject.trim();
+
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Text.rich(
+        TextSpan(
+          children: [
+            if (periodStr.isNotEmpty) ...[
+              TextSpan(
+                text: periodStr,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: isDark
+                      ? const Color(0xFF94A3B8)
+                      : const Color(0xFF64748B),
+                  letterSpacing: 0.1,
+                ),
+              ),
+              if (subjectStr.isNotEmpty)
+                TextSpan(
+                  text: '  /  ',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w400,
+                    color: isDark
+                        ? const Color(0xFF475569)
+                        : const Color(0xFFCBD5E1),
+                  ),
+                ),
+            ],
+            if (subjectStr.isNotEmpty)
+              TextSpan(
+                text: subjectStr,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w800,
+                  color: isDark ? Colors.white : AppStyles.textDark,
+                  letterSpacing: -0.2,
+                ),
+              ),
+          ],
+        ),
+        maxLines: 1,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!_isVisible &&
@@ -3204,6 +3350,15 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
     // Teacher finalized — green confirmed card (persists until next session)
     if (widget.teacherFinalized) {
+      final periodText = widget.finalizedPeriod.isNotEmpty
+          ? widget.finalizedPeriod
+          : '';
+      final subjectText = widget.finalizedSubject.isNotEmpty
+          ? widget.finalizedSubject
+          : 'Class Attendance';
+
+      final color = AppStyles.successGreen;
+
       return Padding(
         padding: const EdgeInsets.only(bottom: 12.0, top: 4),
         child: TweenAnimationBuilder<double>(
@@ -3213,95 +3368,53 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           builder: (context, value, child) {
             return Opacity(
               opacity: value,
-              child: Transform.translate(
-                offset: Offset(0, 8 * (1 - value)),
-                child: child,
+              child: Transform.scale(
+                scale: 0.95 + (0.05 * value),
+                child: Transform.translate(
+                  offset: Offset(0, 8 * (1 - value)),
+                  child: child,
+                ),
               ),
             );
           },
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF1E293B) : Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: AppStyles.successGreen.withValues(
-                  alpha: isDark ? 0.35 : 0.25,
+              color: color.withValues(alpha: isDark ? 0.14 : 0.06),
+              borderRadius: BorderRadius.circular(18),
+              border:
+                  Border.all(color: color.withValues(alpha: 0.28), width: 1.5),
+              boxShadow: [
+                BoxShadow(
+                  color: color.withValues(alpha: isDark ? 0.14 : 0.07),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
                 ),
-                width: 1.2,
-              ),
-              boxShadow: isDark
-                  ? [
-                      BoxShadow(
-                        color: AppStyles.successGreen.withValues(alpha: 0.12),
-                        blurRadius: 16,
-                        offset: const Offset(0, 4),
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : [
-                      BoxShadow(
-                        color: AppStyles.successGreen.withValues(alpha: 0.10),
-                        blurRadius: 16,
-                        offset: const Offset(0, 4),
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.03),
-                        blurRadius: 6,
-                        offset: const Offset(0, 1),
-                      ),
-                    ],
+              ],
             ),
             child: Row(
               children: [
-                const _AnimatedAttendanceStatusIcon(
-                  isSuccess: true,
-                  color: AppStyles.successGreen,
-                  icon: Icons.check_rounded,
+                _CampusStatusIconWidget(
+                  icon: Icons.verified_user_rounded,
+                  color: color,
+                  shouldPulse: false,
+                  isDark: isDark,
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
+                      _buildPeriodCategoryTag(color, isDark),
+                      const SizedBox(height: 5),
+                      _buildTwoToneTitle(periodText, subjectText, isDark),
+                      const SizedBox(height: 3),
+                      Text(
                         'Attendance Confirmed',
                         style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16,
-                          color: AppStyles.successGreen,
-                          letterSpacing: -0.3,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          '${widget.finalizedPeriod} — ${widget.finalizedSubject}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: isDark
-                                ? const Color(0xFFCBD5E1)
-                                : AppStyles.textGray,
-                          ),
-                          maxLines: 1,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Marked present by teacher',
-                        style: TextStyle(
                           fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: isDark
-                              ? AppStyles.successGreen.withValues(alpha: 0.95)
-                              : AppStyles.successGreen.withValues(alpha: 0.9),
+                          fontWeight: FontWeight.w600,
+                          color: color,
                         ),
                       ),
                     ],
@@ -3316,6 +3429,15 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
     // Teacher finalized — red absent card (persists until next session)
     if (widget.teacherFinalizedAbsent) {
+      final periodText = widget.absentPeriod.isNotEmpty
+          ? widget.absentPeriod
+          : '';
+      final subjectText = widget.absentSubject.isNotEmpty
+          ? widget.absentSubject
+          : 'Class Attendance';
+
+      final color = const Color(0xFFEF4444);
+
       return Padding(
         padding: const EdgeInsets.only(bottom: 12.0, top: 4),
         child: TweenAnimationBuilder<double>(
@@ -3325,95 +3447,53 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           builder: (context, value, child) {
             return Opacity(
               opacity: value,
-              child: Transform.translate(
-                offset: Offset(0, 8 * (1 - value)),
-                child: child,
+              child: Transform.scale(
+                scale: 0.95 + (0.05 * value),
+                child: Transform.translate(
+                  offset: Offset(0, 8 * (1 - value)),
+                  child: child,
+                ),
               ),
             );
           },
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF1E293B) : Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: AppStyles.errorRed.withValues(
-                  alpha: isDark ? 0.35 : 0.25,
+              color: color.withValues(alpha: isDark ? 0.14 : 0.06),
+              borderRadius: BorderRadius.circular(18),
+              border:
+                  Border.all(color: color.withValues(alpha: 0.28), width: 1.5),
+              boxShadow: [
+                BoxShadow(
+                  color: color.withValues(alpha: isDark ? 0.14 : 0.07),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
                 ),
-                width: 1.2,
-              ),
-              boxShadow: isDark
-                  ? [
-                      BoxShadow(
-                        color: AppStyles.errorRed.withValues(alpha: 0.12),
-                        blurRadius: 16,
-                        offset: const Offset(0, 4),
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : [
-                      BoxShadow(
-                        color: AppStyles.errorRed.withValues(alpha: 0.10),
-                        blurRadius: 16,
-                        offset: const Offset(0, 4),
-                      ),
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.03),
-                        blurRadius: 6,
-                        offset: const Offset(0, 1),
-                      ),
-                    ],
+              ],
             ),
             child: Row(
               children: [
-                const _AnimatedAttendanceStatusIcon(
-                  isSuccess: false,
-                  color: AppStyles.errorRed,
-                  icon: Icons.close_rounded,
+                _CampusStatusIconWidget(
+                  icon: Icons.event_busy_rounded,
+                  color: color,
+                  shouldPulse: true,
+                  isDark: isDark,
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
+                      _buildPeriodCategoryTag(color, isDark),
+                      const SizedBox(height: 5),
+                      _buildTwoToneTitle(periodText, subjectText, isDark),
+                      const SizedBox(height: 3),
+                      Text(
                         'Marked Absent',
                         style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16,
-                          color: AppStyles.errorRed,
-                          letterSpacing: -0.3,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          '${widget.absentPeriod} — ${widget.absentSubject}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: isDark
-                                ? const Color(0xFFCBD5E1)
-                                : AppStyles.textGray,
-                          ),
-                          maxLines: 1,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'You were not present for this class',
-                        style: TextStyle(
                           fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: isDark
-                              ? AppStyles.errorRed.withValues(alpha: 0.95)
-                              : AppStyles.errorRed.withValues(alpha: 0.85),
+                          fontWeight: FontWeight.w600,
+                          color: color,
                         ),
                       ),
                     ],
@@ -3428,72 +3508,52 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
     // Attendance already marked — amber pending card
     if (_hasMarkedAttendance) {
+      final periodText = _periodInfo.isNotEmpty ? _periodInfo : '';
+      final subjectText = _subjectName.isNotEmpty ? _subjectName : 'Class Attendance';
+
+      final color = AppStyles.amberWarning;
+
       return Padding(
         padding: const EdgeInsets.only(bottom: 12.0, top: 4),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: Colors.orange.shade300.withValues(alpha: 0.3),
-              width: 1.5,
-            ),
+            color: color.withValues(alpha: isDark ? 0.14 : 0.06),
+            borderRadius: BorderRadius.circular(18),
+            border:
+                Border.all(color: color.withValues(alpha: 0.28), width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: Colors.orange.shade100.withValues(alpha: 0.5),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
+                color: color.withValues(alpha: isDark ? 0.14 : 0.07),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
               ),
             ],
           ),
           child: Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.orange.shade200.withValues(alpha: 0.5),
-                  ),
-                ),
-                child: const _AnimatedHourglass(),
+              _CampusStatusIconWidget(
+                icon: Icons.hourglass_top_rounded,
+                color: color,
+                shouldPulse: true,
+                shouldSpin: true,
+                isDark: isDark,
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Attendance Submitted',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                        color: AppStyles.textDark,
-                        letterSpacing: -0.3,
-                      ),
-                    ),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        '$_periodInfo — $_subjectName',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppStyles.textGray,
-                        ),
-                        maxLines: 1,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
+                    _buildPeriodCategoryTag(color, isDark),
+                    const SizedBox(height: 5),
+                    _buildTwoToneTitle(periodText, subjectText, isDark),
+                    const SizedBox(height: 3),
                     Text(
                       'Waiting for teacher to finalize',
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.orange.shade800,
+                        fontWeight: FontWeight.w600,
+                        color: color,
                       ),
                     ),
                   ],
@@ -3598,6 +3658,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      _buildPeriodCategoryTag(themeColor, false),
+                      const SizedBox(height: 4),
                       const Text(
                         'Attendance Window',
                         style: TextStyle(
