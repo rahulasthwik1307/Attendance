@@ -213,7 +213,14 @@ class SmartAttendanceApp extends StatelessWidget {
                 page = const reg_success.RegistrationSuccessScreen();
                 break;
               case '/registration_failed':
-                page = const reg_fail.RegistrationFailedScreen();
+                final args = routeSettings.arguments;
+                String? subtitle;
+                if (args is Map) {
+                  subtitle = args['subtitle'] as String?;
+                } else if (args is String) {
+                  subtitle = args;
+                }
+                page = reg_fail.RegistrationFailedScreen(subtitle: subtitle);
                 break;
               case '/face_preview':
                 page = const preview.FaceCapturePreviewScreen();

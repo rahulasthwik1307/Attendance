@@ -186,6 +186,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   bool _cameraFrozen = false;
   Uint8List? _lastCapturedFrameBytes;
   bool _isSubmitting = false;
+  bool _hasNavigatedToFailure = false;
   bool _meteringApplied = false;
   int _stabilityRejectCount = 0;
 
@@ -226,6 +227,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   _Phase? _poseSteadyPhase; // tracks which phase the steady timer belongs to
   static const int _poseSteadyDurationMs = 550;
   Timer? _instructionDebounceTimer;
+  Timer? _processingSlowHintTimer;
 
   // ── Flash effect ──
   bool _showFlash = false;
@@ -1162,6 +1164,19 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     _updateInstruction('Processing…', subtitle: 'Generating your face profile');
 
+    // Informational only — request continues in the background either way.
+    _processingSlowHintTimer?.cancel();
+    _processingSlowHintTimer = Timer(const Duration(seconds: 7), () {
+      if (!mounted) return;
+      if (_phase == _Phase.processing) {
+        _updateInstruction(
+          'Taking longer than expected…',
+          subtitle: 'Still processing your face profile, please wait',
+          animate: false,
+        );
+      }
+    });
+
     try {
       final List<Uint8List> bestFramesList = [
         _bestFrames[_Phase.left]!,
@@ -1193,15 +1208,33 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       FaceLogger.reg(_sessionId, '  Batch size = ${bestFramesList.length}');
 
       _apiStopwatch.start();
-      final List<BatchEmbeddingResult> batchResults = await _landmarkService
-          .generateEmbeddingBatch(
-            jpegBytesList: bestFramesList,
-            localStatsList: bestStatsList,
-            sessionId: _sessionId,
-            prefix: 'FACE_REG',
-            clientRejectedLogs: _clientRejectedLogs,
-          );
+      List<BatchEmbeddingResult> batchResults;
+      bool timedOut = false;
+      try {
+        batchResults = await _landmarkService
+            .generateEmbeddingBatch(
+              jpegBytesList: bestFramesList,
+              localStatsList: bestStatsList,
+              sessionId: _sessionId,
+              prefix: 'FACE_REG',
+              clientRejectedLogs: _clientRejectedLogs,
+            )
+            .timeout(const Duration(seconds: 12));
+      } on TimeoutException {
+        timedOut = true;
+        batchResults = [];
+      }
       _apiStopwatch.stop();
+      _processingSlowHintTimer?.cancel();
+
+      if (timedOut) {
+        FaceLogger.reg(_sessionId, 'API TIMED OUT after 12s — treating as connection failure');
+        _failProcessing(
+          'Connection failed',
+          'Unable to connect to the face server. Please check your connection and try again.',
+        );
+        return;
+      }
 
       FaceLogger.reg(_sessionId, 'Batch Finished');
       FaceLogger.reg(_sessionId, '  Captured = ${bestFramesList.length}');
@@ -1216,20 +1249,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           _sessionId,
           '  Reason           = ${batchResults.first.rejectionReason ?? "unknown"}',
         );
-        FaceLogger.reg(_sessionId, '  Camera Restart   = NO');
-        FaceLogger.reg(_sessionId, '  Waiting For User Retry');
-
-        // Keep _captureCompleted = true and _cameraFrozen = true so no new
-        // capture starts. Only release _isSubmitting so the retry button works.
-        setState(() {
-          _isSubmitting = false;
-        });
-
-        _updateInstruction(
+        _failProcessing(
           'Connection failed',
-          subtitle:
-              'Unable to connect to the face server. Please check your connection and try again.',
-          animate: false,
+          'Unable to connect to the face server. Please check your connection and try again.',
         );
         return;
       }
@@ -1355,7 +1377,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
       if (failedPoses.isNotEmpty) {
         FaceLogger.reg(_sessionId, 'Backend rejected frames due to quality. Failing gracefully to avoid user loop.');
-        _setError('Image quality was too low. Please ensure good lighting and hold the phone steady, then try again.');
+        _failProcessing('Registration Failed', 'Image quality was too low. Please ensure good lighting and hold the phone steady, then try again.');
         return;
       }
 
@@ -1371,7 +1393,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
           rightEmbedding == null ||
           upEmbedding == null ||
           downEmbedding == null) {
-        _setError('Could not generate face embeddings. Please try again.');
+        _failProcessing('Registration Failed', 'Could not generate face embeddings. Please try again.');
         return;
       }
 
@@ -1499,7 +1521,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
         );
       }
     } catch (e) {
-      _setError('Registration failed: ${e.toString()}');
+      _failProcessing('Registration Failed', 'Registration failed. Please check your connection and try again.');
     } finally {
       if (mounted) {
         setState(() {
@@ -2461,6 +2483,36 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     return 'Something went wrong. Please try again.';
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // FAIL PROCESSING — used specifically for face-registration processing
+  // network/timeout failures. Ensures the loading indicator is fully cleared
+  // and the screen cleanly navigates to RegistrationFailedScreen, preventing
+  // duplicate navigation.
+  // ─────────────────────────────────────────────────────────────────────────
+  void _failProcessing(String title, String subtitle) {
+    _processingSlowHintTimer?.cancel();
+    if (!mounted) return;
+    if (_hasNavigatedToFailure) return;
+    _hasNavigatedToFailure = true;
+
+    setState(() {
+      _phase = _Phase.error;
+      _isSubmitting = false;
+      _errorMessage = subtitle;
+      _borderColor = AppStyles.errorRed;
+      _instructionTitle = title;
+      _instructionSubtitle = subtitle;
+    });
+
+    Navigator.of(context).pushReplacementNamed(
+      '/registration_failed',
+      arguments: {
+        'title': title,
+        'subtitle': subtitle,
+      },
+    );
+  }
+
   // FIXED: debugPrint full error for logs, show short user-friendly message in UI
   void _setError(String message) {
     if (!mounted) return;
@@ -2482,6 +2534,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   void dispose() {
     debugPrint('[CAPTURE] Disposed');
     _instructionDebounceTimer?.cancel();
+    _processingSlowHintTimer?.cancel();
     _pulseController.dispose();
     _textFadeController.dispose();
     _blinkCountdownController.dispose();
@@ -2761,6 +2814,15 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        // Only allow leaving via back button once processing has genuinely
+        // failed — during active capture the existing swallow-back
+        // behavior is completely unchanged.
+        if (_phase == _Phase.error) {
+          Navigator.of(context).pushReplacementNamed('/sign_in');
+        }
+      },
       child: Scaffold(
         backgroundColor: AppStyles.backgroundLight,
         body: SafeArea(
@@ -3398,7 +3460,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     );
   }
 
-  void _onRetry() {
+  void _onRetry() async {
     // Reset all state and try again
     _livenessService.reset();
     _leftFrames.clear();
@@ -3434,7 +3496,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
     // Problem 2 & 3: reset both new flags for a fresh registration attempt
     _captureCompleted = false;
-    _imageStreamRunning = false;
+    _hasNavigatedToFailure = false;
 
     _registrationPhotoBytes = null;
     _captureProgress = 0;
@@ -3462,22 +3524,19 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _setPhase(_Phase.liveness);
 
     if (_cameraController != null && _cameraInitialized) {
+      if (_imageStreamRunning) {
+        try {
+          await _cameraController!.stopImageStream();
+        } catch (_) {}
+        _imageStreamRunning = false;
+      }
+      if (!mounted) return;
       try {
-        _cameraController!.stopImageStream().then((_) {
-          _imageStreamRunning = false;
-          if (mounted) {
-            _cameraController!.startImageStream(_onCameraFrame);
-            _imageStreamRunning = true;
-          }
-        });
-      } catch (_) {
-        // Stream may not have been running — start fresh
-        if (!_imageStreamRunning) {
-          try {
-            _cameraController!.startImageStream(_onCameraFrame);
-            _imageStreamRunning = true;
-          } catch (_) {}
-        }
+        await _cameraController!.startImageStream(_onCameraFrame);
+        _imageStreamRunning = true;
+      } catch (e) {
+        _imageStreamRunning = false;
+        _setError('Camera could not start. Please try again.');
       }
     }
   }
