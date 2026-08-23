@@ -146,8 +146,29 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
         return;
       }
 
-      // Fresh account — face_embedding is null, not rejected, not approved.
-      // This is the only valid path to set new password.
+      // face_embedding is null, not rejected, not approved.
+      // This can mean either:
+      //   (a) a genuinely fresh account — password has never been changed, or
+      //   (b) password was already changed successfully but face registration
+      //       was interrupted (e.g. network/backend failure during processing).
+      // Distinguish using must_change_password so a student who already set
+      // their password is sent straight back into face registration instead
+      // of being forced through Set New Password again.
+      bool mustChangePassword = true;
+      try {
+        final userRow = await supabase
+            .from('users')
+            .select('must_change_password')
+            .eq('id', user.id)
+            .maybeSingle();
+        mustChangePassword = userRow?['must_change_password'] != false;
+      } catch (_) {
+        // If this lookup fails, fall back to the original safe behavior.
+        mustChangePassword = true;
+      }
+
+      if (!mounted) return;
+
       setState(() {
         _isLoading = false;
         _isSuccess = true;
@@ -156,11 +177,21 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
       await Future.delayed(const Duration(milliseconds: 600));
       if (!mounted) return;
 
-      AuthFlowState.instance.isFirstTimeUser = true;
-      AuthFlowState.instance.faceRegistered = false;
-      AuthFlowState.instance.passwordSet = false;
-
-      Navigator.pushReplacementNamed(context, '/set_new_password');
+      if (mustChangePassword) {
+        // Genuinely fresh account — unchanged from existing behavior.
+        AuthFlowState.instance.isFirstTimeUser = true;
+        AuthFlowState.instance.faceRegistered = false;
+        AuthFlowState.instance.passwordSet = false;
+        Navigator.pushReplacementNamed(context, '/set_new_password');
+      } else {
+        // Password was already set successfully in a previous attempt —
+        // resume directly at face registration instead of re-running
+        // password setup.
+        AuthFlowState.instance.isFirstTimeUser = false;
+        AuthFlowState.instance.passwordSet = true;
+        AuthFlowState.instance.faceRegistered = false;
+        Navigator.pushReplacementNamed(context, '/register');
+      }
 
     } on AuthException catch (e) {
       if (!mounted) return;
