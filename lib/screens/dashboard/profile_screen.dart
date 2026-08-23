@@ -19,6 +19,7 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen>
     with TickerProviderStateMixin {
+  static String? _cachedUserId;
   static String? _cachedName;
   static String? _cachedRollNumber;
   static String? _cachedDepartment;
@@ -55,8 +56,11 @@ class _ProfileScreenState extends State<ProfileScreen>
       duration: const Duration(seconds: 8),
     )..repeat();
 
-    if (_cachedName != null) {
-      // Static profile data already loaded — show immediately, no spinner
+    final currentUserId = supabase.auth.currentUser?.id;
+    if (currentUserId != null &&
+        _cachedUserId == currentUserId &&
+        _cachedName != null) {
+      // Static profile data already loaded for current user — show immediately, no spinner
       _name = _cachedName!;
       _rollNumber = _cachedRollNumber ?? '';
       _department = _cachedDepartment ?? '';
@@ -85,6 +89,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           .maybeSingle();
       if (studentData == null) return;
       final classId = studentData['class_id'];
+      if (classId == null) return;
 
       final sessionsResp = await supabase
           .from('attendance_sessions')
@@ -97,12 +102,16 @@ class _ProfileScreenState extends State<ProfileScreen>
       if (sessionIds.isNotEmpty) {
         final attendanceResp = await supabase
             .from('period_attendance')
-            .select('status')
+            .select('status, face_verified')
             .eq('student_id', user.id)
             .inFilter('session_id', sessionIds)
             .inFilter('status', ['present', 'absent']);
         total = (attendanceResp as List).length;
-        attended = attendanceResp.where((r) => r['status'] == 'present').length;
+        attended = attendanceResp
+            .where(
+              (r) => r['status'] == 'present' && (r['face_verified'] == true),
+            )
+            .length;
       }
       final pct = total > 0 ? attended / total : 0.0;
       if (mounted) {
@@ -187,13 +196,17 @@ class _ProfileScreenState extends State<ProfileScreen>
       if (sessionIds.isNotEmpty) {
         final attendanceResp = await supabase
             .from('period_attendance')
-            .select('status')
+            .select('status, face_verified')
             .eq('student_id', user.id)
             .inFilter('session_id', sessionIds)
             .inFilter('status', ['present', 'absent']);
 
         total = (attendanceResp as List).length;
-        attended = attendanceResp.where((r) => r['status'] == 'present').length;
+        attended = attendanceResp
+            .where(
+              (r) => r['status'] == 'present' && (r['face_verified'] == true),
+            )
+            .length;
       }
 
       final pct = total > 0 ? attended / total : 0.0;
@@ -218,7 +231,8 @@ class _ProfileScreenState extends State<ProfileScreen>
           _isLoading = false;
         });
 
-        // Cache static fields for instant display on next visit
+        // Cache static fields for instant display on next visit for this authenticated user
+        _cachedUserId = user.id;
         _cachedName = fullName;
         _cachedRollNumber = rollNumber;
         _cachedDepartment = departmentName;
@@ -234,8 +248,9 @@ class _ProfileScreenState extends State<ProfileScreen>
       if (mounted) {
         setState(() {
           _isLoading = false;
-          if (_cachedName == null) {
-            // No cache exists yet (first-ever load) — surface a retry option
+          final currentUserId = supabase.auth.currentUser?.id;
+          if (_cachedUserId != currentUserId || _cachedName == null) {
+            // No cache exists yet for this user (first-ever load) — surface a retry option
             // instead of leaving a blank screen
             _loadError = NetworkHelper.friendlyMessage(e);
           }
@@ -407,7 +422,9 @@ class _ProfileScreenState extends State<ProfileScreen>
           .eq('id', user.id);
       if (!mounted) return;
       setState(() => _profilePhotoUrl = cacheBustedUrl);
-      _cachedProfilePhotoUrl = cacheBustedUrl;
+      if (_cachedUserId == user.id) {
+        _cachedProfilePhotoUrl = cacheBustedUrl;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Profile photo updated!'),
@@ -437,7 +454,9 @@ class _ProfileScreenState extends State<ProfileScreen>
       await supabase.from('users').update({'profile_photo_url': null}).eq('id', user.id);
       if (!mounted) return;
       setState(() => _profilePhotoUrl = null);
-      _cachedProfilePhotoUrl = null;
+      if (_cachedUserId == user.id) {
+        _cachedProfilePhotoUrl = null;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Profile photo removed.'), backgroundColor: Colors.orange),
       );
