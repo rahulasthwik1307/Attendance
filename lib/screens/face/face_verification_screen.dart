@@ -2535,6 +2535,202 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     super.dispose();
   }
 
+  // ─── Leave Confirmation Dialog State & Handlers ───────────────────────────
+  bool _isLeaveDialogShowing = false;
+
+  Future<void> _showLeaveConfirmationDialog() async {
+    if (_isLeaveDialogShowing || !mounted) return;
+    _isLeaveDialogShowing = true;
+
+    final shouldLeave = await showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Dismiss Leave Dialog',
+      barrierColor: Colors.black.withValues(alpha: 0.54),
+      transitionDuration: const Duration(milliseconds: 260),
+      pageBuilder: (dialogContext, anim1, anim2) {
+        return _buildLeaveConfirmationDialog(dialogContext);
+      },
+      transitionBuilder: (dialogContext, anim1, anim2, child) {
+        final curvedValue = Curves.easeOutCubic.transform(anim1.value);
+        return BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: 4.0 * anim1.value,
+            sigmaY: 4.0 * anim1.value,
+          ),
+          child: Opacity(
+            opacity: anim1.value.clamp(0.0, 1.0),
+            child: Transform.scale(
+              scale: 0.94 + (0.06 * curvedValue),
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
+
+    _isLeaveDialogShowing = false;
+
+    if (shouldLeave == true && mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  Widget _buildLeaveConfirmationDialog(BuildContext dialogContext) {
+    return Dialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      elevation: 16,
+      shadowColor: Colors.black.withValues(alpha: 0.2),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: BorderSide(
+          color: const Color(0xFFE2E8F0).withValues(alpha: 0.9),
+          width: 1,
+        ),
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 340),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Warning / Exit Icon Badge
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7ED),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0xFFFFEDD5),
+                    width: 1.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFEA580C).withValues(alpha: 0.12),
+                      blurRadius: 14,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.warning_amber_rounded,
+                    color: Color(0xFFEA580C),
+                    size: 30,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+
+              // Title
+              const Text(
+                'Leave verification?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF0F172A),
+                  letterSpacing: -0.3,
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // Description
+              const Text(
+                "Your attendance isn't marked yet.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF475569),
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 4),
+
+              // Supporting text
+              const Text(
+                "Leave now and you'll be marked absent.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w400,
+                  color: Color(0xFF94A3B8),
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Action Buttons: Leave / Continue
+              Row(
+                children: [
+                  // Secondary Action: Leave
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(true),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF64748B),
+                        side: const BorderSide(
+                          color: Color(0xFFCBD5E1),
+                          width: 1.2,
+                        ),
+                        backgroundColor: const Color(0xFFF8FAFC),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        elevation: 0,
+                      ),
+                      child: const Text(
+                        'Leave',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF64748B),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+
+                  // Primary Action: Continue
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(false),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppStyles.primaryBlue,
+                        foregroundColor: Colors.white,
+                        elevation: 2,
+                        shadowColor: AppStyles.primaryBlue.withValues(alpha: 0.35),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                      ),
+                      child: const Text(
+                        'Continue',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                          letterSpacing: 0.1,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // BUILD
   // ─────────────────────────────────────────────────────────────────────────
@@ -2542,6 +2738,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _showLeaveConfirmationDialog();
+      },
       child: Scaffold(
         backgroundColor: AppStyles.backgroundLight,
         body: Stack(

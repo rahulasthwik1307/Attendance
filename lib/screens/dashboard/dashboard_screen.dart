@@ -823,7 +823,10 @@ class _DashboardScreenState extends State<DashboardScreen>
                 const SizedBox(height: 10),
                 FadeSlideY(
                   delay: const Duration(milliseconds: 180),
-                  child: _AttendancePercentageCard(theme: theme, isDark: isDark),
+                  child: _AttendancePercentageCard(
+                    theme: theme,
+                    isDark: isDark,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 FadeSlideY(
@@ -856,7 +859,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                           decoration: BoxDecoration(
                             boxShadow: [
                               BoxShadow(
-                                color: theme.primaryColor.withValues(alpha: 0.3),
+                                color: theme.primaryColor.withValues(
+                                  alpha: 0.3,
+                                ),
                                 blurRadius: 20,
                                 spreadRadius: 2,
                               ),
@@ -922,7 +927,9 @@ class _LiveClockTextState extends State<_LiveClockText> {
 
   String _getAnimatedTime() {
     final now = DateTime.now();
-    final hour = now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour);
+    final hour = now.hour > 12
+        ? now.hour - 12
+        : (now.hour == 0 ? 12 : now.hour);
     final minute = now.minute.toString().padLeft(2, '0');
     final period = now.hour >= 12 ? 'PM' : 'AM';
     return '$hour:$minute $period';
@@ -948,7 +955,10 @@ class _LiveClockTextState extends State<_LiveClockText> {
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 400),
       transitionBuilder: (child, anim) => SlideTransition(
-        position: Tween<Offset>(begin: const Offset(0, 0.5), end: Offset.zero).animate(anim),
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.5),
+          end: Offset.zero,
+        ).animate(anim),
         child: FadeTransition(opacity: anim, child: child),
       ),
       child: Text(
@@ -1088,10 +1098,7 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
       decoration: BoxDecoration(
         color: tagColor.withValues(alpha: widget.isDark ? 0.20 : 0.10),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: tagColor.withValues(alpha: 0.35),
-          width: 0.8,
-        ),
+        border: Border.all(color: tagColor.withValues(alpha: 0.35), width: 0.8),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1099,10 +1106,7 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
           Container(
             width: 5,
             height: 5,
-            decoration: BoxDecoration(
-              color: tagColor,
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: tagColor, shape: BoxShape.circle),
           ),
           const SizedBox(width: 4.5),
           Text(
@@ -1136,9 +1140,7 @@ class _TodayStatusCardState extends State<_TodayStatusCard>
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: blueColor.withValues(
-            alpha: widget.isDark ? 0.14 : 0.06,
-          ),
+          color: blueColor.withValues(alpha: widget.isDark ? 0.14 : 0.06),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
             color: blueColor.withValues(alpha: 0.28),
@@ -1356,25 +1358,23 @@ class _CampusStatusIconWidgetState extends State<_CampusStatusIconWidget>
     )..repeat();
     _spinAnimation = TweenSequence<double>([
       // Pause upright while sand drops
-      TweenSequenceItem(
-        tween: ConstantTween<double>(0.0),
-        weight: 35,
-      ),
+      TweenSequenceItem(tween: ConstantTween<double>(0.0), weight: 35),
       // Rotate 180 degrees (0.5 turns)
       TweenSequenceItem(
-        tween: Tween<double>(begin: 0.0, end: 0.5)
-            .chain(CurveTween(curve: Curves.easeInOutBack)),
+        tween: Tween<double>(
+          begin: 0.0,
+          end: 0.5,
+        ).chain(CurveTween(curve: Curves.easeInOutBack)),
         weight: 25,
       ),
       // Pause upside down
-      TweenSequenceItem(
-        tween: ConstantTween<double>(0.5),
-        weight: 35,
-      ),
+      TweenSequenceItem(tween: ConstantTween<double>(0.5), weight: 35),
       // Rotate back to 360 degrees (1.0 turn)
       TweenSequenceItem(
-        tween: Tween<double>(begin: 0.5, end: 1.0)
-            .chain(CurveTween(curve: Curves.easeInOutBack)),
+        tween: Tween<double>(
+          begin: 0.5,
+          end: 1.0,
+        ).chain(CurveTween(curve: Curves.easeInOutBack)),
         weight: 25,
       ),
     ]).animate(_spinController!);
@@ -1420,18 +1420,16 @@ class _CampusStatusIconWidgetState extends State<_CampusStatusIconWidget>
             height: 48,
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [
-                  widget.color,
-                  widget.color.withValues(alpha: 0.82),
-                ],
+                colors: [widget.color, widget.color.withValues(alpha: 0.82)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: widget.color
-                      .withValues(alpha: widget.isDark ? 0.35 : 0.22),
+                  color: widget.color.withValues(
+                    alpha: widget.isDark ? 0.35 : 0.22,
+                  ),
                   blurRadius: glow * 1.6,
                   spreadRadius: glow * 0.2,
                   offset: const Offset(0, 3),
@@ -1442,17 +1440,9 @@ class _CampusStatusIconWidgetState extends State<_CampusStatusIconWidget>
               child: _spinAnimation != null
                   ? RotationTransition(
                       turns: _spinAnimation!,
-                      child: Icon(
-                        widget.icon,
-                        color: Colors.white,
-                        size: 24,
-                      ),
+                      child: Icon(widget.icon, color: Colors.white, size: 24),
                     )
-                  : Icon(
-                      widget.icon,
-                      color: Colors.white,
-                      size: 24,
-                    ),
+                  : Icon(widget.icon, color: Colors.white, size: 24),
             ),
           ),
         );
@@ -1496,13 +1486,17 @@ class _PeriodStatusIconWidgetState extends State<_PeriodStatusIconWidget>
     );
     _scaleAnimation = TweenSequence<double>([
       TweenSequenceItem(
-        tween: Tween<double>(begin: 1.0, end: 1.07)
-            .chain(CurveTween(curve: Curves.easeInOutCubic)),
+        tween: Tween<double>(
+          begin: 1.0,
+          end: 1.07,
+        ).chain(CurveTween(curve: Curves.easeInOutCubic)),
         weight: 50,
       ),
       TweenSequenceItem(
-        tween: Tween<double>(begin: 1.07, end: 1.0)
-            .chain(CurveTween(curve: Curves.easeInOutCubic)),
+        tween: Tween<double>(
+          begin: 1.07,
+          end: 1.0,
+        ).chain(CurveTween(curve: Curves.easeInOutCubic)),
         weight: 50,
       ),
     ]).animate(_animController);
@@ -1532,18 +1526,16 @@ class _PeriodStatusIconWidgetState extends State<_PeriodStatusIconWidget>
             height: 48,
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [
-                  widget.primaryColor,
-                  widget.secondaryColor,
-                ],
+                colors: [widget.primaryColor, widget.secondaryColor],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(15),
               boxShadow: [
                 BoxShadow(
-                  color: widget.primaryColor
-                      .withValues(alpha: widget.isDark ? 0.40 : 0.28),
+                  color: widget.primaryColor.withValues(
+                    alpha: widget.isDark ? 0.40 : 0.28,
+                  ),
                   blurRadius: _glowAnimation.value * 1.5,
                   spreadRadius: _glowAnimation.value * 0.15,
                   offset: const Offset(0, 3),
@@ -1551,11 +1543,7 @@ class _PeriodStatusIconWidgetState extends State<_PeriodStatusIconWidget>
               ],
             ),
             child: Center(
-              child: Icon(
-                widget.icon,
-                color: Colors.white,
-                size: 24,
-              ),
+              child: Icon(widget.icon, color: Colors.white, size: 24),
             ),
           ),
         );
@@ -1689,7 +1677,9 @@ class _AttendancePercentageCardState extends State<_AttendancePercentageCard>
 
         int total = records.length;
         int present = records
-            .where((r) => r['status'] == 'present' && (r['face_verified'] == true))
+            .where(
+              (r) => r['status'] == 'present' && (r['face_verified'] == true),
+            )
             .length;
         double pct = total > 0 ? present / total : 0.0;
         debugPrint('[DASH_PCT] total=$total present=$present pct=$pct');
@@ -2299,7 +2289,9 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
         final today = DateTime.now().toIso8601String().split('T')[0];
         final todaySessions = await supabase
             .from('attendance_sessions')
-            .select('id, subject_id, period_id, status, opened_at, finalized_at')
+            .select(
+              'id, subject_id, period_id, status, opened_at, finalized_at',
+            )
             .eq('class_id', classId)
             .eq('session_date', today);
 
@@ -2316,9 +2308,9 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
             sessionMap[key] = Map<String, dynamic>.from(s);
           } else {
             // Compare authoritative timestamps (finalized_at, opened_at)
-            final existingTime = (existing['finalized_at'] ??
-                    existing['opened_at'] ??
-                    '') as String;
+            final existingTime =
+                (existing['finalized_at'] ?? existing['opened_at'] ?? '')
+                    as String;
             final newTime =
                 (s['finalized_at'] ?? s['opened_at'] ?? '') as String;
             if (newTime.compareTo(existingTime) >= 0) {
@@ -2408,8 +2400,9 @@ class _ExpandableScheduleSectionState extends State<_ExpandableScheduleSection>
         final session = sessionMap[key];
         final sessionStatus = session?['status'] as String?;
         final sessionId = session?['id'] as String?;
-        final attRecord =
-            sessionId != null ? studentAttendance[sessionId] : null;
+        final attRecord = sessionId != null
+            ? studentAttendance[sessionId]
+            : null;
         final studentStatus = attRecord?['status'] as String?;
 
         final startMinutes = parseTimeToMinutes(rawStartTime);
@@ -2769,8 +2762,9 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
   int _calculateRemainingSeconds() {
     if (_sessionDeadline == null) return 0;
-    final remaining =
-        _sessionDeadline!.difference(DateTime.now().toUtc()).inSeconds;
+    final remaining = _sessionDeadline!
+        .difference(DateTime.now().toUtc())
+        .inSeconds;
     return math.max(0, remaining);
   }
 
@@ -3272,7 +3266,9 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               _isClosed = false;
               _isVisible = true;
             });
-            debugPrint('[BANNER] Authoritative Finalized: Absent ($studentStatus)');
+            debugPrint(
+              '[BANNER] Authoritative Finalized: Absent ($studentStatus)',
+            );
             widget.onTeacherFinalizedAbsent?.call(absentSub, absentPer);
           } else {
             setState(() {
@@ -3305,7 +3301,9 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
   void _startFinalizationPolling() {
     _finalizationPollingTimer?.cancel();
-    _finalizationPollingTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+    _finalizationPollingTimer = Timer.periodic(const Duration(seconds: 10), (
+      timer,
+    ) {
       if (!mounted) {
         timer.cancel();
         return;
@@ -3389,8 +3387,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
         color: tagColor.withValues(alpha: isDark ? 0.20 : 0.10),
         borderRadius: BorderRadius.circular(6),
         border: Border.all(
-          color: tagColor.withValues(alpha: 0.35),
-          width: 0.8,
+          color: tagColor.withValues(alpha: isDark ? 0.45 : 0.35),
+          width: 0.9,
         ),
       ),
       child: Row(
@@ -3399,10 +3397,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           Container(
             width: 5,
             height: 5,
-            decoration: BoxDecoration(
-              color: tagColor,
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: tagColor, shape: BoxShape.circle),
           ),
           const SizedBox(width: 4.5),
           Text(
@@ -3419,9 +3414,17 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     );
   }
 
-  Widget _buildTwoToneTitle(String period, String subject, bool isDark) {
+  Widget _buildTwoToneTitle(
+    String period,
+    String subject,
+    bool isDark, [
+    Color? slashColor,
+  ]) {
     final periodStr = period.trim();
     final subjectStr = subject.trim();
+    final effectiveSlashColor =
+        slashColor ??
+        (isDark ? const Color(0xFF60A5FA) : const Color(0xFF2563EB));
 
     return FittedBox(
       fit: BoxFit.scaleDown,
@@ -3433,8 +3436,8 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               TextSpan(
                 text: periodStr,
                 style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
                   color: isDark
                       ? const Color(0xFF94A3B8)
                       : const Color(0xFF64748B),
@@ -3445,11 +3448,11 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                 TextSpan(
                   text: '  /  ',
                   style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w400,
-                    color: isDark
-                        ? const Color(0xFF475569)
-                        : const Color(0xFFCBD5E1),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w800,
+                    color: effectiveSlashColor.withValues(
+                      alpha: isDark ? 0.85 : 0.70,
+                    ),
                   ),
                 ),
             ],
@@ -3457,9 +3460,9 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               TextSpan(
                 text: subjectStr,
                 style: TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w800,
-                  color: isDark ? Colors.white : AppStyles.textDark,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: isDark ? Colors.white : const Color(0xFF0F172A),
                   letterSpacing: -0.2,
                 ),
               ),
@@ -3491,8 +3494,9 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
       final primaryColor = const Color(0xFF2563EB); // Royal Blue
       final secondaryColor = const Color(0xFF4F46E5); // Deep Indigo
-      final tagColor =
-          isDark ? const Color(0xFF60A5FA) : const Color(0xFF2563EB);
+      final tagColor = isDark
+          ? const Color(0xFF60A5FA)
+          : const Color(0xFF2563EB);
 
       return Padding(
         padding: const EdgeInsets.only(bottom: 12.0, top: 4),
@@ -3515,16 +3519,28 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
-              color: tagColor.withValues(alpha: isDark ? 0.14 : 0.06),
+              gradient: LinearGradient(
+                colors: isDark
+                    ? [
+                        primaryColor.withValues(alpha: 0.16),
+                        secondaryColor.withValues(alpha: 0.10),
+                      ]
+                    : [
+                        primaryColor.withValues(alpha: 0.08),
+                        secondaryColor.withValues(alpha: 0.05),
+                      ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
               borderRadius: BorderRadius.circular(18),
               border: Border.all(
-                color: tagColor.withValues(alpha: 0.30),
-                width: 1.5,
+                color: tagColor.withValues(alpha: isDark ? 0.50 : 0.38),
+                width: 1.4,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: primaryColor.withValues(alpha: isDark ? 0.15 : 0.08),
-                  blurRadius: 12,
+                  color: primaryColor.withValues(alpha: isDark ? 0.16 : 0.07),
+                  blurRadius: 14,
                   offset: const Offset(0, 4),
                 ),
               ],
@@ -3545,14 +3561,20 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                     children: [
                       _buildPeriodCategoryTag(tagColor, isDark),
                       const SizedBox(height: 5),
-                      _buildTwoToneTitle(periodText, subjectText, isDark),
+                      _buildTwoToneTitle(
+                        periodText,
+                        subjectText,
+                        isDark,
+                        tagColor,
+                      ),
                       const SizedBox(height: 3),
                       Text(
                         'Attendance Confirmed',
                         style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
                           color: tagColor,
+                          letterSpacing: 0.1,
                         ),
                       ),
                     ],
@@ -3576,8 +3598,9 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
 
       final primaryColor = const Color(0xFFF43F5E); // Coral Rose
       final secondaryColor = const Color(0xFFE11D48); // Deep Rose
-      final tagColor =
-          isDark ? const Color(0xFFFB7185) : const Color(0xFFF43F5E);
+      final tagColor = isDark
+          ? const Color(0xFFFB7185)
+          : const Color(0xFFF43F5E);
 
       return Padding(
         padding: const EdgeInsets.only(bottom: 12.0, top: 4),
@@ -3600,16 +3623,28 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
-              color: tagColor.withValues(alpha: isDark ? 0.14 : 0.06),
+              gradient: LinearGradient(
+                colors: isDark
+                    ? [
+                        primaryColor.withValues(alpha: 0.16),
+                        secondaryColor.withValues(alpha: 0.10),
+                      ]
+                    : [
+                        primaryColor.withValues(alpha: 0.08),
+                        secondaryColor.withValues(alpha: 0.05),
+                      ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
               borderRadius: BorderRadius.circular(18),
               border: Border.all(
-                color: tagColor.withValues(alpha: 0.30),
-                width: 1.5,
+                color: tagColor.withValues(alpha: isDark ? 0.50 : 0.38),
+                width: 1.4,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: primaryColor.withValues(alpha: isDark ? 0.15 : 0.08),
-                  blurRadius: 12,
+                  color: primaryColor.withValues(alpha: isDark ? 0.16 : 0.07),
+                  blurRadius: 14,
                   offset: const Offset(0, 4),
                 ),
               ],
@@ -3630,14 +3665,20 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                     children: [
                       _buildPeriodCategoryTag(tagColor, isDark),
                       const SizedBox(height: 5),
-                      _buildTwoToneTitle(periodText, subjectText, isDark),
+                      _buildTwoToneTitle(
+                        periodText,
+                        subjectText,
+                        isDark,
+                        tagColor,
+                      ),
                       const SizedBox(height: 3),
                       Text(
                         'Marked Absent',
                         style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
                           color: tagColor,
+                          letterSpacing: 0.1,
                         ),
                       ),
                     ],
@@ -3653,7 +3694,9 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
     // Attendance already marked — amber pending card
     if (_hasMarkedAttendance) {
       final periodText = _periodInfo.isNotEmpty ? _periodInfo : '';
-      final subjectText = _subjectName.isNotEmpty ? _subjectName : 'Class Attendance';
+      final subjectText = _subjectName.isNotEmpty
+          ? _subjectName
+          : 'Class Attendance';
 
       final color = AppStyles.amberWarning;
 
@@ -3664,8 +3707,10 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
           decoration: BoxDecoration(
             color: color.withValues(alpha: isDark ? 0.14 : 0.06),
             borderRadius: BorderRadius.circular(18),
-            border:
-                Border.all(color: color.withValues(alpha: 0.28), width: 1.5),
+            border: Border.all(
+              color: color.withValues(alpha: 0.28),
+              width: 1.5,
+            ),
             boxShadow: [
               BoxShadow(
                 color: color.withValues(alpha: isDark ? 0.14 : 0.07),
@@ -3690,7 +3735,7 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
                   children: [
                     _buildPeriodCategoryTag(color, isDark),
                     const SizedBox(height: 5),
-                    _buildTwoToneTitle(periodText, subjectText, isDark),
+                    _buildTwoToneTitle(periodText, subjectText, isDark, color),
                     const SizedBox(height: 3),
                     Text(
                       'Waiting for teacher to finalize',
@@ -3914,10 +3959,9 @@ class _AttendanceBannerState extends State<_AttendanceBanner>
               onTapDown: (_) => setState(() => _ctaPressed = true),
               onTapUp: (_) {
                 setState(() => _ctaPressed = false);
-                final endTime = _sessionDeadline ??
-                    DateTime.now().add(
-                      Duration(seconds: _secondsRemaining),
-                    );
+                final endTime =
+                    _sessionDeadline ??
+                    DateTime.now().add(Duration(seconds: _secondsRemaining));
                 Navigator.of(context).pushNamed(
                   '/qr-precheck',
                   arguments: {
@@ -4037,25 +4081,28 @@ class _AnimatedAttendanceStatusIconState
     );
 
     // 3. Subtle glow pulse & settle (55% - 100%)
-    _glowSpread = TweenSequence<double>([
-      TweenSequenceItem(
-        tween: Tween<double>(begin: 0.0, end: 3.0).chain(
-          CurveTween(curve: Curves.easeOut),
-        ),
-        weight: 50,
-      ),
-      TweenSequenceItem(
-        tween: Tween<double>(begin: 3.0, end: 0.0).chain(
-          CurveTween(curve: Curves.easeIn),
-        ),
-        weight: 50,
-      ),
-    ]).animate(
-      CurvedAnimation(
-        parent: _controller,
-        curve: const Interval(0.55, 1.0),
-      ),
-    );
+    _glowSpread =
+        TweenSequence<double>([
+          TweenSequenceItem(
+            tween: Tween<double>(
+              begin: 0.0,
+              end: 3.0,
+            ).chain(CurveTween(curve: Curves.easeOut)),
+            weight: 50,
+          ),
+          TweenSequenceItem(
+            tween: Tween<double>(
+              begin: 3.0,
+              end: 0.0,
+            ).chain(CurveTween(curve: Curves.easeIn)),
+            weight: 50,
+          ),
+        ]).animate(
+          CurvedAnimation(
+            parent: _controller,
+            curve: const Interval(0.55, 1.0),
+          ),
+        );
 
     _controller.forward();
   }
@@ -4080,10 +4127,7 @@ class _AnimatedAttendanceStatusIconState
               height: 48,
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [
-                    widget.color,
-                    widget.color.withValues(alpha: 0.82),
-                  ],
+                  colors: [widget.color, widget.color.withValues(alpha: 0.82)],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -4104,11 +4148,7 @@ class _AnimatedAttendanceStatusIconState
                   opacity: _iconOpacity.value,
                   child: Transform.scale(
                     scale: _iconScale.value,
-                    child: Icon(
-                      widget.icon,
-                      color: Colors.white,
-                      size: 24,
-                    ),
+                    child: Icon(widget.icon, color: Colors.white, size: 24),
                   ),
                 ),
               ),
@@ -4244,8 +4284,9 @@ class _ScheduleCardState extends State<_ScheduleCard>
     final isAbsent = widget.isAbsent;
     final isNotRecorded = widget.isNotRecorded;
 
-    final Color neutralSlate =
-        isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+    final Color neutralSlate = isDark
+        ? const Color(0xFF94A3B8)
+        : const Color(0xFF64748B);
 
     // ── Colors ──────────────────────────────────────────
     final Color accentColor = isCurrent
@@ -4266,8 +4307,8 @@ class _ScheduleCardState extends State<_ScheduleCard>
         ? AppStyles.errorRed.withValues(alpha: isDark ? 0.18 : 0.07)
         : isNotRecorded
         ? (isDark
-            ? const Color(0xFF1E293B).withValues(alpha: 0.5)
-            : const Color(0xFFF1F5F9))
+              ? const Color(0xFF1E293B).withValues(alpha: 0.5)
+              : const Color(0xFFF1F5F9))
         : theme.primaryColor.withValues(alpha: isDark ? 0.10 : 0.05);
 
     // Subject name color
@@ -4562,7 +4603,9 @@ class _MotivationalMessageState extends State<_MotivationalMessage> {
           .inFilter('status', ['present', 'absent']);
       final total = records.length;
       final present = records
-          .where((r) => r['status'] == 'present' && (r['face_verified'] == true))
+          .where(
+            (r) => r['status'] == 'present' && (r['face_verified'] == true),
+          )
           .length;
       if (mounted) {
         setState(() {
@@ -5330,8 +5373,9 @@ class _AttendanceStreakCardState extends State<_AttendanceStreakCard>
                       _dayLabels[i],
                       style: TextStyle(
                         fontSize: 10,
-                        fontWeight:
-                            isPresent ? FontWeight.w700 : FontWeight.w600,
+                        fontWeight: isPresent
+                            ? FontWeight.w700
+                            : FontWeight.w600,
                         color: isPresent
                             ? color
                             : isAbsent
