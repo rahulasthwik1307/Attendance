@@ -6,6 +6,7 @@ import 'package:image_cropper/image_cropper.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/supabase_service.dart';
 import '../../utils/app_styles.dart';
+import '../../utils/network_helper.dart';
 import '../../widgets/custom_bottom_nav.dart';
 import '../../widgets/fade_slide_y.dart';
 
@@ -18,6 +19,16 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen>
     with TickerProviderStateMixin {
+  static String? _cachedName;
+  static String? _cachedRollNumber;
+  static String? _cachedDepartment;
+  static String? _cachedClassSection;
+  static String? _cachedYear;
+  static String? _cachedInitials;
+  static bool? _cachedFaceApproved;
+  static bool? _cachedFaceRegistered;
+  static String? _cachedProfilePhotoUrl;
+
   late AnimationController _borderRotationController;
 
   String _name = '';
@@ -34,6 +45,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   bool _faceRegistered = false;
   String? _profilePhotoUrl;
   bool _isUploadingPhoto = false;
+  String? _loadError;
 
   @override
   void initState() {
@@ -42,7 +54,68 @@ class _ProfileScreenState extends State<ProfileScreen>
       vsync: this,
       duration: const Duration(seconds: 8),
     )..repeat();
-    _fetchProfile();
+
+    if (_cachedName != null) {
+      // Static profile data already loaded — show immediately, no spinner
+      _name = _cachedName!;
+      _rollNumber = _cachedRollNumber ?? '';
+      _department = _cachedDepartment ?? '';
+      _classSection = _cachedClassSection ?? '';
+      _year = _cachedYear ?? '';
+      _initials = _cachedInitials ?? '';
+      _faceApproved = _cachedFaceApproved ?? false;
+      _faceRegistered = _cachedFaceRegistered ?? false;
+      _profilePhotoUrl = _cachedProfilePhotoUrl;
+      _isLoading = false;
+      _refreshAttendanceOnly();
+    } else {
+      _fetchProfile();
+    }
+  }
+
+  // Refreshes ONLY the dynamic attendance summary — static fields stay untouched
+  Future<void> _refreshAttendanceOnly() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+      final studentData = await supabase
+          .from('students')
+          .select('class_id')
+          .eq('id', user.id)
+          .maybeSingle();
+      if (studentData == null) return;
+      final classId = studentData['class_id'];
+
+      final sessionsResp = await supabase
+          .from('attendance_sessions')
+          .select('id')
+          .eq('class_id', classId)
+          .eq('status', 'finalized');
+      final sessionIds = (sessionsResp as List).map((s) => s['id'] as String).toList();
+
+      int attended = 0, total = 0;
+      if (sessionIds.isNotEmpty) {
+        final attendanceResp = await supabase
+            .from('period_attendance')
+            .select('status')
+            .eq('student_id', user.id)
+            .inFilter('session_id', sessionIds)
+            .inFilter('status', ['present', 'absent']);
+        total = (attendanceResp as List).length;
+        attended = attendanceResp.where((r) => r['status'] == 'present').length;
+      }
+      final pct = total > 0 ? attended / total : 0.0;
+      if (mounted) {
+        setState(() {
+          _attendancePct = pct;
+          _attendedClasses = attended;
+          _totalClasses = total;
+        });
+      }
+    } catch (e) {
+      debugPrint('[PROFILE] attendance refresh error (non-fatal): $e');
+      // Silently keep showing last known attendance — no error UI for a background sync
+    }
   }
 
   Future<void> _fetchProfile() async {
@@ -141,12 +214,33 @@ class _ProfileScreenState extends State<ProfileScreen>
           _attendedClasses = attended;
           _totalClasses = total;
           _profilePhotoUrl = profilePhotoUrl;
+          _loadError = null;
           _isLoading = false;
         });
+
+        // Cache static fields for instant display on next visit
+        _cachedName = fullName;
+        _cachedRollNumber = rollNumber;
+        _cachedDepartment = departmentName;
+        _cachedClassSection = _classSection;
+        _cachedYear = year;
+        _cachedInitials = initials;
+        _cachedFaceApproved = faceApproved;
+        _cachedFaceRegistered = faceRegistered;
+        _cachedProfilePhotoUrl = profilePhotoUrl;
       }
     } catch (e) {
       debugPrint('[PROFILE] Error fetching profile: $e');
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          if (_cachedName == null) {
+            // No cache exists yet (first-ever load) — surface a retry option
+            // instead of leaving a blank screen
+            _loadError = NetworkHelper.friendlyMessage(e);
+          }
+        });
+      }
     }
   }
 
@@ -313,6 +407,7 @@ class _ProfileScreenState extends State<ProfileScreen>
           .eq('id', user.id);
       if (!mounted) return;
       setState(() => _profilePhotoUrl = cacheBustedUrl);
+      _cachedProfilePhotoUrl = cacheBustedUrl;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Profile photo updated!'),
@@ -342,6 +437,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       await supabase.from('users').update({'profile_photo_url': null}).eq('id', user.id);
       if (!mounted) return;
       setState(() => _profilePhotoUrl = null);
+      _cachedProfilePhotoUrl = null;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Profile photo removed.'), backgroundColor: Colors.orange),
       );
@@ -482,6 +578,35 @@ class _ProfileScreenState extends State<ProfileScreen>
         ),
         body: _isLoading
             ? const Center(child: CircularProgressIndicator())
+            : _loadError != null
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(32.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.wifi_off_rounded, size: 40, color: Colors.grey.shade400),
+                      const SizedBox(height: 12),
+                      Text(
+                        _loadError!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 14, color: AppStyles.textGray),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: () {
+                          setState(() {
+                            _isLoading = true;
+                            _loadError = null;
+                          });
+                          _fetchProfile();
+                        },
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
+              )
             : SafeArea(
                 child: ListView(
                   padding: const EdgeInsets.symmetric(

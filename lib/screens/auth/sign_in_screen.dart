@@ -9,6 +9,7 @@ import '../../widgets/fade_slide_y.dart';
 import '../../services/auth_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/biometric_auth_service.dart';
+import '../../utils/network_helper.dart';
 
 class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key});
@@ -219,10 +220,13 @@ class _SignInScreenState extends State<SignInScreen>
       ).showSnackBar(SnackBar(content: Text(message)));
     } catch (e) {
       if (!mounted) return;
-      setState(() => _isLoading = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toString())));
+      setState(() {
+        _isLoading = false;
+        _isSuccess = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(NetworkHelper.friendlyMessage(e))),
+      );
     }
   }
 
@@ -388,9 +392,9 @@ class _SignInScreenState extends State<SignInScreen>
         _isLoading = false;
         _isSuccess = false;
       });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toString())));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(NetworkHelper.friendlyMessage(e))),
+      );
     }
   }
 

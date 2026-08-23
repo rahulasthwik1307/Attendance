@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../services/supabase_service.dart';
 import '../../utils/app_styles.dart';
+import '../../utils/network_helper.dart';
 import '../../widgets/custom_bottom_nav.dart';
 import '../../widgets/fade_slide_y.dart';
 
@@ -31,6 +32,7 @@ class _HistoryScreenState extends State<HistoryScreen>
 
   // Dynamic data state
   String? _studentClassId;
+  String? _loadError;
 
   // College tab
   List<Map<String, dynamic>> _collegeRecords = [];
@@ -118,8 +120,14 @@ class _HistoryScreenState extends State<HistoryScreen>
       if (studentData == null) return;
       _studentClassId = studentData['class_id'] as String;
       await _fetchAllData();
+      if (mounted) setState(() => _loadError = null);
     } catch (e) {
       debugPrint('[HISTORY] loadStudentClass error: $e');
+      // Only show the offline banner if we have no data at all yet —
+      // if a refresh fails but data is already showing, keep it visible silently
+      if (mounted && _collegeRecords.isEmpty && _classRecords.isEmpty) {
+        setState(() => _loadError = NetworkHelper.friendlyMessage(e));
+      }
     }
   }
 
@@ -1080,33 +1088,65 @@ class _HistoryScreenState extends State<HistoryScreen>
           ),
         ),
         body: SafeArea(
-          child: TabBarView(
-            controller: _tabController,
+          child: Column(
             children: [
-              _CollegeAttendanceTab(
-                isDark: isDark,
-                theme: theme,
-                presentCount: collegePresentCount,
-                totalCount: collegeTotal,
-                records: filteredCollege,
-              ),
-              _ClassAttendanceTab(
-                isDark: isDark,
-                theme: theme,
-                presentCount: classPresentCount,
-                totalCount: classTotal,
-                records: filteredClasses,
-              ),
-              _SubjectsTab(
-                isDark: isDark,
-                theme: theme,
-                records: _subjectRecords,
-              ),
-              _TimetableTab(
-                isDark: isDark,
-                theme: theme,
-                slots: _timetableSlots,
-                isLoading: _timetableLoading,
+              if (_loadError != null)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.wifi_off_rounded, size: 16, color: Colors.orange.shade700),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _loadError!,
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.orange.shade800),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _fetchAllData,
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _CollegeAttendanceTab(
+                        isDark: isDark,
+                        theme: theme,
+                        presentCount: collegePresentCount,
+                        totalCount: collegeTotal,
+                        records: filteredCollege,
+                      ),
+                      _ClassAttendanceTab(
+                        isDark: isDark,
+                        theme: theme,
+                        presentCount: classPresentCount,
+                        totalCount: classTotal,
+                        records: filteredClasses,
+                      ),
+                      _SubjectsTab(
+                        isDark: isDark,
+                        theme: theme,
+                        records: _subjectRecords,
+                      ),
+                      _TimetableTab(
+                        isDark: isDark,
+                        theme: theme,
+                        slots: _timetableSlots,
+                        isLoading: _timetableLoading,
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ],
           ),

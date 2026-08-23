@@ -34,8 +34,6 @@ class _DashboardScreenState extends State<DashboardScreen>
   String _absentPeriod = '';
 
   String _geofenceStatus = 'checking';
-  String _liveTime = '';
-  Timer? _clockTimer;
   int _attendanceStreak = -1;
   List<bool?> _weekDayAttendance = []; // Mon=0 ... Sat=5, null=future/weekend
 
@@ -96,10 +94,6 @@ class _DashboardScreenState extends State<DashboardScreen>
       if (mounted) setState(() {});
     });
     _checkGeofenceStatus();
-    _liveTime = _getAnimatedTime();
-    _clockTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted) setState(() => _liveTime = _getAnimatedTime());
-    });
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
@@ -111,7 +105,6 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   @override
   void dispose() {
-    _clockTimer?.cancel();
     _pulseController.dispose();
     super.dispose();
   }
@@ -166,16 +159,6 @@ class _DashboardScreenState extends State<DashboardScreen>
     final dayName = days[now.weekday - 1];
     final monthName = months[now.month - 1];
     return '$dayName, $monthName ${now.day}';
-  }
-
-  String _getAnimatedTime() {
-    final now = DateTime.now();
-    final hour = now.hour > 12
-        ? now.hour - 12
-        : (now.hour == 0 ? 12 : now.hour);
-    final minute = now.minute.toString().padLeft(2, '0');
-    final period = now.hour >= 12 ? 'PM' : 'AM';
-    return '$hour:$minute $period';
   }
 
   Future<void> _checkGeofenceStatus() async {
@@ -627,29 +610,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                                 shape: BoxShape.circle,
                               ),
                             ),
-                            AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 400),
-                              transitionBuilder: (child, anim) =>
-                                  SlideTransition(
-                                    position: Tween<Offset>(
-                                      begin: const Offset(0, 0.5),
-                                      end: Offset.zero,
-                                    ).animate(anim),
-                                    child: FadeTransition(
-                                      opacity: anim,
-                                      child: child,
-                                    ),
-                                  ),
-                              child: Text(
-                                _liveTime,
-                                key: ValueKey(_liveTime),
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.blueGrey.shade800,
-                                ),
-                              ),
-                            ),
+                            const _LiveClockText(),
                           ],
                         ),
                       ),
@@ -679,257 +640,325 @@ class _DashboardScreenState extends State<DashboardScreen>
           ],
         ),
         body: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24.0,
-              vertical: 16.0,
-            ),
-            children: [
-              if (_upcomingPeriodText.isNotEmpty)
-                FadeSlideY(
-                  delay: const Duration(milliseconds: 200),
-                  child: Container(
-                    width: double.infinity,
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? AppStyles.primaryBlue.withValues(alpha: 0.1)
-                          : AppStyles.primaryBlue.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: AppStyles.primaryBlue.withValues(alpha: 0.2),
+          child: RefreshIndicator(
+            onRefresh: () async {
+              await Future.wait([
+                _fetchProfile(),
+                _fetchUpcomingPeriod(),
+                _fetchAttendanceStreak(),
+              ]);
+            },
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 24.0,
+                vertical: 16.0,
+              ),
+              children: [
+                if (_upcomingPeriodText.isNotEmpty)
+                  FadeSlideY(
+                    delay: const Duration(milliseconds: 200),
+                    child: Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
                       ),
-                    ),
-                    child: Row(
-                      children: [
-                        if (_upcomingPeriodText == 'no_classes_today')
-                          const _SleepingZAnimation()
-                        else
-                          const Icon(
-                            Icons.schedule_rounded,
-                            size: 18,
-                            color: AppStyles.primaryBlue,
-                          ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _upcomingPeriodText == 'no_classes_today'
-                              ? Text(
-                                  'No classes today — rest up!',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: isDark
-                                        ? Colors.white
-                                        : AppStyles.primaryBlue,
-                                  ),
-                                )
-                              : RichText(
-                                  text: TextSpan(
-                                    children: [
-                                      const TextSpan(
-                                        text: '🔔 ',
-                                        style: TextStyle(fontSize: 13),
-                                      ),
-                                      TextSpan(
-                                        text: _upcomingPeriodText,
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                          color: isDark
-                                              ? Colors.white
-                                              : AppStyles.primaryBlue,
-                                          height: 1.3,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? AppStyles.primaryBlue.withValues(alpha: 0.1)
+                            : AppStyles.primaryBlue.withValues(alpha: 0.05),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: AppStyles.primaryBlue.withValues(alpha: 0.2),
                         ),
-                      ],
-                    ),
-                  ),
-                ),
-
-              FadeSlideY(
-                delay: const Duration(milliseconds: 50),
-                child: _AttendanceBanner(
-                  onSessionFinalized: () {
-                    if (mounted) setState(() {});
-                  },
-                  onTeacherFinalized: (subject, period) {
-                    if (mounted) {
-                      setState(() {
-                        _teacherFinalized = true;
-                        _finalizedSubject = subject;
-                        _finalizedPeriod = period;
-                        _teacherFinalizedAbsent = false;
-                        _absentSubject = '';
-                        _absentPeriod = '';
-
-                        _cachedPeriodFinalized = true;
-                        _cachedPeriodFinalizedSubject = subject;
-                        _cachedPeriodFinalizedPeriod = period;
-                        _cachedPeriodFinalizedAbsent = false;
-                        _cachedPeriodAbsentSubject = '';
-                        _cachedPeriodAbsentPeriod = '';
-                      });
-                    }
-                  },
-                  onTeacherFinalizedAbsent: (subject, period) {
-                    if (mounted) {
-                      setState(() {
-                        _teacherFinalized = false;
-                        _finalizedSubject = '';
-                        _finalizedPeriod = '';
-                        _teacherFinalizedAbsent = true;
-                        _absentSubject = subject;
-                        _absentPeriod = period;
-
-                        _cachedPeriodFinalized = false;
-                        _cachedPeriodFinalizedSubject = '';
-                        _cachedPeriodFinalizedPeriod = '';
-                        _cachedPeriodFinalizedAbsent = true;
-                        _cachedPeriodAbsentSubject = subject;
-                        _cachedPeriodAbsentPeriod = period;
-                      });
-                    }
-                  },
-                  onNewSession: () {
-                    if (mounted) {
-                      setState(() {
-                        _teacherFinalized = false;
-                        _finalizedSubject = '';
-                        _finalizedPeriod = '';
-                        _teacherFinalizedAbsent = false;
-                        _absentSubject = '';
-                        _absentPeriod = '';
-
-                        _cachedPeriodFinalized = false;
-                        _cachedPeriodFinalizedSubject = '';
-                        _cachedPeriodFinalizedPeriod = '';
-                        _cachedPeriodFinalizedAbsent = false;
-                        _cachedPeriodAbsentSubject = '';
-                        _cachedPeriodAbsentPeriod = '';
-                      });
-                    }
-                  },
-                  onClearFinalized: () {
-                    if (mounted) {
-                      setState(() {
-                        _teacherFinalized = false;
-                        _finalizedSubject = '';
-                        _finalizedPeriod = '';
-                        _teacherFinalizedAbsent = false;
-                        _absentSubject = '';
-                        _absentPeriod = '';
-
-                        _cachedPeriodFinalized = false;
-                        _cachedPeriodFinalizedSubject = '';
-                        _cachedPeriodFinalizedPeriod = '';
-                        _cachedPeriodFinalizedAbsent = false;
-                        _cachedPeriodAbsentSubject = '';
-                        _cachedPeriodAbsentPeriod = '';
-                      });
-                    }
-                  },
-                  teacherFinalized: _teacherFinalized,
-                  finalizedSubject: _finalizedSubject,
-                  finalizedPeriod: _finalizedPeriod,
-                  teacherFinalizedAbsent: _teacherFinalizedAbsent,
-                  absentSubject: _absentSubject,
-                  absentPeriod: _absentPeriod,
-                ),
-              ),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 100),
-                child: _TodayStatusCard(isDark: isDark),
-              ),
-              const SizedBox(height: 10),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 180),
-                child: _AttendancePercentageCard(theme: theme, isDark: isDark),
-              ),
-              const SizedBox(height: 8),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 220),
-                child: const _MotivationalMessage(),
-              ),
-              const SizedBox(height: 8),
-              if (_attendanceStreak >= 0)
-                FadeSlideY(
-                  delay: const Duration(milliseconds: 240),
-                  child: _AttendanceStreakCard(
-                    streak: _attendanceStreak,
-                    weekDays: _weekDayAttendance,
-                  ),
-                ),
-              const SizedBox(height: 10),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 260),
-                child: _HeroAttendanceCard(theme: theme),
-              ),
-              const SizedBox(height: 20),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 340),
-                child: AnimatedBuilder(
-                  animation: _pulseAnimation,
-                  builder: (context, child) {
-                    return Transform.scale(
-                      scale: _pulseAnimation.value,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          boxShadow: [
-                            BoxShadow(
-                              color: theme.primaryColor.withValues(alpha: 0.3),
-                              blurRadius: 20,
-                              spreadRadius: 2,
-                            ),
-                          ],
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: child,
                       ),
-                    );
-                  },
-                  child: AnimatedButton(
-                    onPressed: () =>
-                        Navigator.of(context).pushNamed('/face_verification'),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8.0),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.camera_alt_rounded),
-                          SizedBox(width: 12),
-                          Text('Verify Face'),
+                          if (_upcomingPeriodText == 'no_classes_today')
+                            const _SleepingZAnimation()
+                          else
+                            const Icon(
+                              Icons.schedule_rounded,
+                              size: 18,
+                              color: AppStyles.primaryBlue,
+                            ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _upcomingPeriodText == 'no_classes_today'
+                                ? Text(
+                                    'No classes today — rest up!',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: isDark
+                                          ? Colors.white
+                                          : AppStyles.primaryBlue,
+                                    ),
+                                  )
+                                : RichText(
+                                    text: TextSpan(
+                                      children: [
+                                        const TextSpan(
+                                          text: '🔔 ',
+                                          style: TextStyle(fontSize: 13),
+                                        ),
+                                        TextSpan(
+                                          text: _upcomingPeriodText,
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: isDark
+                                                ? Colors.white
+                                                : AppStyles.primaryBlue,
+                                            height: 1.3,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                          ),
                         ],
                       ),
                     ),
                   ),
+
+                FadeSlideY(
+                  delay: const Duration(milliseconds: 50),
+                  child: _AttendanceBanner(
+                    onSessionFinalized: () {
+                      if (mounted) setState(() {});
+                    },
+                    onTeacherFinalized: (subject, period) {
+                      if (mounted) {
+                        setState(() {
+                          _teacherFinalized = true;
+                          _finalizedSubject = subject;
+                          _finalizedPeriod = period;
+                          _teacherFinalizedAbsent = false;
+                          _absentSubject = '';
+                          _absentPeriod = '';
+
+                          _cachedPeriodFinalized = true;
+                          _cachedPeriodFinalizedSubject = subject;
+                          _cachedPeriodFinalizedPeriod = period;
+                          _cachedPeriodFinalizedAbsent = false;
+                          _cachedPeriodAbsentSubject = '';
+                          _cachedPeriodAbsentPeriod = '';
+                        });
+                      }
+                    },
+                    onTeacherFinalizedAbsent: (subject, period) {
+                      if (mounted) {
+                        setState(() {
+                          _teacherFinalized = false;
+                          _finalizedSubject = '';
+                          _finalizedPeriod = '';
+                          _teacherFinalizedAbsent = true;
+                          _absentSubject = subject;
+                          _absentPeriod = period;
+
+                          _cachedPeriodFinalized = false;
+                          _cachedPeriodFinalizedSubject = '';
+                          _cachedPeriodFinalizedPeriod = '';
+                          _cachedPeriodFinalizedAbsent = true;
+                          _cachedPeriodAbsentSubject = subject;
+                          _cachedPeriodAbsentPeriod = period;
+                        });
+                      }
+                    },
+                    onNewSession: () {
+                      if (mounted) {
+                        setState(() {
+                          _teacherFinalized = false;
+                          _finalizedSubject = '';
+                          _finalizedPeriod = '';
+                          _teacherFinalizedAbsent = false;
+                          _absentSubject = '';
+                          _absentPeriod = '';
+
+                          _cachedPeriodFinalized = false;
+                          _cachedPeriodFinalizedSubject = '';
+                          _cachedPeriodFinalizedPeriod = '';
+                          _cachedPeriodFinalizedAbsent = false;
+                          _cachedPeriodAbsentSubject = '';
+                          _cachedPeriodAbsentPeriod = '';
+                        });
+                      }
+                    },
+                    onClearFinalized: () {
+                      if (mounted) {
+                        setState(() {
+                          _teacherFinalized = false;
+                          _finalizedSubject = '';
+                          _finalizedPeriod = '';
+                          _teacherFinalizedAbsent = false;
+                          _absentSubject = '';
+                          _absentPeriod = '';
+
+                          _cachedPeriodFinalized = false;
+                          _cachedPeriodFinalizedSubject = '';
+                          _cachedPeriodFinalizedPeriod = '';
+                          _cachedPeriodFinalizedAbsent = false;
+                          _cachedPeriodAbsentSubject = '';
+                          _cachedPeriodAbsentPeriod = '';
+                        });
+                      }
+                    },
+                    teacherFinalized: _teacherFinalized,
+                    finalizedSubject: _finalizedSubject,
+                    finalizedPeriod: _finalizedPeriod,
+                    teacherFinalizedAbsent: _teacherFinalizedAbsent,
+                    absentSubject: _absentSubject,
+                    absentPeriod: _absentPeriod,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 10),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 580),
-                child: _ExpandableScheduleSection(
-                  isDark: isDark,
-                  theme: theme,
-                  isExpanded: _scheduleExpanded,
-                  onToggle: () =>
-                      setState(() => _scheduleExpanded = !_scheduleExpanded),
+                FadeSlideY(
+                  delay: const Duration(milliseconds: 100),
+                  child: _TodayStatusCard(isDark: isDark),
                 ),
-              ),
-              const SizedBox(height: 24),
-            ],
+                const SizedBox(height: 10),
+                FadeSlideY(
+                  delay: const Duration(milliseconds: 180),
+                  child: _AttendancePercentageCard(theme: theme, isDark: isDark),
+                ),
+                const SizedBox(height: 8),
+                FadeSlideY(
+                  delay: const Duration(milliseconds: 220),
+                  child: const _MotivationalMessage(),
+                ),
+                const SizedBox(height: 8),
+                if (_attendanceStreak >= 0)
+                  FadeSlideY(
+                    delay: const Duration(milliseconds: 240),
+                    child: _AttendanceStreakCard(
+                      streak: _attendanceStreak,
+                      weekDays: _weekDayAttendance,
+                    ),
+                  ),
+                const SizedBox(height: 10),
+                FadeSlideY(
+                  delay: const Duration(milliseconds: 260),
+                  child: _HeroAttendanceCard(theme: theme),
+                ),
+                const SizedBox(height: 20),
+                FadeSlideY(
+                  delay: const Duration(milliseconds: 340),
+                  child: AnimatedBuilder(
+                    animation: _pulseAnimation,
+                    builder: (context, child) {
+                      return Transform.scale(
+                        scale: _pulseAnimation.value,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            boxShadow: [
+                              BoxShadow(
+                                color: theme.primaryColor.withValues(alpha: 0.3),
+                                blurRadius: 20,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: AnimatedButton(
+                      onPressed: () =>
+                          Navigator.of(context).pushNamed('/face_verification'),
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8.0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.camera_alt_rounded),
+                            SizedBox(width: 12),
+                            Text('Verify Face'),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                FadeSlideY(
+                  delay: const Duration(milliseconds: 580),
+                  child: _ExpandableScheduleSection(
+                    isDark: isDark,
+                    theme: theme,
+                    isExpanded: _scheduleExpanded,
+                    onToggle: () =>
+                        setState(() => _scheduleExpanded = !_scheduleExpanded),
+                  ),
+                ),
+                const SizedBox(height: 24),
+              ],
+            ),
           ),
         ),
         bottomNavigationBar: CustomBottomNav(currentIndex: 0, onTap: _onNavTap),
+      ),
+    );
+  }
+}
+
+// Isolated clock — ticks on its own timer with its own setState,
+// so it no longer forces the entire DashboardScreen (and every child
+// card doing its own fetch in didUpdateWidget) to rebuild every 30s.
+class _LiveClockText extends StatefulWidget {
+  const _LiveClockText();
+
+  @override
+  State<_LiveClockText> createState() => _LiveClockTextState();
+}
+
+class _LiveClockTextState extends State<_LiveClockText> {
+  late String _time;
+  Timer? _timer;
+
+  String _getAnimatedTime() {
+    final now = DateTime.now();
+    final hour = now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour);
+    final minute = now.minute.toString().padLeft(2, '0');
+    final period = now.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:$minute $period';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _time = _getAnimatedTime();
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() => _time = _getAnimatedTime());
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 400),
+      transitionBuilder: (child, anim) => SlideTransition(
+        position: Tween<Offset>(begin: const Offset(0, 0.5), end: Offset.zero).animate(anim),
+        child: FadeTransition(opacity: anim, child: child),
+      ),
+      child: Text(
+        _time,
+        key: ValueKey(_time),
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: Colors.blueGrey.shade800,
+        ),
       ),
     );
   }
