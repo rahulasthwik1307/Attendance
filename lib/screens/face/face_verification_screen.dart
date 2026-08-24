@@ -352,9 +352,81 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     ).animate(CurvedAnimation(parent: _ringController, curve: Curves.linear));
 
     WidgetsBinding.instance.addObserver(this);
+    // Security guard from original screen
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!AuthFlowState.instance.passwordSet) {
+        Navigator.of(context).pushReplacementNamed('/sign_in');
+        return;
+      }
+      _checkRejectionBeforeVerification();
       _verifyLocation();
     });
+  }
+
+  Future<void> _checkRejectionBeforeVerification() async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) return;
+      final data = await Supabase.instance.client
+          .from('students')
+          .select('is_rejected')
+          .eq('id', user.id)
+          .maybeSingle();
+      final bool isRejected = data?['is_rejected'] == true;
+      if (isRejected && mounted) {
+        _showRejectedDialog();
+      }
+    } catch (e) {
+      debugPrint('[FACE_VER] rejection check failed (non-fatal): $e');
+    }
+  }
+
+  void _showRejectedDialog() {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.face_retouching_off_rounded, color: AppStyles.errorRed),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text('Face Registration Rejected',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Your face registration was rejected. You need to register your face again before you can use face-based attendance.',
+          style: TextStyle(fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).pop();
+            },
+            child: const Text('Cancel', style: TextStyle(color: AppStyles.textGray)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              AuthFlowState.instance.passwordSet = true;
+              AuthFlowState.instance.faceRegistered = false;
+              Navigator.of(context).pushReplacementNamed('/register');
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppStyles.primaryBlue,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Register Again'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

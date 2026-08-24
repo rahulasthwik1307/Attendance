@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import '../../utils/app_styles.dart';
+import '../../utils/auth_flow_state.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/custom_bottom_nav.dart';
 import '../../widgets/fade_slide_y.dart';
@@ -22,6 +23,9 @@ class _DashboardScreenState extends State<DashboardScreen>
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   bool _scheduleExpanded = false;
+
+  RealtimeChannel? _rejectionWatchChannel;
+  bool _rejectionDialogShown = false;
 
   String _studentName = 'Student';
   String _upcomingPeriodText = '';
@@ -81,6 +85,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
 
     _fetchProfile();
+    _watchForFaceRejection();
     _fetchUpcomingPeriod();
     _fetchAttendanceStreak();
     // Clear any lingering snackbars from previous screens
@@ -105,8 +110,84 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   @override
   void dispose() {
+    _rejectionWatchChannel?.unsubscribe();
     _pulseController.dispose();
     super.dispose();
+  }
+
+  void _watchForFaceRejection() {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    _rejectionWatchChannel?.unsubscribe();
+    _rejectionWatchChannel = supabase
+        .channel('dashboard_rejection_watch_${user.id}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'students',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'id',
+            value: user.id,
+          ),
+          callback: (payload) {
+            final newRecord = payload.newRecord;
+            final bool isRejected = newRecord['is_rejected'] == true;
+            if (isRejected && mounted && !_rejectionDialogShown) {
+              _rejectionDialogShown = true;
+              _showFaceRejectedDialog();
+            }
+          },
+        )
+        .subscribe();
+  }
+
+  void _showFaceRejectedDialog() {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.face_retouching_off_rounded, color: AppStyles.errorRed),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Face Registration Rejected',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Your face registration was rejected by your teacher. You need to register your face again before you can use face-based attendance.',
+          style: TextStyle(fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close', style: TextStyle(color: AppStyles.textGray)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              AuthFlowState.instance.passwordSet = true;
+              AuthFlowState.instance.faceRegistered = false;
+              Navigator.of(context).pushReplacementNamed('/register');
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppStyles.primaryBlue,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Register Again'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _fetchProfile() async {

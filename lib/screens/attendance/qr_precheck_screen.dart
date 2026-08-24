@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/app_styles.dart';
+import '../../utils/auth_flow_state.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
 
@@ -29,19 +30,35 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
   }
 
   Future<void> _runChecks() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) {
+      setState(() => _attendanceState = _CheckState.error);
+      _handleFailure();
+      return;
+    }
+
+    // ── Check 0: Face rejection gate — must pass before any other check ──
+    try {
+      final rejectionData = await Supabase.instance.client
+          .from('students')
+          .select('is_rejected')
+          .eq('id', user.id)
+          .maybeSingle();
+      if (rejectionData?['is_rejected'] == true) {
+        if (!mounted) return;
+        _showRejectedAndExit();
+        return;
+      }
+    } catch (e) {
+      debugPrint('[PRECHECK] rejection check failed (non-fatal): $e');
+    }
+
     // ── Check 1: College Attendance ──────────────────────────────
     setState(() {
       _attendanceState = _CheckState.checking;
     });
 
     try {
-      final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) {
-        setState(() => _attendanceState = _CheckState.error);
-        _handleFailure();
-        return;
-      }
-
       final todayStr = DateTime.now().toIso8601String().split('T')[0];
       final records = await Supabase.instance.client
           .from('college_attendance')
@@ -222,6 +239,53 @@ class _QrPrecheckScreenState extends State<QrPrecheckScreen> {
     setState(() {
       _hasFailed = true;
     });
+  }
+
+  void _showRejectedAndExit() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.face_retouching_off_rounded, color: AppStyles.errorRed),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text('Face Registration Rejected',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Your face registration was rejected. You need to register your face again before you can scan QR attendance.',
+          style: TextStyle(fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).pop();
+            },
+            child: const Text('Cancel', style: TextStyle(color: AppStyles.textGray)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              AuthFlowState.instance.passwordSet = true;
+              AuthFlowState.instance.faceRegistered = false;
+              Navigator.of(context).pushReplacementNamed('/register');
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppStyles.primaryBlue,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Register Again'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
