@@ -180,6 +180,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   CameraController? _cameraController;
   bool _cameraInitialized = false;
   bool _cameraPreviewReady = false;
+  bool _isRejected = false;
+  bool _cameraCleanedUp = false;
+  bool _isCameraCleaningUp = false;
+  bool _isNavigatingToRegister = false;
 
   // ─── ML ─────────────────────────────────────────────────────────────────
   final FaceMlService _mlService = FaceMlService();
@@ -219,7 +223,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   List<List<double>>? _storedTemplates;
   double _verificationThreshold = 0.68;
 
-  final int _attemptCount = 1;
+  int _attemptCount = 1;
+  bool _hasNavigatedToFailure = false;
 
   // Instruction / UI state
   String _instructionTitle = 'Setting up camera…';
@@ -374,10 +379,43 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           .maybeSingle();
       final bool isRejected = data?['is_rejected'] == true;
       if (isRejected && mounted) {
-        _showRejectedDialog();
+        _isRejected = true;
+        await _cleanUpCamera();
+        if (mounted) {
+          _showRejectedDialog();
+        }
       }
     } catch (e) {
       debugPrint('[FACE_VER] rejection check failed (non-fatal): $e');
+    }
+  }
+
+  Future<void> _cleanUpCamera() async {
+    if (_cameraCleanedUp) return;
+    if (_isCameraCleaningUp) {
+      while (_isCameraCleaningUp && !_cameraCleanedUp) {
+        await Future.delayed(const Duration(milliseconds: 20));
+      }
+      return;
+    }
+    _isCameraCleaningUp = true;
+    try {
+      final controller = _cameraController;
+      _cameraController = null;
+      _cameraInitialized = false;
+      _cameraPreviewReady = false;
+      if (controller != null) {
+        try {
+          await controller.stopImageStream();
+        } catch (_) {}
+        try {
+          await controller.dispose();
+        } catch (_) {}
+      }
+    } catch (_) {
+    } finally {
+      _cameraCleanedUp = true;
+      _isCameraCleaningUp = false;
     }
   }
 
@@ -406,16 +444,23 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           TextButton(
             onPressed: () {
               Navigator.of(ctx).pop();
-              Navigator.of(context).pop();
+              if (mounted) {
+                Navigator.of(context).pop();
+              }
             },
             child: const Text('Cancel', style: TextStyle(color: AppStyles.textGray)),
           ),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
+              if (_isNavigatingToRegister) return;
+              _isNavigatingToRegister = true;
               Navigator.of(ctx).pop();
+              await _cleanUpCamera();
               AuthFlowState.instance.passwordSet = true;
               AuthFlowState.instance.faceRegistered = false;
-              Navigator.of(context).pushReplacementNamed('/register');
+              if (mounted) {
+                Navigator.of(context).pushReplacementNamed('/register');
+              }
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppStyles.primaryBlue,
@@ -803,38 +848,65 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // CAMERA INITIALIZATION
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _initializeCamera() async {
+    if (!mounted || _cameraCleanedUp || _isRejected) return;
     try {
       _sessionId = FaceLandmarkService.newVerSessionId();
       final cameras = await availableCameras();
+      if (!mounted || _cameraCleanedUp || _isRejected) return;
+
       final frontCamera = cameras.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
 
-      _cameraController = CameraController(
+      final controller = CameraController(
         frontCamera,
         ResolutionPreset.high,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
-      await _cameraController!.initialize();
+      _cameraController = controller;
+      await controller.initialize();
+
+      if (!mounted || _cameraCleanedUp || _isRejected) {
+        try {
+          await controller.dispose();
+        } catch (_) {}
+        if (_cameraController == controller) _cameraController = null;
+        return;
+      }
 
       _cameraStabilizer = CameraStabilizer(
-        controller: _cameraController!,
+        controller: controller,
         sessionId: _sessionId,
         logPrefix: 'FACE_VER',
       );
       await _cameraStabilizer.stabilize();
 
+      if (!mounted || _cameraCleanedUp || _isRejected) {
+        try {
+          await controller.dispose();
+        } catch (_) {}
+        if (_cameraController == controller) _cameraController = null;
+        return;
+      }
+
       // Set to device minimum zoom for widest field of view
       try {
-        final minZoom = await _cameraController!.getMinZoomLevel();
-        await _cameraController!.setZoomLevel(minZoom);
+        final minZoom = await controller.getMinZoomLevel();
+        await controller.setZoomLevel(minZoom);
       } catch (_) {
         // Zoom not supported on this device — continue anyway
       }
 
-      if (!mounted) return;
+      if (!mounted || _cameraCleanedUp || _isRejected) {
+        try {
+          await controller.dispose();
+        } catch (_) {}
+        if (_cameraController == controller) _cameraController = null;
+        return;
+      }
+
       setState(() {
         _cameraInitialized = true;
       });
@@ -848,8 +920,27 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         return; // error already set
       }
 
+      if (!mounted || _cameraCleanedUp || _isRejected) {
+        try {
+          await controller.dispose();
+        } catch (_) {}
+        if (_cameraController == controller) _cameraController = null;
+        return;
+      }
+
       // Start camera stream for face detection
-      await _cameraController!.startImageStream(_onCameraFrame);
+      await controller.startImageStream(_onCameraFrame);
+
+      if (!mounted || _cameraCleanedUp || _isRejected) {
+        try {
+          await controller.stopImageStream();
+        } catch (_) {}
+        try {
+          await controller.dispose();
+        } catch (_) {}
+        if (_cameraController == controller) _cameraController = null;
+        return;
+      }
 
       _livenessService.logPrefix = 'FACE_VER';
       _livenessService.sessionId = _sessionId;
@@ -1574,8 +1665,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         await _cameraController?.stopImageStream();
       } catch (_) {}
 
-      // Cancel countdown timer
-      _countdownTimer?.cancel();
+      // Do NOT cancel countdown timer here — it belongs to the overall verification session
 
       setState(() {
         _cameraFrozen = true;
@@ -1630,15 +1720,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           batchResults.isNotEmpty && batchResults.first.apiFailed;
 
       if (apiFailed) {
-        FaceLogger.ver(_sessionId, 'API FAILED');
-        setState(() {
-          _isSubmitting = false;
-        });
-        _updateInstruction(
+        FaceLogger.ver(_sessionId, 'API FAILED - Technical Failure');
+        _handleTechnicalFailure(
           'Connection failed',
-          subtitle:
-              'Unable to connect to the face server. Please check your connection and try again.',
-          animate: false,
+          'Unable to connect to the face server. Please check your connection and try again.',
         );
         return;
       }
@@ -1735,17 +1820,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         _sessionId,
         'Valid Count: $_validFrameCount/$_framesPerPhase',
       );
-
-      if (_validFrameCount < 3 && framesAboveThresholdCount < 2) {
-        FaceLogger.ver(
-          _sessionId,
-          'Backend rejected frames due to quality. Failing gracefully to avoid user loop.',
-        );
-        _setError(
-          'Image quality was too low. Please ensure good lighting and hold the phone steady, then try again.',
-        );
-        return;
-      }
 
       _validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
       final List<BatchEmbeddingResult> topResults = _validResults.sublist(
@@ -1968,6 +2042,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
             context,
           ).pushReplacementNamed('/password_reset_face_success');
         } else if (mode == 'face_reset') {
+          await _cleanUpCamera();
+          if (!mounted) return;
           Navigator.of(
             context,
           ).pushNamedAndRemoveUntil('/register', (route) => false);
@@ -1979,19 +2055,46 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         }
       } else {
         FaceLogger.ver(_sessionId, 'Verification failed. Face did not match.');
-        setState(() => _borderColor = AppStyles.errorRed);
-        _updateInstruction(
-          'Verification Failed',
-          subtitle: 'Face did not match',
-        );
+        if (_attemptCount == 1) {
+          FaceLogger.ver(
+            _sessionId,
+            'Attempt 1 failed. Face did not match. Transitioning to Attempt 2.',
+          );
+          setState(() => _borderColor = AppStyles.errorRed);
+          _updateInstruction(
+            'Verification Failed',
+            subtitle: 'Face did not match. Starting Attempt 2 of 2…',
+          );
 
-        await Future.delayed(const Duration(milliseconds: 800));
-        if (mounted) {
-          Navigator.of(context).pushReplacementNamed('/attendance_failed');
+          await Future.delayed(const Duration(milliseconds: 1200));
+          if (mounted && _secondsRemaining > 0 && !_hasNavigatedToFailure) {
+            _startAttempt2();
+          }
+        } else {
+          FaceLogger.ver(
+            _sessionId,
+            'Attempt 2 failed. Face did not match. Navigating to failed screen.',
+          );
+          setState(() => _borderColor = AppStyles.errorRed);
+          _updateInstruction(
+            'Verification Failed',
+            subtitle: 'Face did not match',
+          );
+
+          _countdownTimer?.cancel();
+          await Future.delayed(const Duration(milliseconds: 800));
+          if (mounted && !_hasNavigatedToFailure) {
+            _hasNavigatedToFailure = true;
+            Navigator.of(context).pushReplacementNamed('/attendance_failed');
+          }
         }
       }
     } catch (e) {
-      _setError('Verification failed: ${e.toString()}');
+      FaceLogger.ver(_sessionId, 'Technical exception in verification: $e');
+      _handleTechnicalFailure(
+        'Something went wrong',
+        _userFriendlyError(e.toString()),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -2527,6 +2630,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   void _startCountdownTimer() {
     _countdownTimer?.cancel();
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
       if (_secondsRemaining > 1) {
         setState(() => _secondsRemaining--);
         _timerPulseController.forward().then((_) {
@@ -2536,11 +2643,97 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         setState(() => _secondsRemaining = 0);
         timer.cancel();
         // Timer expired → navigate to failed
-        if (mounted && _phase != _Phase.done) {
+        if (mounted && _phase != _Phase.done && !_hasNavigatedToFailure) {
+          _hasNavigatedToFailure = true;
           Navigator.of(context).pushReplacementNamed('/attendance_failed');
         }
       }
     });
+  }
+
+  void _startAttempt2() async {
+    if (!mounted || _hasNavigatedToFailure) return;
+
+    FaceLogger.ver(
+      _sessionId,
+      'Starting Attempt 2 of 2 (Remaining time: ${_secondsRemaining}s)',
+    );
+
+    _cameraStabilizer.resetStabilityOnly();
+    _meteringApplied = false;
+    _stabilityRejectCount = 0;
+    _livenessService.resetCalibration();
+    _liveEmbeddings.clear();
+    _capturedVerificationFrames.clear();
+    _capturedVerificationFramesStats.clear();
+    _allFramesStats.clear();
+    _validResults.clear();
+    _validFrameCount = 0;
+    _cameraFrozen = false;
+    _lastCapturedFrameBytes = null;
+    _isSubmitting = false;
+    _captureProgress = 0;
+    _isProcessingFrame = false;
+
+    final double rPlan = math.Random().nextDouble();
+    if (rPlan < 0.40) {
+      _livenessPlan = 'blink_only';
+    } else if (rPlan < 0.70) {
+      _livenessPlan = 'blink_left';
+    } else {
+      _livenessPlan = 'blink_right';
+    }
+    _blinkDone = false;
+    _turnDone = false;
+    _turnStartTime = null;
+    _challengeVerified = false;
+    _challengeStartTime = null;
+    _blinkCountdownController.reset();
+    _steadyStartTime = null;
+    _isFaceReady = false;
+    _lastKnownBlinkCount = 0;
+    _clearSmoothing();
+
+    setState(() {
+      _attemptCount = 2;
+      _borderColor = AppStyles.primaryBlue;
+      _errorMessage = null;
+      // NOTE: _secondsRemaining is preserved for continuous session countdown
+    });
+
+    // Ensure countdown timer is actively running if needed
+    if (_countdownTimer == null || !_countdownTimer!.isActive) {
+      _startCountdownTimer();
+    }
+
+    // Restart camera image stream for Attempt 2
+    if (_cameraInitialized && _cameraController != null) {
+      try {
+        await _cameraController!.startImageStream(_onCameraFrame);
+      } catch (_) {}
+    }
+
+    _setPhase(_Phase.positioning);
+  }
+
+  void _handleTechnicalFailure(String title, String subtitle) {
+    if (!mounted || _hasNavigatedToFailure) return;
+    _hasNavigatedToFailure = true;
+
+    FaceLogger.ver(
+      _sessionId,
+      'Technical/Network failure: $title | $subtitle (Attempt count $_attemptCount preserved) -> Immediate navigation to /attendance_failed',
+    );
+    _countdownTimer?.cancel();
+
+    try {
+      _cameraController?.stopImageStream();
+    } catch (_) {}
+
+    _isSubmitting = false;
+    _cameraFrozen = true;
+
+    Navigator.of(context).pushReplacementNamed('/attendance_failed');
   }
 
   String _userFriendlyError(String technicalError) {
@@ -2565,13 +2758,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     if (!mounted) return;
     debugPrint('[CAPTURE] ERROR: $message');
     final friendly = _userFriendlyError(message);
-    setState(() {
-      _phase = _Phase.error;
-      _errorMessage = friendly;
-      _borderColor = AppStyles.errorRed;
-      _instructionTitle = 'Something went wrong';
-      _instructionSubtitle = friendly;
-    });
+    _handleTechnicalFailure('Something went wrong', friendly);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -2596,12 +2783,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     _instructionDebounceTimer?.cancel();
     _stopLocationSubtitleTimers();
 
-    if (_cameraController != null && _cameraInitialized) {
-      try {
-        _cameraController!.stopImageStream();
-      } catch (_) {}
-      _cameraController!.dispose();
-    }
+    _cleanUpCamera();
 
     _mlService.faceDetector.close();
     super.dispose();
@@ -4146,11 +4328,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     setState(() {
       _borderColor = AppStyles.primaryBlue;
       _errorMessage = null;
-      _secondsRemaining = 60; // Reset the countdown timer
     });
 
-    // Restart countdown timer
-    _startCountdownTimer();
+    // Ensure countdown timer is actively running
+    if (_countdownTimer == null || !_countdownTimer!.isActive) {
+      _startCountdownTimer();
+    }
 
     // Restart camera stream if needed
     if (_cameraInitialized && _cameraController != null) {

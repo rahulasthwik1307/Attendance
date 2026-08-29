@@ -84,20 +84,26 @@ class _AttendanceFailedScreenState extends State<AttendanceFailedScreen>
     final Color bgColor = isDark ? const Color(0xFF0F172A) : const Color(0xFFFFF5F5);
     final Color surfaceColor = isDark ? const Color(0xFF1E293B) : Colors.white;
 
-    return Scaffold(
-      backgroundColor: bgColor,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: Icon(
-            Icons.close_rounded,
-            color: isDark ? Colors.white70 : AppStyles.textDark,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        Navigator.of(context).pushReplacementNamed('/dashboard');
+      },
+      child: Scaffold(
+        backgroundColor: bgColor,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: IconButton(
+            icon: Icon(
+              Icons.close_rounded,
+              color: isDark ? Colors.white70 : AppStyles.textDark,
+            ),
+            onPressed: () =>
+                Navigator.of(context).pushReplacementNamed('/dashboard'),
           ),
-          onPressed: () =>
-              Navigator.of(context).pushReplacementNamed('/dashboard'),
         ),
-      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
@@ -345,13 +351,65 @@ class _AttendanceFailedScreenState extends State<AttendanceFailedScreen>
                 ),
               ),
 
+              const SizedBox(height: 10),
+
+              // ── Secondary Action: Go to Dashboard ───────────────────────
+              FadeSlideY(
+                delay: const Duration(milliseconds: 620),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(
+                      context,
+                    ).pushReplacementNamed('/dashboard'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      backgroundColor: isDark
+                          ? const Color(0xFF1E293B)
+                          : Colors.white,
+                      side: BorderSide(
+                        color: isDark
+                            ? Colors.white.withValues(alpha: 0.15)
+                            : const Color(0xFFCBD5E1),
+                        width: 1.5,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.dashboard_outlined,
+                          size: 19,
+                          color: isDark ? Colors.white70 : const Color(0xFF334155),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Go to Dashboard',
+                          style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w700,
+                            color: isDark ? Colors.white : const Color(0xFF334155),
+                            letterSpacing: 0.1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
               const SizedBox(height: 12),
             ],
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 // ── Custom painter that draws ✕ stroke by stroke ────────────────────────────

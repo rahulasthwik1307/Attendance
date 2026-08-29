@@ -345,35 +345,59 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
 
       // Get available cameras
       final cameras = await availableCameras();
+      if (!mounted) return;
       final frontCamera = cameras.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
 
-      _cameraController = CameraController(
+      final controller = CameraController(
         frontCamera,
         ResolutionPreset.high,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
+      _cameraController = controller;
 
-      await _cameraController!.initialize();
+      await controller.initialize();
+      if (!mounted) {
+        try {
+          await controller.dispose();
+        } catch (_) {}
+        if (_cameraController == controller) _cameraController = null;
+        return;
+      }
+
       _cameraStabilizer = CameraStabilizer(
-        controller: _cameraController!,
+        controller: controller,
         sessionId: _sessionId,
         logPrefix: 'FACE_REG',
       );
       await _cameraStabilizer.stabilize();
+      if (!mounted) {
+        try {
+          await controller.dispose();
+        } catch (_) {}
+        if (_cameraController == controller) _cameraController = null;
+        return;
+      }
 
       // Set to device minimum zoom for widest field of view
       try {
-        final minZoom = await _cameraController!.getMinZoomLevel();
-        await _cameraController!.setZoomLevel(minZoom);
+        final minZoom = await controller.getMinZoomLevel();
+        await controller.setZoomLevel(minZoom);
       } catch (_) {
         // Zoom not supported on this device — continue anyway
       }
 
-      if (!mounted) return;
+      if (!mounted) {
+        try {
+          await controller.dispose();
+        } catch (_) {}
+        if (_cameraController == controller) _cameraController = null;
+        return;
+      }
+
       setState(() {
         _cameraInitialized = true;
       });
@@ -385,8 +409,16 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       // Fire-and-forget: ignore failures, backend may still respond.
       _landmarkService.pingBackend().catchError((_) {});
 
+      if (!mounted) {
+        try {
+          await controller.dispose();
+        } catch (_) {}
+        if (_cameraController == controller) _cameraController = null;
+        return;
+      }
+
       // Start camera stream for face detection
-      await _cameraController!.startImageStream(_onCameraFrame);
+      await controller.startImageStream(_onCameraFrame);
       _imageStreamRunning = true;
 
       _livenessService.logPrefix = 'FACE_REG';
@@ -1219,7 +1251,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
               prefix: 'FACE_REG',
               clientRejectedLogs: _clientRejectedLogs,
             )
-            .timeout(const Duration(seconds: 12));
+            .timeout(const Duration(seconds: 4));
       } on TimeoutException {
         timedOut = true;
         batchResults = [];
@@ -1228,7 +1260,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
       _processingSlowHintTimer?.cancel();
 
       if (timedOut) {
-        FaceLogger.reg(_sessionId, 'API TIMED OUT after 12s — treating as connection failure');
+        FaceLogger.reg(_sessionId, 'API TIMED OUT after 4s — treating as connection failure');
         _failProcessing(
           'Connection failed',
           'Unable to connect to the face server. Please check your connection and try again.',
@@ -2542,11 +2574,19 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen>
     _particleController.dispose();
 
     // Stop image stream FIRST, then dispose
-    if (_cameraController != null && _cameraInitialized) {
+    if (_cameraController != null) {
+      final controller = _cameraController;
+      _cameraController = null;
+      _cameraInitialized = false;
       try {
-        _cameraController!.stopImageStream();
+        if (_imageStreamRunning) {
+          controller!.stopImageStream();
+          _imageStreamRunning = false;
+        }
       } catch (_) {}
-      _cameraController!.dispose();
+      try {
+        controller!.dispose();
+      } catch (_) {}
     }
 
     _mlService.faceDetector.close();
