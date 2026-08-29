@@ -1702,16 +1702,33 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       int processedNonNullCount = 0;
 
       _apiStopwatch.start();
-      final List<BatchEmbeddingResult> batchResults = await _landmarkService
-          .generateEmbeddingBatch(
-            jpegBytesList: _capturedVerificationFrames,
-            localStatsList: _capturedVerificationFramesStats,
-            sessionId: _sessionId,
-            prefix: 'FACE_VER',
-            storedTemplates: _storedTemplates,
-            threshold: _verificationThreshold,
-          );
+      List<BatchEmbeddingResult> batchResults;
+      bool timedOut = false;
+      try {
+        batchResults = await _landmarkService
+            .generateEmbeddingBatch(
+              jpegBytesList: _capturedVerificationFrames,
+              localStatsList: _capturedVerificationFramesStats,
+              sessionId: _sessionId,
+              prefix: 'FACE_VER',
+              storedTemplates: _storedTemplates,
+              threshold: _verificationThreshold,
+            )
+            .timeout(const Duration(seconds: 4));
+      } on TimeoutException {
+        timedOut = true;
+        batchResults = [];
+      }
       _apiStopwatch.stop();
+
+      if (timedOut) {
+        FaceLogger.ver(_sessionId, 'API TIMED OUT after 4s - Technical Failure');
+        _handleTechnicalFailure(
+          'Connection failed',
+          'Unable to connect to the face server. Please check your connection and try again.',
+        );
+        return;
+      }
 
       final bool livenessPassed = batchResults.isNotEmpty
           ? batchResults.first.livenessPassed
