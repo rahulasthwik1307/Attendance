@@ -1,0 +1,470 @@
+import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui';
+import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
+
+class CameraStabilizer {
+  final CameraController controller;
+  final String sessionId;
+  final String logPrefix;
+
+  bool _isStabilizing = false;
+  bool _isStable = false;
+  bool _cancelled = false;
+  double? _stableBrightness;
+  double? _lastBrightness;
+  int _consecutiveDriftRejections = 0;
+  bool _isMetering = false;
+
+  // Diagnostic values
+  double exposureDrift = 0.0;
+  double frameBrightnessDelta = 0.0;
+  double frameLuminanceVariance = 0.0;
+  double exposureCompensationValue = 0.0;
+  String exposureState = 'Auto';
+
+  // Stabilization durations for summaries
+  int warmUpDurationMs = 0;
+  int focusStabilizationDurationMs = 0;
+  int exposureStabilizationDurationMs = 0;
+
+  bool get isStable => _isStable;
+  double? get stableBrightness => _stableBrightness;
+
+  CameraStabilizer({
+    required this.controller,
+    required this.sessionId,
+    required this.logPrefix,
+  });
+
+  void log(String message) {
+    debugPrint('[FACE_CAMERA] [$logPrefix][$sessionId] $message');
+  }
+
+  /// Cancel any in-progress stabilization immediately.
+  /// Every async continuation inside [stabilize] will exit on the next check.
+  void cancel() {
+    _cancelled = true;
+  }
+
+  /// Reset stabilization state so [stabilize] can be safely called again.
+  /// Must be called before re-using the stabilizer after [cancel].
+  double _currentExposureOffset = 0.0;
+  DateTime? _lastExposureAdjustmentTime;
+  bool _isAdjustingExposure = false;
+
+  void resetForRestart() {
+    _cancelled = false;
+    _isStabilizing = false;
+    _isStable = false;
+    _stableBrightness = null;
+    _lastBrightness = null;
+    _consecutiveDriftRejections = 0;
+    _isMetering = false;
+    _currentExposureOffset = 0.0;
+    _lastExposureAdjustmentTime = null;
+    _isAdjustingExposure = false;
+  }
+
+  /// Resets frame stability references while keeping the stabilizer marked as stable.
+  /// Used during retry to skip the full warm-up/stabilization sequence.
+  void resetStabilityOnly() {
+    _cancelled = false;
+    _isStabilizing = false;
+    _isStable = true;
+    _stableBrightness = null;
+    _lastBrightness = null;
+    _consecutiveDriftRejections = 0;
+  }
+
+  Future<void> applyFaceMetering(double faceCenterXNorm, double faceCenterYNorm) async {
+    if (_isMetering || _cancelled) return;
+    _isMetering = true;
+    try {
+      await controller.setExposurePoint(Offset(faceCenterXNorm, faceCenterYNorm));
+      await controller.setFocusPoint(Offset(faceCenterXNorm, faceCenterYNorm));
+    } catch (_) {
+      // Ignore UnsupportedError/PlatformException
+    } finally {
+      _isMetering = false;
+    }
+  }
+
+  Future<void> stabilize() async {
+    if (_isStabilizing) return;
+    // Clear any leftover cancellation from a previous attempt before starting.
+    _cancelled = false;
+    _isStabilizing = true;
+    _isStable = false;
+
+    final overallStopwatch = Stopwatch()..start();
+
+    // ── 1. Warm-up Stage ───────────────────────────────────────────────────
+    log('Camera opened');
+    log('Warm-up started');
+    final warmUpStopwatch = Stopwatch()..start();
+    // Warm-up timeout: 600ms
+    await Future.delayed(const Duration(milliseconds: 600));
+    if (_cancelled) { _isStabilizing = false; return; }
+    warmUpStopwatch.stop();
+    warmUpDurationMs = warmUpStopwatch.elapsedMilliseconds;
+    log('Warm-up completed (duration: ${warmUpDurationMs}ms)');
+
+    // Log general camera description
+    log('Camera Description: ${controller.description.name}, Orientation: ${controller.description.sensorOrientation}°');
+
+    // ── 2. Focus & Exposure Init ──────────────────────────────────────────
+    // Set Auto Focus and Auto Exposure
+    bool exposureAutoSupported = false;
+    try {
+      await controller.setExposureMode(ExposureMode.auto);
+      if (_cancelled) { _isStabilizing = false; return; }
+      exposureAutoSupported = true;
+      log('Exposure Mode Auto: Supported');
+    } catch (e) {
+      if (_cancelled) { _isStabilizing = false; return; }
+      log('Exposure Mode Auto Unsupported: $e');
+    }
+
+    bool focusAutoSupported = false;
+    try {
+      await controller.setFocusMode(FocusMode.auto);
+      if (_cancelled) { _isStabilizing = false; return; }
+      focusAutoSupported = true;
+      log('Focus Mode Auto: Supported');
+    } catch (e) {
+      if (_cancelled) { _isStabilizing = false; return; }
+      log('Focus Mode Auto Unsupported: $e');
+    }
+
+    // ── 3. Focus Stabilization ────────────────────────────────────────────
+    log('Waiting for Focus Stabilization');
+    final focusStopwatch = Stopwatch()..start();
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (_cancelled) { _isStabilizing = false; return; }
+    focusStopwatch.stop();
+    focusStabilizationDurationMs = focusStopwatch.elapsedMilliseconds;
+    log('Focus Stable');
+
+    // Lock Focus if supported
+    bool focusLockSupported = false;
+    try {
+      await controller.setFocusMode(FocusMode.locked);
+      if (_cancelled) { _isStabilizing = false; return; }
+      focusLockSupported = true;
+      log('Focus Lock: Supported & Locked');
+    } catch (e) {
+      if (_cancelled) { _isStabilizing = false; return; }
+      log('Focus Lock Unsupported (Using Auto Focus if supported). Reason: $e');
+    }
+
+    // ── 4. Exposure Stabilization ─────────────────────────────────────────
+    log('Waiting for Exposure Stabilization');
+    final exposureStopwatch = Stopwatch()..start();
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (_cancelled) { _isStabilizing = false; return; }
+    exposureStopwatch.stop();
+    exposureStabilizationDurationMs = exposureStopwatch.elapsedMilliseconds;
+    log('Exposure Stable');
+
+    // Attempt exposure offset (start with 0.0)
+    bool exposureCompSupported = false;
+    try {
+      double minOffset = await controller.getMinExposureOffset();
+      if (_cancelled) { _isStabilizing = false; return; }
+      double maxOffset = await controller.getMaxExposureOffset();
+      if (_cancelled) { _isStabilizing = false; return; }
+      double targetOffset = 0.0;
+      exposureCompSupported = minOffset != maxOffset;
+      if (exposureCompSupported) {
+        log('Exposure Compensation: Supported (Range: [$minOffset, $maxOffset])');
+        if (targetOffset >= minOffset && targetOffset <= maxOffset) {
+          await controller.setExposureOffset(targetOffset);
+          if (_cancelled) { _isStabilizing = false; return; }
+          exposureCompensationValue = targetOffset;
+          _currentExposureOffset = targetOffset;
+          log('Exposure Compensation Set: 0.0');
+        } else {
+          log('Exposure Compensation Target 0.0 out of bounds [$minOffset, $maxOffset]');
+        }
+      } else {
+        log('Exposure Compensation: Unsupported (Range: [$minOffset, $maxOffset])');
+      }
+    } catch (e) {
+      if (_cancelled) { _isStabilizing = false; return; }
+      log('Exposure Compensation Unsupported. Reason: $e');
+    }
+
+    // Keep exposure in AUTO mode for the whole session (never lock exposure)
+    exposureState = 'Auto';
+    log('Exposure Mode: Auto (Adapting)');
+
+    overallStopwatch.stop();
+    _isStable = true;
+    _isStabilizing = false;
+    log('Camera capabilities: FocusAuto=$focusAutoSupported, FocusLock=$focusLockSupported, ExposureAuto=$exposureAutoSupported, ExposureLock=Disabled(Auto), ExposureComp=$exposureCompSupported');
+    log('Warm-up duration: ${warmUpDurationMs}ms, Focus stabilize: ${focusStabilizationDurationMs}ms, Exposure stabilize: ${exposureStabilizationDurationMs}ms');
+    log('Stabilization result: Success');
+    log('Capture Begins');
+  }
+
+  /// Calculates stats for a camera frame (subsampled for speed)
+  Map<String, double> computeFrameStats(
+    CameraImage image, {
+    Rect? faceBoundingBox,
+    int? sensorOrientation,
+  }) {
+    final yPlane = image.planes[0];
+    final bytes = yPlane.bytes;
+    final len = bytes.length;
+    if (len == 0) return {'brightness': 0.0, 'contrast': 0.0, 'sharpness': 0.0};
+
+    if (faceBoundingBox != null && sensorOrientation != null) {
+      double rawX = 0;
+      double rawY = 0;
+      double rawWidth = 0;
+      double rawHeight = 0;
+
+      if (sensorOrientation == 90) {
+        rawX = faceBoundingBox.top;
+        rawY = image.height - faceBoundingBox.right;
+        rawWidth = faceBoundingBox.height;
+        rawHeight = faceBoundingBox.width;
+      } else if (sensorOrientation == 270) {
+        rawX = image.width - faceBoundingBox.bottom;
+        rawY = faceBoundingBox.left;
+        rawWidth = faceBoundingBox.height;
+        rawHeight = faceBoundingBox.width;
+      } else if (sensorOrientation == 180) {
+        rawX = image.width - faceBoundingBox.right;
+        rawY = image.height - faceBoundingBox.bottom;
+        rawWidth = faceBoundingBox.width;
+        rawHeight = faceBoundingBox.height;
+      } else {
+        rawX = faceBoundingBox.left;
+        rawY = faceBoundingBox.top;
+        rawWidth = faceBoundingBox.width;
+        rawHeight = faceBoundingBox.height;
+      }
+
+      // Clamp initial coordinates to image bounds
+      double cropLeft = rawX.clamp(0.0, image.width.toDouble());
+      double cropTop = rawY.clamp(0.0, image.height.toDouble());
+      double cropRight = (rawX + rawWidth).clamp(0.0, image.width.toDouble());
+      double cropBottom = (rawY + rawHeight).clamp(0.0, image.height.toDouble());
+
+      // Add a small safety margin: expand by ~15% on each side
+      final double marginW = rawWidth * 0.15;
+      final double marginH = rawHeight * 0.15;
+
+      cropLeft = (cropLeft - marginW).clamp(0.0, image.width.toDouble());
+      cropRight = (cropRight + marginW).clamp(0.0, image.width.toDouble());
+      cropTop = (cropTop - marginH).clamp(0.0, image.height.toDouble());
+      cropBottom = (cropBottom + marginH).clamp(0.0, image.height.toDouble());
+
+      final double cropW = cropRight - cropLeft;
+      final double cropH = cropBottom - cropTop;
+
+      if (cropW >= 20 && cropH >= 20) {
+        final int totalCropPixels = cropW.toInt() * cropH.toInt();
+        final int step = (totalCropPixels / 1000).floor().clamp(1, 10000);
+        int count = 0;
+        int sum = 0;
+
+        for (int i = 0; i < totalCropPixels; i += step) {
+          final int localX = i % cropW.toInt();
+          final int localY = i ~/ cropW.toInt();
+          final int x = cropLeft.toInt() + localX;
+          final int y = cropTop.toInt() + localY;
+          final int index = y * yPlane.bytesPerRow + x;
+          sum += bytes[index];
+          count++;
+        }
+        final double mean = sum / count;
+
+        double sumSquares = 0.0;
+        double diffSum = 0.0;
+        for (int i = 0; i < totalCropPixels; i += step) {
+          final int localX = i % cropW.toInt();
+          final int localY = i ~/ cropW.toInt();
+          final int x = cropLeft.toInt() + localX;
+          final int y = cropTop.toInt() + localY;
+          final int index = y * yPlane.bytesPerRow + x;
+
+          final double val = bytes[index].toDouble();
+          sumSquares += (val - mean) * (val - mean);
+          if (index > 0) {
+            diffSum += (bytes[index] - bytes[index - 1]).abs();
+          }
+        }
+
+        final double stdDev = math.sqrt(sumSquares / count);
+        final double sharpness = diffSum / count;
+
+        debugPrint(
+          '[FACE_REG] Cropped sharpness region: rawX=${rawX.toStringAsFixed(1)}, rawY=${rawY.toStringAsFixed(1)}, rawWidth=${rawWidth.toStringAsFixed(1)}, rawHeight=${rawHeight.toStringAsFixed(1)}, sharpness=${sharpness.toStringAsFixed(2)}',
+        );
+
+        return {
+          'brightness': mean,
+          'contrast': stdDev,
+          'sharpness': sharpness,
+        };
+      }
+    }
+
+    // Subsample to avoid performance issues
+    int sum = 0;
+    final int step = (len / 1000).floor().clamp(1, 10000);
+    int count = 0;
+    for (int i = 0; i < len; i += step) {
+      sum += bytes[i];
+      count++;
+    }
+    final double mean = sum / count;
+
+    double sumSquares = 0.0;
+    double diffSum = 0.0;
+    for (int i = 0; i < len; i += step) {
+      final double val = bytes[i].toDouble();
+      sumSquares += (val - mean) * (val - mean);
+      if (i > 0) {
+        diffSum += (bytes[i] - bytes[i - 1]).abs();
+      }
+    }
+    final double stdDev = math.sqrt(sumSquares / count);
+    final double sharpness = diffSum / count; // average gradient
+
+    return {
+      'brightness': mean,
+      'contrast': stdDev,
+      'sharpness': sharpness,
+    };
+  }
+
+  /// Adapts exposure offset based on face region brightness:
+  /// Target band: 70 to 190.
+  /// If faceBrightness > 190: decrease offset by 0.2 (clamped to min offset).
+  /// If faceBrightness < 70: increase offset by 0.2 (clamped to max offset).
+  /// Hysteresis: do nothing inside 70-190 target band.
+  /// Records a settle timestamp; checkFrameStability returns false for 250ms after a change.
+  Future<void> adjustFaceExposure(double faceBrightness) async {
+    if (_isAdjustingExposure || _cancelled) return;
+
+    if (faceBrightness >= 70.0 && faceBrightness <= 190.0) {
+      return; // Do nothing inside 70-190 target band
+    }
+
+    final double delta = faceBrightness > 190.0 ? -0.2 : 0.2;
+
+    try {
+      double minOffset = await controller.getMinExposureOffset();
+      if (_cancelled) return;
+      double maxOffset = await controller.getMaxExposureOffset();
+      if (_cancelled) return;
+
+      if (minOffset == maxOffset) return; // Exposure offset unsupported
+
+      double targetOffset = (_currentExposureOffset + delta).clamp(minOffset, maxOffset);
+      if ((targetOffset - _currentExposureOffset).abs() < 0.01) {
+        return; // Already at min or max offset limit
+      }
+
+      _isAdjustingExposure = true;
+      await controller.setExposureOffset(targetOffset);
+      _currentExposureOffset = targetOffset;
+      exposureCompensationValue = targetOffset;
+      _lastExposureAdjustmentTime = DateTime.now();
+      _stableBrightness = null;
+      log('Face exposure adjusted: offset=${targetOffset.toStringAsFixed(2)} (faceBrightness=${faceBrightness.toStringAsFixed(1)})');
+    } catch (e) {
+      log('Error adjusting face exposure: $e');
+    } finally {
+      _isAdjustingExposure = false;
+    }
+  }
+
+  double? _lastLoggedBrightness;
+  double? _lastLoggedContrast;
+  double? _lastLoggedSharpness;
+
+  /// Checks if the frame is stable compared to a reference brightness
+  bool checkFrameStability(CameraImage image, {double threshold = 25.0}) {
+    if (_isAdjustingExposure) {
+      log('Rejected: Exposure currently adjusting');
+      return false;
+    }
+    if (_lastExposureAdjustmentTime != null) {
+      final elapsed = DateTime.now().difference(_lastExposureAdjustmentTime!).inMilliseconds;
+      if (elapsed < 250) {
+        log('Rejected: Exposure adjusting (settling ${elapsed}ms / 250ms)');
+        return false;
+      }
+    }
+
+    final stats = computeFrameStats(image);
+    final currentBrightness = stats['brightness']!;
+    final currentContrast = stats['contrast']!;
+    final currentSharpness = stats['sharpness']!;
+    
+    if (_stableBrightness == null) {
+      _stableBrightness = currentBrightness;
+      _lastBrightness = currentBrightness;
+      _consecutiveDriftRejections = 0;
+      frameBrightnessDelta = 0.0;
+      exposureDrift = 0.0;
+      frameLuminanceVariance = stats['contrast']! * stats['contrast']!;
+      
+      _lastLoggedBrightness = currentBrightness;
+      _lastLoggedContrast = currentContrast;
+      _lastLoggedSharpness = currentSharpness;
+      
+      log('Brightness=${currentBrightness.toStringAsFixed(1)}');
+      log('Contrast=${currentContrast.toStringAsFixed(1)}');
+      log('Sharpness=${currentSharpness.toStringAsFixed(1)}');
+      log('Exposure Drift=0.0');
+      log('Frame Stability=STABLE');
+      
+      return true;
+    }
+
+    frameBrightnessDelta = (currentBrightness - _lastBrightness!).abs();
+    exposureDrift = (currentBrightness - _stableBrightness!).abs();
+    frameLuminanceVariance = stats['contrast']! * stats['contrast']!;
+    _lastBrightness = currentBrightness;
+
+    final bool isRejected = exposureDrift > threshold;
+    
+    final bool brightnessChanged = _lastLoggedBrightness == null || (currentBrightness - _lastLoggedBrightness!).abs() > 15.0;
+    final bool contrastChanged = _lastLoggedContrast == null || (currentContrast - _lastLoggedContrast!).abs() > 10.0;
+    final bool sharpnessChanged = _lastLoggedSharpness == null || (currentSharpness - _lastLoggedSharpness!).abs() > 15.0;
+
+    if (brightnessChanged || contrastChanged || sharpnessChanged || isRejected) {
+      _lastLoggedBrightness = currentBrightness;
+      _lastLoggedContrast = currentContrast;
+      _lastLoggedSharpness = currentSharpness;
+      
+      log('Brightness=${currentBrightness.toStringAsFixed(1)}');
+      log('Contrast=${currentContrast.toStringAsFixed(1)}');
+      log('Sharpness=${currentSharpness.toStringAsFixed(1)}');
+      log('Exposure Drift=${exposureDrift.toStringAsFixed(1)}');
+      log('Frame Stability=${isRejected ? "REJECTED" : "STABLE"}');
+    }
+
+    if (isRejected) {
+      _stableBrightness = _stableBrightness! * 0.7 + currentBrightness * 0.3;
+      _consecutiveDriftRejections++;
+      if (_consecutiveDriftRejections >= 3) {
+        _consecutiveDriftRejections = 0;
+        return true;
+      }
+      log('Rejected: Brightness unstable (current=$currentBrightness, ref=$_stableBrightness, drift=$exposureDrift, threshold=$threshold)');
+      return false;
+    }
+
+    _consecutiveDriftRejections = 0;
+    _stableBrightness = _stableBrightness! * 0.95 + currentBrightness * 0.05;
+    return true;
+  }
+}

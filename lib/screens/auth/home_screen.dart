@@ -12,11 +12,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  // Breathing / glow animation for the face hero
   late AnimationController _breatheController;
   late Animation<double> _breatheAnimation;
-
-  // Slow scan ring rotation
   late AnimationController _scanController;
 
   @override
@@ -63,7 +60,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             children: [
               const Spacer(flex: 2),
 
-              // ── Branding ─────────────────────────────────────────────────
+              // ── Branding ─────────────────────────────────
               FadeSlideY(
                 delay: const Duration(milliseconds: 60),
                 child: Row(
@@ -96,15 +93,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
               const Spacer(flex: 1),
 
-              // ── Hero Visual ─────────────────────────────────────────────
-              // Flexible so it gracefully shrinks on compact screens without overflow
+              // ── Hero Visual ───────────────────────────────
               Flexible(
                 flex: 12,
                 child: FadeSlideY(
                   delay: const Duration(milliseconds: 160),
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      // Cap hero between 160–220px based on available height
                       final heroSize = constraints.maxHeight.clamp(
                         160.0,
                         220.0,
@@ -157,7 +152,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
               const Spacer(flex: 1),
 
-              // ── Heading ───────────────────────────────────────────────────
+              // ── Heading ───────────────────────────────────
               FadeSlideY(
                 delay: const Duration(milliseconds: 280),
                 child: Text(
@@ -174,7 +169,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
               const SizedBox(height: 10),
 
-              // ── Sub-heading ───────────────────────────────────────────────
+              // ── Sub-heading ───────────────────────────────
               FadeSlideY(
                 delay: const Duration(milliseconds: 360),
                 child: Text(
@@ -191,7 +186,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
               const Spacer(flex: 1),
 
-              // ── Primary CTA: Activate Account ─────────────────────────────
+              // ── Activate Account ──────────────────────────
               FadeSlideY(
                 delay: const Duration(milliseconds: 440),
                 child: Container(
@@ -210,7 +205,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         Navigator.of(context).pushNamed('/activate'),
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 20),
-                      elevation: 0, // shadow from Container
+                      elevation: 0,
                     ),
                     child: const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -228,7 +223,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
               const SizedBox(height: 12),
 
-              // ── Secondary CTA: Sign In ────────────────────────────────────
+              // ── Sign In — always goes to sign in screen ───
               FadeSlideY(
                 delay: const Duration(milliseconds: 520),
                 child: SizedBox(
@@ -244,14 +239,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ),
                       elevation: 0,
                     ),
-                    child: const Text(
+                    child: Text(
                       'Sign In',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: theme.primaryColor,
+                      ),
                     ),
                   ),
                 ),
               ),
-              // Flexible so tagline gracefully disappears under pressure on tiny screens
+
               Flexible(
                 fit: FlexFit.loose,
                 child: FadeSlideY(
@@ -261,18 +259,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(
-                          Icons.lock_outline_rounded,
-                          size: 13,
-                          color: subtitleColor.withValues(alpha: 0.6),
-                        ),
-                        const SizedBox(width: 5),
-                        Text(
-                          'Secure face & location-based attendance',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: subtitleColor.withValues(alpha: 0.6),
-                            fontWeight: FontWeight.w500,
+                        Flexible(
+                          child: Text(
+                            'Secure face & location-based attendance',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: subtitleColor.withValues(alpha: 0.6),
+                              fontWeight: FontWeight.w500,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],
@@ -288,7 +284,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 }
 
-// ─── Face Scan Ring Painter ────────────────────────────────────────────────────
 class _FaceScanPainter extends CustomPainter {
   final double progress;
   final Color primaryColor;
@@ -306,20 +301,17 @@ class _FaceScanPainter extends CustomPainter {
     final outerRadius = size.width / 2;
     final midRadius = outerRadius * 0.78;
 
-    // Static outer glow ring
     final glowPaint = Paint()
       ..color = primaryColor.withValues(alpha: 0.07)
       ..style = PaintingStyle.fill;
     canvas.drawCircle(center, outerRadius, glowPaint);
 
-    // Static mid ring (subtle border)
     final ringPaint = Paint()
       ..color = primaryColor.withValues(alpha: isDark ? 0.18 : 0.12)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
     canvas.drawCircle(center, midRadius, ringPaint);
 
-    // Animated scanning arc
     final sweepPaint = Paint()
       ..shader = SweepGradient(
         center: Alignment.center,
@@ -340,12 +332,11 @@ class _FaceScanPainter extends CustomPainter {
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: midRadius),
       progress * math.pi * 2,
-      math.pi * 2 * 0.35, // 35% arc sweep
+      math.pi * 2 * 0.35,
       false,
       sweepPaint,
     );
 
-    // Corner bracket accents (top-left, top-right, bottom-left, bottom-right)
     _drawBracket(canvas, center, midRadius * 0.88, primaryColor);
   }
 
@@ -355,12 +346,12 @@ class _FaceScanPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.2
       ..strokeCap = StrokeCap.round;
-    const arcLen = 0.25; // in radians
+    const arcLen = 0.25;
     const offsets = [
-      -math.pi * 3 / 4, // top-left
-      -math.pi / 4, // top-right
-      math.pi / 4, // bottom-right
-      math.pi * 3 / 4, // bottom-left
+      -math.pi * 3 / 4,
+      -math.pi / 4,
+      math.pi / 4,
+      math.pi * 3 / 4,
     ];
     for (final start in offsets) {
       canvas.drawArc(

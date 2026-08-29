@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../utils/app_styles.dart';
 import '../../widgets/animated_button.dart';
 import '../../widgets/fade_slide_y.dart';
@@ -110,9 +111,43 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
     }
 
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(milliseconds: 800));
-    if (!mounted) return;
 
+    try {
+      // Actually update the password in Supabase Auth for this user only
+      await Supabase.instance.client.auth.updateUser(
+        UserAttributes(password: _newPwController.text),
+      );
+
+      // Clear must_change_password flag
+      try {
+        await Supabase.instance.client
+            .from('users')
+            .update({'must_change_password': false})
+            .eq('id', Supabase.instance.client.auth.currentUser!.id);
+      } catch (_) {}
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to update password: ${e.message}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Something went wrong. Please try again.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
     setState(() {
       _isLoading = false;
       _isSuccess = true;
@@ -124,92 +159,27 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
     if (mounted) {
       if (AuthFlowState.instance.isFirstTimeUser) {
         AuthFlowState.instance.isFirstTimeUser = false;
+        // Brief pause so user sees the success checkmark before face registration
+        await Future.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
         Navigator.of(context).pushReplacementNamed('/register');
-      } else if (AuthFlowState.instance.faceRegistered &&
-          !AuthFlowState.instance.isFaceReset) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (ctx) => PopScope(
-            canPop: false,
-            child: Dialog(
-              backgroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: AppStyles.primaryBlue.withValues(alpha: 0.09),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.lock_person_rounded,
-                        color: AppStyles.primaryBlue,
-                        size: 32,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Password Updated',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF1A202C),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    const Text(
-                      'For your security, please sign in again with your new password.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Color(0xFF4A5568),
-                        height: 1.6,
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          Navigator.of(ctx).pop();
-                          AuthFlowState.instance.reset();
-                          Navigator.of(context).pushNamedAndRemoveUntil(
-                            '/sign_in',
-                            (route) => false,
-                          );
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppStyles.primaryBlue,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: const Text(
-                          'Sign In Now',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+      } else if (AuthFlowState.instance.passwordSet &&
+                 AuthFlowState.instance.faceRegistered &&
+                 !AuthFlowState.instance.isFaceReset) {
+        // Teacher reset password — student approved and face exists — go to dashboard
+        await Future.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/dashboard',
+          (route) => false,
         );
+      } else if (AuthFlowState.instance.passwordSet &&
+                 !AuthFlowState.instance.faceRegistered &&
+                 !AuthFlowState.instance.isFirstTimeUser) {
+        // Teacher reset password but admin deleted face — need re-registration
+        await Future.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+        Navigator.of(context).pushReplacementNamed('/register');
       } else {
         Navigator.of(
           context,

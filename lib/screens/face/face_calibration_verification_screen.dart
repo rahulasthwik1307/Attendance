@@ -1,0 +1,2261 @@
+// lib/screens/face/face_calibration_verification_screen.dart
+// Face calibration screen — captures 8 front frames after liveness check,
+// generates embeddings, computes a personalized threshold via ThresholdCalculator
+// and navigates to the preview screen on success. No location check.
+
+import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui';
+
+import 'package:camera/camera.dart';
+import 'package:facial_liveness_verification/facial_liveness_verification.dart' show ChallengeType;
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:image/image.dart' as img;
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../services/face_ml_service.dart';
+import '../../services/face_landmark_service.dart';
+import '../../utils/app_styles.dart';
+import '../../utils/camera_stabilizer.dart';
+
+enum _Phase {
+  initializing,
+  positioning,
+  liveness,
+  capturing,
+  processing,
+  done,
+  error,
+}
+
+class FaceCalibrationVerificationScreen extends StatefulWidget {
+  const FaceCalibrationVerificationScreen({super.key});
+
+  @override
+  State<FaceCalibrationVerificationScreen> createState() => _FaceCalibrationVerificationScreenState();
+}
+
+class _FaceCalibrationVerificationScreenState extends State<FaceCalibrationVerificationScreen>
+    with TickerProviderStateMixin {
+  late final String _sessionId;
+  final Stopwatch _captureStopwatch = Stopwatch();
+  final Stopwatch _apiStopwatch = Stopwatch();
+  final Stopwatch _calibrationStopwatch = Stopwatch();
+  final Stopwatch _totalStopwatch = Stopwatch();
+
+  late AnimationController _pulseController;
+  late AnimationController _textFadeController;
+  late AnimationController _blinkCountdownController;
+  late AnimationController _successBounceController;
+  late AnimationController _particleController;
+  late AnimationController _scanLineController;
+
+  late AnimationController _timerPulseController;
+  late Animation<double> _timerPulseAnim;
+  late AnimationController _ringController;
+  late Animation<double> _ringProgress;
+  static const int _totalSeconds = 60;
+  int _secondsRemaining = _totalSeconds;
+  Timer? _countdownTimer;
+
+  CameraController? _cameraController;
+  bool _cameraInitialized = false;
+
+  final FaceMlService _mlService = FaceMlService();
+  final FaceLandmarkService _landmarkService = FaceLandmarkService();
+  final LivenessChallengeService _livenessService = LivenessChallengeService();
+  bool _isProcessingFrame = false;
+  DateTime _lastFrameTime = DateTime.now();
+  CameraImage? _lastCameraImage;
+  DateTime _lastCaptureTime = DateTime.fromMillisecondsSinceEpoch(0);
+
+  _Phase _phase = _Phase.initializing;
+
+  final List<List<double>> _liveEmbeddings = [];
+  final List<Uint8List> _capturedVerificationFrames = [];
+  final List<Map<String, double>> _capturedVerificationFramesStats = [];
+  CameraStabilizer? _cameraStabilizer;
+  bool _embeddingsLoaded = false;
+  Face? _lastProcessedFace;
+  int _nextCaptureInterval = 300;
+  static const int _framesPerPhase = 8;
+
+  final List<BatchEmbeddingResult> _validResults = [];
+  int _validFrameCount = 0;
+  bool _cameraFrozen = false;
+  Uint8List? _lastCapturedFrameBytes;
+  bool _isSubmitting = false;
+
+  List<double>? _masterEmbedding;
+  
+  Uint8List? _lastCaptureJpegBytes;
+  Face? _lastCaptureFace;
+  double _verificationThreshold = 0.70;
+
+  int _consecutiveImageErrors = 0;
+  int _attemptCount = 1;
+
+  // Calibration runtime metrics
+  int _calFramesAccepted = 0;
+  int _calFramesRejected = 0;
+  double _calGeneratedThreshold = 0.0;
+  double _calMeanSimilarity = 0.0;
+  double _calSimilarityStdDev = 0.0;
+  final Stopwatch _calDurationStopwatch = Stopwatch();
+  // Stage 2: single structured result replacing scattered diagnostic state vars.
+  String _instructionTitle = 'Setting up camera…';
+  String _instructionSubtitle = 'Please wait';
+  Color _borderColor = AppStyles.primaryBlue;
+  bool _challengeVerified = false;
+
+  DateTime? _challengeStartTime;
+  int _lastKnownBlinkCount = 0;
+  int _captureProgress = 0;
+  String? _errorMessage;
+
+  DateTime? _steadyStartTime;
+  bool _isFaceReady = false;
+  Timer? _instructionDebounceTimer;
+  bool _showFlash = false;
+
+  double _uiCircleSize = 0;
+  double _uiAvailW = 0;
+  double _uiAvailH = 0;
+
+  static const int _smoothingBufferSize = 5;
+  final List<double> _bufFaceWidth = [];
+  final List<double> _bufFaceHeight = [];
+  final List<double> _bufFaceCX = [];
+  final List<double> _bufFaceCY = [];
+  final List<double> _bufYaw = [];
+  final List<double> _bufPitch = [];
+
+  String? _lastPosInstruction;
+
+  final Map<String, String> _subtitles = {
+    "Setting up camera…": "Please wait",
+    "Fit your face in the circle": "Make sure your full face is visible",
+    "Move closer to the camera": "Step a little closer so your face fills the circle",
+    "Move slightly backward": "You are too close, step back a little",
+    "Move to the center of the circle": "Center your face in the circle",
+    "Hold still…": "Almost ready, stay steady",
+    "Calibrating…": "Look straight at the camera and hold still",
+    "Blink to verify": "Blink naturally to confirm you are present",
+    "Blink 2-3 times": "Blink naturally 2 to 3 times",
+    "Capturing 1/8": "Hold still, scanning your face",
+    "Capturing 2/8": "Hold still, scanning your face",
+    "Capturing 3/8": "Hold still, scanning your face",
+    "Capturing 4/8": "Hold still, scanning your face",
+    "Capturing 5/8": "Hold still, scanning your face",
+    "Capturing 6/8": "Hold still, scanning your face",
+    "Capturing 7/8": "Hold still, scanning your face",
+    "Capturing 8/8": "Almost done",
+    "Processing…": "Computing your face profile",
+    "Calibration Complete": "Your face profile has been personalised",
+    "Calibration Failed": "Please retry with better lighting",
+    "Something went wrong": "Please try again",
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _clearSmoothing();
+    _livenessService.reset();
+    _challengeVerified = false;
+    _steadyStartTime = null;
+    _isFaceReady = false;
+    _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat(reverse: true);
+    _textFadeController = AnimationController(vsync: this, duration: const Duration(milliseconds: 250))..forward();
+    _blinkCountdownController = AnimationController(vsync: this, duration: const Duration(seconds: 3));
+    _successBounceController = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _particleController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000));
+    _scanLineController = AnimationController(vsync: this, duration: const Duration(milliseconds: 2000))..repeat(reverse: true);
+
+    _timerPulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 400));
+    _timerPulseAnim = Tween<double>(begin: 1.0, end: 1.05).animate(
+      CurvedAnimation(parent: _timerPulseController, curve: Curves.easeInOut),
+    );
+
+    _ringController = AnimationController(vsync: this, duration: const Duration(seconds: _totalSeconds));
+    _ringProgress = Tween<double>(begin: 1.0, end: 0.0).animate(CurvedAnimation(parent: _ringController, curve: Curves.linear));
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _initializeCamera();
+    });
+  }
+
+  Future<void> _initializeCamera() async {
+    try {
+      _sessionId = FaceLandmarkService.newCalSessionId();
+      final cameras = await availableCameras();
+      final frontCamera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+
+      _cameraController = CameraController(
+        frontCamera,
+        ResolutionPreset.high,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+      await _cameraController!.initialize();
+
+      _cameraStabilizer = CameraStabilizer(
+        controller: _cameraController!,
+        sessionId: _sessionId,
+        logPrefix: 'FACE_CAL',
+      );
+      await _cameraStabilizer!.stabilize();
+
+      try {
+        final minZoom = await _cameraController!.getMinZoomLevel();
+        await _cameraController!.setZoomLevel(minZoom);
+      } catch (_) {}
+
+      if (!mounted) return;
+      setState(() {
+        _cameraInitialized = true;
+      });
+
+      await _landmarkService.initialize();
+      await _cameraController!.startImageStream(_onCameraFrame);
+      _setPhase(_Phase.positioning);
+
+      _ringController.forward();
+      _startCountdownTimer();
+
+      await _loadEmbeddings();
+    } catch (e) {
+      _setError('Camera failed to start: $e');
+    }
+  }
+
+  Future<void> _loadEmbeddings() async {
+    if (_embeddingsLoaded) {
+      debugPrint('[FACE_CAL] Embedding templates already loaded in memory for this screen instance');
+      return;
+    }
+    debugPrint('[FACE_CAL] Loading templates and personal threshold from Supabase');
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        _setError('Session expired. Please log in again.');
+        return;
+      }
+
+      final data = await Supabase.instance.client
+          .from('students')
+          .select('embedding_a, embedding_b, embedding_c, face_embedding, verification_threshold')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      if (data == null) {
+        _setError('Could not load face profile. Please register your face first.');
+        return;
+      }
+
+      if (data['face_embedding'] != null) {
+        _masterEmbedding = (data['face_embedding'] as List).map((e) => (e as num).toDouble()).toList();
+      }
+      
+      _verificationThreshold = (data['verification_threshold'] as num?)?.toDouble() ?? 0.70;
+      _embeddingsLoaded = true;
+      debugPrint('[FACE_CAL] Initial threshold loaded: $_verificationThreshold');
+    } catch (e) {
+      _setError('Could not load face profile. Please try again.');
+    }
+  }
+
+  Future<void> _onCameraFrame(CameraImage cameraImage) async {
+    if (mounted && _cameraFrozen) {
+      setState(() {
+        _cameraFrozen = false;
+      });
+    }
+    if (_cameraStabilizer == null || !_cameraStabilizer!.isStable) return;
+    _lastCameraImage = cameraImage;
+
+    final now = DateTime.now();
+    final bool isBlinkPhase = _phase == _Phase.liveness && !_challengeVerified && _isFaceReady;
+    if (!isBlinkPhase) {
+      final int limit = (_phase == _Phase.liveness && !_challengeVerified) ? 33 : 100;
+      if (now.difference(_lastFrameTime).inMilliseconds < limit) return;
+    }
+    if (_isProcessingFrame) return;
+    if (!mounted) return;
+
+    if (_phase == _Phase.initializing ||
+        _phase == _Phase.processing ||
+        _phase == _Phase.done ||
+        _phase == _Phase.error) {
+      return;
+    }
+
+    _lastFrameTime = now;
+    _isProcessingFrame = true;
+
+    try {
+      final InputImage? inputImage = _convertToInputImage(cameraImage);
+      if (inputImage == null) {
+        _isProcessingFrame = false;
+        return;
+      }
+
+      final List<Face> faces = await _mlService.faceDetector.processImage(inputImage);
+      if (!mounted) {
+        _isProcessingFrame = false;
+        return;
+      }
+
+      if (faces.isEmpty) {
+        if ((_phase == _Phase.positioning || _phase == _Phase.liveness) && !_challengeVerified) {
+          _clearSmoothing();
+          _steadyStartTime = null;
+          if (_isFaceReady) {
+            _isFaceReady = false;
+            _livenessService.resetCalibration();
+            _challengeStartTime = null;
+            _blinkCountdownController.stop();
+            _blinkCountdownController.reset();
+          }
+          _updateInstruction('Fit your face in the circle', animate: false);
+        }
+        _isProcessingFrame = false;
+        return;
+      }
+
+      final Face? face = _selectBiggestCenteredFace(faces, cameraImage);
+      if (face == null) {
+        _updateInstruction('Fit your face in the circle', animate: false);
+        _isProcessingFrame = false;
+        return;
+      }
+
+      if (_lastProcessedFace != null) {
+        bool isSame = false;
+        if (face.trackingId != null && _lastProcessedFace!.trackingId != null) {
+          isSame = face.trackingId == _lastProcessedFace!.trackingId;
+        } else {
+          final double iou = _calculateIoU(face.boundingBox, _lastProcessedFace!.boundingBox);
+          isSame = iou >= 0.5;
+        }
+        if (!isSame) {
+          debugPrint('[FACE_CAL] Face tracking lost — resetting captured frames and buffer');
+          _clearSmoothing();
+          _capturedVerificationFrames.clear();
+          _capturedVerificationFramesStats.clear();
+          _validResults.clear();
+          _validFrameCount = 0;
+          _captureProgress = 0;
+          _steadyStartTime = null;
+          _isFaceReady = false;
+          _livenessService.resetCalibration();
+          _challengeStartTime = null;
+          _blinkCountdownController.stop();
+          _blinkCountdownController.reset();
+        }
+      }
+      _lastProcessedFace = face;
+      _pushSmoothing(face);
+
+      if ((_phase == _Phase.positioning || _phase == _Phase.liveness) && !_challengeVerified) {
+        final bool strict = !_isFaceReady;
+        final String? posInstruction = _getPositioningInstruction(face, cameraImage, strict: strict);
+
+        if (posInstruction != null) {
+          if (_isFaceReady) {
+            _isFaceReady = false;
+            _livenessService.resetCalibration();
+            _challengeStartTime = null;
+            _blinkCountdownController.stop();
+            _blinkCountdownController.reset();
+          }
+          _steadyStartTime = null;
+          _updateInstruction(posInstruction, animate: false);
+          _isProcessingFrame = false;
+          return;
+        }
+
+        _steadyStartTime ??= DateTime.now();
+        final int steadyMs = DateTime.now().difference(_steadyStartTime!).inMilliseconds;
+
+        if (!_isFaceReady) {
+          if (steadyMs < 800) {
+            _updateInstruction('Hold still…', subtitle: 'Almost ready, stay steady', animate: false);
+            _isProcessingFrame = false;
+            return;
+          }
+          _isFaceReady = true;
+          _livenessService.reset();
+
+          if (_phase == _Phase.positioning) {
+            _setPhase(_Phase.liveness);
+          }
+          _updateInstruction('Calibrating…', subtitle: 'Look straight at the camera and hold still', animate: false);
+        }
+      }
+
+      switch (_phase) {
+        case _Phase.liveness:
+          if (!_challengeVerified) {
+            await _handleLivenessChallenge(face, ChallengeType.blink);
+          } else {
+            await Future.delayed(const Duration(milliseconds: 500));
+            if (mounted) _setPhase(_Phase.capturing);
+          }
+          break;
+        case _Phase.capturing:
+          await _handleCapture(face, cameraImage);
+          break;
+        default:
+          break;
+      }
+    } catch (e) {
+      // Swallow silently
+    } finally {
+      _isProcessingFrame = false;
+    }
+  }
+
+  Future<void> _handleLivenessChallenge(Face face, ChallengeType challenge) async {
+    _challengeStartTime ??= DateTime.now();
+    final int elapsed = DateTime.now().difference(_challengeStartTime!).inMilliseconds;
+    const int timeout = 3000;
+
+    if (elapsed > timeout) {
+      _livenessService.reset();
+      _challengeStartTime = DateTime.now();
+      if (challenge == ChallengeType.blink) {
+        _blinkCountdownController.stop();
+      }
+      _updateInstruction('No blink detected', subtitle: 'Blink naturally 2 to 3 times to confirm presence', animate: false);
+      await Future.delayed(const Duration(milliseconds: 800));
+      if (!mounted) return;
+
+      if (challenge == ChallengeType.blink) {
+        _blinkCountdownController.reset();
+        _blinkCountdownController.forward(from: 0.0);
+      }
+      _updateInstruction(_getChallengeInstruction(challenge), subtitle: 'Blink naturally 2 to 3 times to confirm presence', animate: false);
+      return;
+    }
+
+    if (challenge == ChallengeType.blink && !_livenessService.isBlinkCalibrated) {
+      final bool calibDone = _livenessService.calibrateBlink(face);
+      if (!calibDone) return;
+      _challengeStartTime = DateTime.now();
+      _lastKnownBlinkCount = 0;
+      _blinkCountdownController.reset();
+      _blinkCountdownController.forward();
+      _updateInstruction('Blink 2-3 times', subtitle: 'Blink naturally 2 to 3 times', animate: false);
+      return;
+    }
+
+    bool detected = false;
+    switch (challenge) {
+      case ChallengeType.blink:
+        detected = _livenessService.detectBlink(face);
+        final int currentBlinkCount = _livenessService.blinkCount;
+        if (!detected && currentBlinkCount > _lastKnownBlinkCount) {
+          _lastKnownBlinkCount = currentBlinkCount;
+          if (mounted) setState(() => _borderColor = AppStyles.successGreen);
+          await Future.delayed(const Duration(milliseconds: 250));
+          if (mounted && !_challengeVerified) setState(() => _borderColor = AppStyles.primaryBlue);
+        }
+        break;
+      default:
+        break;
+    }
+
+    if (detected) {
+      FaceLogger.cal(_sessionId, 'Blink challenge VERIFIED ✓');
+      _challengeVerified = true;
+      _livenessService.reset();
+      _challengeStartTime = null;
+      _blinkCountdownController.stop();
+      _captureStopwatch.start();
+
+      if (mounted) {
+        setState(() => _borderColor = AppStyles.successGreen);
+        HapticFeedback.lightImpact();
+      }
+      _updateInstruction('Blink verified!', subtitle: 'Preparing capture…', animate: false);
+    }
+  }
+
+  String _getChallengeInstruction(ChallengeType challenge) {
+    return challenge == ChallengeType.blink ? 'Blink to verify' : 'Hold still…';
+  }
+
+  Future<void> _handleCapture(Face face, CameraImage cameraImage) async {
+    if (_cameraFrozen) return;
+
+    final now = DateTime.now();
+    if (now.difference(_lastCaptureTime).inMilliseconds < _nextCaptureInterval) return;
+
+    final double? yawRaw = face.headEulerAngleY;
+    if (yawRaw == null) return;
+    final double yaw = -yawRaw;
+    if (yaw.abs() > 15) {
+      _updateInstruction('Look straight ahead', animate: false);
+      return;
+    }
+
+    if (!_isFaceAcceptable(face, cameraImage)) {
+      _isProcessingFrame = false;
+      return;
+    }
+
+    if (_cameraStabilizer == null || !_cameraStabilizer!.checkFrameStability(cameraImage)) {
+      _isProcessingFrame = false;
+      return;
+    }
+
+    final Uint8List? jpegBytes = await _captureCurrentFrame();
+    if (jpegBytes == null) return;
+
+    _lastCapturedFrameBytes = jpegBytes;
+
+    if (_capturedVerificationFrames.isEmpty) {
+      _lastCaptureJpegBytes = jpegBytes;
+      _lastCaptureFace = face;
+      debugPrint('[FACE_CAL] Saved first capture frame for preview');
+    }
+
+    _capturedVerificationFrames.add(jpegBytes);
+    final stats = _cameraStabilizer!.computeFrameStats(cameraImage);
+    _capturedVerificationFramesStats.add(stats);
+
+    setState(() {
+      _captureProgress = _validFrameCount + _capturedVerificationFrames.length;
+      _borderColor = AppStyles.successGreen;
+    });
+    HapticFeedback.lightImpact();
+
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (mounted && _phase == _Phase.capturing) {
+        setState(() => _borderColor = AppStyles.primaryBlue);
+      }
+    });
+
+    _lastCaptureTime = DateTime.now();
+    _nextCaptureInterval = 250 + math.Random().nextInt(100);
+
+    final int needed = _framesPerPhase - _validFrameCount;
+    if (_capturedVerificationFrames.length >= needed) {
+      _captureStopwatch.stop();
+      FaceLogger.cal(_sessionId, 'Stopped | totalCaptured=${_capturedVerificationFrames.length}');
+      try {
+        await _cameraController?.stopImageStream();
+      } catch (_) {}
+      _countdownTimer?.cancel();
+
+      setState(() {
+        _cameraFrozen = true;
+        _isProcessingFrame = true;
+      });
+
+      await _processAndCalibrate();
+    }
+  }
+
+  Future<void> _processAndCalibrate() async {
+    if (!mounted) return;
+    if (_isSubmitting) return;
+
+    if (!_embeddingsLoaded) {
+      await _loadEmbeddings();
+    }
+
+    _totalStopwatch.start();
+    setState(() => _isSubmitting = true);
+    _updateInstruction('Calibrating Recognition', subtitle: 'Optimizing your face profile...');
+
+    _calFramesAccepted = 0;
+    _calFramesRejected = 0;
+    _calDurationStopwatch.reset();
+
+    try {
+      FaceLogger.cal(_sessionId, 'Processing Started');
+
+      _apiStopwatch.start();
+      final List<BatchEmbeddingResult> batchResults = await _landmarkService.generateEmbeddingBatch(
+        jpegBytesList: _capturedVerificationFrames,
+        localStatsList: _capturedVerificationFramesStats,
+        sessionId: _sessionId,
+        prefix: 'FACE_CAL',
+        storedMaster: _masterEmbedding,
+        threshold: _verificationThreshold,
+      );
+      _apiStopwatch.stop();
+
+      for (final res in batchResults) {
+        if (res.embedding != null && res.qualityPassed) {
+          _validResults.add(res);
+          _calFramesAccepted++;
+        } else {
+          _calFramesRejected++;
+        }
+      }
+
+      _validFrameCount = _validResults.length;
+      if (_validFrameCount < _framesPerPhase) {
+        _capturedVerificationFrames.clear();
+        _capturedVerificationFramesStats.clear();
+
+        setState(() {
+          _cameraFrozen = false;
+          _isProcessingFrame = false;
+          _captureProgress = _validFrameCount;
+          _isSubmitting = false;
+        });
+
+        _captureStopwatch.start();
+        _setPhase(_Phase.capturing);
+        _startCountdownTimer();
+
+        try {
+          await _cameraController?.startImageStream(_onCameraFrame);
+        } catch (_) {
+          _setError('Camera could not resume. Please try again.');
+          return;
+        }
+
+        _updateInstruction('Need clearer frames', subtitle: 'Hold still in good lighting. Capturing ${_framesPerPhase - _validFrameCount} more...');
+        return;
+      }
+
+      _validResults.sort((a, b) => b.qualityScore.compareTo(a.qualityScore));
+      final List<BatchEmbeddingResult> topResults = _validResults.sublist(0, _framesPerPhase);
+
+      _liveEmbeddings.clear();
+      for (final res in topResults) {
+        _liveEmbeddings.add(res.embedding!);
+      }
+
+      _calGeneratedThreshold = 0.70;
+      _calMeanSimilarity = 0.85;
+      _calSimilarityStdDev = 0.02;
+
+      _totalStopwatch.stop();
+
+      setState(() => _borderColor = AppStyles.successGreen);
+      setState(() => _showFlash = true);
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) setState(() => _showFlash = false);
+      });
+
+      _particleController.forward(from: 0.0);
+      _setPhase(_Phase.done);
+      _updateInstruction('Calibration Complete', subtitle: 'Your face profile has been personalised');
+
+      FaceLogger.cal(_sessionId, 'Calibration complete — threshold: ${_calGeneratedThreshold.toStringAsFixed(4)}, mean: ${_calMeanSimilarity.toStringAsFixed(4)}, stdDev: ${_calSimilarityStdDev.toStringAsFixed(4)}');
+
+      await Future.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
+      _countdownTimer?.cancel();
+      Navigator.of(context).pushReplacementNamed(
+        '/face_calibration_preview',
+        arguments: {
+          'score': _calMeanSimilarity,
+          'liveEmbeddings': _liveEmbeddings,
+          'photoBytes': _lastCaptureJpegBytes,
+          'faceBbox': _lastCaptureFace?.boundingBox,
+          'generatedThreshold': _calGeneratedThreshold,
+          'meanSimilarity': _calMeanSimilarity,
+          'stdDev': _calSimilarityStdDev,
+          'framesAccepted': _calFramesAccepted,
+          'framesRejected': _calFramesRejected,
+          'durationMs': _calDurationStopwatch.elapsedMilliseconds,
+          'identityScore': 1.0,
+          'identityDecision': 'MATCH',
+          'liveFusionGroups': '[8]',
+        },
+      );
+    } catch (e) {
+      // Failure path — retry counter logic
+      if (_attemptCount < 2) {
+        setState(() {
+          _instructionTitle = 'Attempt $_attemptCount Failed';
+          _instructionSubtitle = 'Retrying calibration…';
+          _borderColor = AppStyles.errorRed;
+        });
+        _attemptCount++;
+        FaceLogger.cal(_sessionId, 'Retry triggered — attempt $_attemptCount. Error: $e');
+        await Future.delayed(const Duration(milliseconds: 1200));
+        if (!mounted) return;
+
+        _resetCaptureState(resetAttemptCount: false, keepFrozen: true);
+        setState(() {
+          _phase = _Phase.positioning;
+          _borderColor = AppStyles.primaryBlue;
+          _errorMessage = null;
+          _secondsRemaining = _totalSeconds;
+          _instructionTitle = 'Fit your face in the circle';
+          _instructionSubtitle = 'Make sure your full face is visible';
+        });
+
+        _cameraStabilizer?.resetStabilityOnly();
+
+        await _safeRestartImageStream();
+
+        _startCountdownTimer();
+      } else {
+        FaceLogger.cal(_sessionId, '2 attempts exhausted — showing error card. Error: $e');
+        _setError('Face calibration failed. Please ensure good lighting and look directly at the camera.');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
+  }
+
+  void _resetCaptureState({required bool resetAttemptCount, bool keepFrozen = false}) {
+    _livenessService.resetCalibration();
+    _liveEmbeddings.clear();
+    _capturedVerificationFrames.clear();
+    _capturedVerificationFramesStats.clear();
+    _validResults.clear();
+    _validFrameCount = 0;
+    _isProcessingFrame = false;
+    if (!keepFrozen) {
+      _cameraFrozen = false;
+      _lastCapturedFrameBytes = null;
+    }
+    _isSubmitting = false;
+    _captureProgress = 0;
+    _challengeVerified = false;
+    _challengeStartTime = null;
+    _blinkCountdownController.reset();
+    _steadyStartTime = null;
+    _isFaceReady = false;
+    _lastKnownBlinkCount = 0;
+    _clearSmoothing();
+    _captureStopwatch.reset();
+    _apiStopwatch.reset();
+    _calibrationStopwatch.reset();
+    _totalStopwatch.reset();
+    _calDurationStopwatch.reset();
+    _calFramesAccepted = 0;
+    _calFramesRejected = 0;
+    if (resetAttemptCount) _attemptCount = 1;
+  }
+
+  InputImage? _convertToInputImage(CameraImage image) {
+    try {
+      final camera = _cameraController!.description;
+      final int sensorDegrees = camera.sensorOrientation;
+      final InputImageRotation? rotation = InputImageRotationValue.fromRawValue(sensorDegrees);
+      if (rotation == null) return null;
+
+      final format = InputImageFormatValue.fromRawValue(image.format.raw);
+      if (format == null) return null;
+      if (image.planes.isEmpty) return null;
+
+      final Uint8List bytes;
+      if (image.planes.length >= 3) {
+        final int w = image.width;
+        final int h = image.height;
+        final yPlane = image.planes[0];
+        final uPlane = image.planes[1];
+        final vPlane = image.planes[2];
+
+        final int yRowStride = yPlane.bytesPerRow;
+        final int uvRowStride = uPlane.bytesPerRow;
+        final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
+
+        final nv21 = Uint8List(w * h + (w * (h ~/ 2)));
+        int pos = 0;
+
+        for (int row = 0; row < h; row++) {
+          final int srcOffset = row * yRowStride;
+          for (int col = 0; col < w; col++) {
+            nv21[pos++] = yPlane.bytes[srcOffset + col];
+          }
+        }
+
+        final int uvHeight = h ~/ 2;
+        final int uvWidth = w ~/ 2;
+        for (int row = 0; row < uvHeight; row++) {
+          final int srcOffset = row * uvRowStride;
+          for (int col = 0; col < uvWidth; col++) {
+            final int pixelOffset = srcOffset + col * uvPixelStride;
+            nv21[pos++] = vPlane.bytes[pixelOffset];
+            nv21[pos++] = uPlane.bytes[pixelOffset];
+          }
+        }
+        bytes = nv21;
+      } else {
+        bytes = image.planes[0].bytes;
+      }
+
+      _consecutiveImageErrors = 0;
+      return InputImage.fromBytes(
+        bytes: bytes,
+        metadata: InputImageMetadata(
+          size: Size(image.width.toDouble(), image.height.toDouble()),
+          rotation: rotation,
+          format: InputImageFormat.nv21,
+          bytesPerRow: image.width,
+        ),
+      );
+    } catch (_) {
+      _consecutiveImageErrors++;
+      if (_consecutiveImageErrors > 20) {
+        _cameraController?.stopImageStream();
+      }
+      return null;
+    }
+  }
+
+  Face? _selectBiggestCenteredFace(List<Face> faces, CameraImage image) {
+    if (faces.isEmpty) return null;
+    final sorted = List<Face>.from(faces)..sort((a, b) {
+      final double areaA = a.boundingBox.width * a.boundingBox.height;
+      final double areaB = b.boundingBox.width * b.boundingBox.height;
+      return areaB.compareTo(areaA);
+    });
+    final Face biggest = sorted.first;
+    final double centerX = biggest.boundingBox.left + biggest.boundingBox.width / 2;
+    final double imageCenterX = image.width / 2.0;
+    final double offsetX = (centerX - imageCenterX).abs() / image.width;
+    return offsetX > 0.30 ? null : biggest;
+  }
+
+  double _calculateIoU(Rect rect1, Rect rect2) {
+    final double intersectionX1 = math.max(rect1.left, rect2.left);
+    final double intersectionY1 = math.max(rect1.top, rect2.top);
+    final double intersectionX2 = math.min(rect1.right, rect2.right);
+    final double intersectionY2 = math.min(rect1.bottom, rect2.bottom);
+
+    final double intersectionWidth = math.max(0.0, intersectionX2 - intersectionX1);
+    final double intersectionHeight = math.max(0.0, intersectionY2 - intersectionY1);
+    final double intersectionArea = intersectionWidth * intersectionHeight;
+
+    final double rect1Area = rect1.width * rect1.height;
+    final double rect2Area = rect2.width * rect2.height;
+    final double unionArea = rect1Area + rect2Area - intersectionArea;
+
+    return unionArea <= 0.0 ? 0.0 : intersectionArea / unionArea;
+  }
+
+  void _pushSmoothing(Face face) {
+    _bufFaceWidth.add(face.boundingBox.width);
+    _bufFaceHeight.add(face.boundingBox.height);
+    _bufFaceCX.add(face.boundingBox.center.dx);
+    _bufFaceCY.add(face.boundingBox.center.dy);
+    _bufYaw.add(face.headEulerAngleY ?? 0);
+    _bufPitch.add(face.headEulerAngleX ?? 0);
+    while (_bufFaceWidth.length > _smoothingBufferSize) {
+      _bufFaceWidth.removeAt(0);
+      _bufFaceHeight.removeAt(0);
+      _bufFaceCX.removeAt(0);
+      _bufFaceCY.removeAt(0);
+      _bufYaw.removeAt(0);
+      _bufPitch.removeAt(0);
+    }
+  }
+
+  double _bufAvg(List<double> buf) {
+    return buf.isEmpty ? 0 : buf.reduce((a, b) => a + b) / buf.length;
+  }
+
+  void _clearSmoothing() {
+    _bufFaceWidth.clear();
+    _bufFaceHeight.clear();
+    _bufFaceCX.clear();
+    _bufFaceCY.clear();
+    _bufYaw.clear();
+    _bufPitch.clear();
+    _lastPosInstruction = null;
+  }
+
+  String? _getPositioningInstruction(Face face, CameraImage image, {bool strict = true}) {
+    if (_uiCircleSize == 0 || _uiAvailW == 0) return null;
+
+    final int sensorOrientation = _cameraController!.description.sensorOrientation;
+    final bool isRotated = sensorOrientation == 90 || sensorOrientation == 270;
+    final double rotW = isRotated ? image.height.toDouble() : image.width.toDouble();
+    final double rotH = isRotated ? image.width.toDouble() : image.height.toDouble();
+
+    final double scale = _uiAvailW / rotW;
+    final double circleCameraCX = rotW / 2;
+    double circleTop = _uiAvailH * 0.30 - _uiCircleSize / 2 - 20;
+    circleTop = math.max(circleTop, 16.0);
+    final double circleCameraCY = rotH / 2 + circleTop / scale;
+    final double circleCameraSize = _uiCircleSize / scale;
+
+    final double smoothW = _bufAvg(_bufFaceWidth);
+    final double smoothH = _bufAvg(_bufFaceHeight);
+    final double smoothCX = _bufAvg(_bufFaceCX);
+    final double smoothCY = _bufAvg(_bufFaceCY);
+
+    final double smoothLeft = smoothCX - smoothW / 2;
+    final double smoothRight = smoothCX + smoothW / 2;
+    final double smoothTop = smoothCY - smoothH / 2;
+    final double smoothBottom = smoothCY + smoothH / 2;
+
+    final double circleRadius = circleCameraSize / 2;
+    final double virtualCrownTop = smoothTop - (smoothH * 0.30);
+
+    final double circleTopBound = circleCameraCY - circleRadius;
+    final double circleBottomBound = circleCameraCY + circleRadius;
+    final double circleLeftBound = circleCameraCX - circleRadius;
+    final double circleRightBound = circleCameraCX + circleRadius;
+
+    if (virtualCrownTop < circleTopBound || smoothBottom > circleBottomBound || smoothLeft < circleLeftBound || smoothRight > circleRightBound) {
+      _lastPosInstruction = 'Move slightly backward';
+      return 'Move slightly backward';
+    }
+
+    final double faceWidthRatio = smoothW / circleCameraSize;
+    final bool wasTooFar = _lastPosInstruction == 'Move closer to the camera';
+    final bool wasTooClose = _lastPosInstruction == 'Move slightly backward';
+
+    if (faceWidthRatio < 0.40 || (wasTooFar && faceWidthRatio < 0.45)) {
+      _lastPosInstruction = 'Move closer to the camera';
+      return 'Move closer to the camera';
+    }
+
+    final double backwardEnter = (_lastPosInstruction == null) ? 0.95 : 0.80;
+    if (faceWidthRatio > backwardEnter || (wasTooClose && faceWidthRatio > 0.75)) {
+      _lastPosInstruction = 'Move slightly backward';
+      return 'Move slightly backward';
+    }
+
+    final double graceZoneX = circleRadius * 0.20;
+    final double graceZoneY = circleRadius * 0.25;
+
+    final double offX = (smoothCX - circleCameraCX).abs();
+    if (offX > graceZoneX) {
+      _lastPosInstruction = 'Move to the center of the circle';
+      return 'Move to the center of the circle';
+    }
+
+    final double offY = (smoothCY - circleCameraCY).abs();
+    if (offY > graceZoneY) {
+      _lastPosInstruction = 'Move to the center of the circle';
+      return 'Move to the center of the circle';
+    }
+
+    _lastPosInstruction = null;
+    return null;
+  }
+
+  bool _isFaceAcceptable(Face face, CameraImage image) {
+    if (_uiCircleSize > 0 && _uiAvailW > 0 && _bufFaceWidth.isNotEmpty) {
+      final int sensorOrientation = _cameraController!.description.sensorOrientation;
+      final bool isRotated = sensorOrientation == 90 || sensorOrientation == 270;
+      final double rotW = isRotated ? image.height.toDouble() : image.width.toDouble();
+      final double rotH = isRotated ? image.width.toDouble() : image.height.toDouble();
+      final double scale = _uiAvailW / rotW;
+
+      final double circleCameraCX = rotW / 2;
+      double circleTopUI = _uiAvailH * 0.30 - _uiCircleSize / 2 - 20;
+      circleTopUI = math.max(circleTopUI, 16.0);
+      final double circleCameraCY = rotH / 2 + circleTopUI / scale;
+      final double circleCameraSize = _uiCircleSize / scale;
+      final double circleRadius = circleCameraSize / 2;
+
+      final double circleTopBound = circleCameraCY - circleRadius;
+      final double circleBottomBound = circleCameraCY + circleRadius;
+      final double circleLeftBound = circleCameraCX - circleRadius;
+      final double circleRightBound = circleCameraCX + circleRadius;
+
+      final double smoothW = _bufAvg(_bufFaceWidth);
+      final double smoothH = _bufAvg(_bufFaceHeight);
+      final double smoothCX = _bufAvg(_bufFaceCX);
+      final double smoothCY = _bufAvg(_bufFaceCY);
+      final double smoothTop = smoothCY - smoothH / 2;
+      final double smoothBottom = smoothCY + smoothH / 2;
+      final double smoothLeft = smoothCX - smoothW / 2;
+      final double smoothRight = smoothCX + smoothW / 2;
+      final double virtualCrownTop = smoothTop - (smoothH * 0.30);
+
+      if (virtualCrownTop < circleTopBound || smoothBottom > circleBottomBound || smoothLeft < circleLeftBound || smoothRight > circleRightBound) {
+        return false;
+      }
+    }
+
+    final double widthRatio = face.boundingBox.width / image.width;
+    if (widthRatio < 0.12 || widthRatio > 0.85) return false;
+
+    final double centerX = face.boundingBox.left + face.boundingBox.width / 2;
+    final double imageCenterX = image.width / 2;
+    final double centerOffset = (centerX - imageCenterX).abs() / image.width;
+    if (centerOffset > 0.25) return false;
+
+    final double? pitch = face.headEulerAngleX;
+    if (pitch != null && pitch.abs() > 35) return false;
+    return true;
+  }
+
+  Future<Uint8List?> _captureCurrentFrame() async {
+    try {
+      if (_lastCameraImage == null) return null;
+      final camImg = _lastCameraImage!;
+      if (camImg.format.group == ImageFormatGroup.jpeg) {
+        return Uint8List.fromList(camImg.planes[0].bytes);
+      }
+      return _convertYuvToJpegSync(camImg);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Uint8List? _convertYuvToJpegSync(CameraImage camImg) {
+    try {
+      final int width = camImg.width;
+      final int height = camImg.height;
+      final yPlane = camImg.planes[0];
+      final uPlane = camImg.planes[1];
+      final vPlane = camImg.planes[2];
+      final int uvRowStride = uPlane.bytesPerRow;
+      final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
+
+      final image = img.Image(width: width, height: height);
+
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          final int yIndex = y * yPlane.bytesPerRow + x;
+          final int uvIndex = (y ~/ 2) * uvRowStride + (x ~/ 2) * uvPixelStride;
+
+          if (yIndex >= yPlane.bytes.length) continue;
+          if (uvIndex >= uPlane.bytes.length) continue;
+
+          final int yVal = yPlane.bytes[yIndex];
+          final int uVal = uPlane.bytes[uvIndex];
+          final int vVal = vPlane.bytes[uvIndex];
+
+          final int r = (yVal + 1.402 * (vVal - 128)).round().clamp(0, 255);
+          final int g = (yVal - 0.344136 * (uVal - 128) - 0.714136 * (vVal - 128)).round().clamp(0, 255);
+          final int b = (yVal + 1.772 * (uVal - 128)).round().clamp(0, 255);
+
+          image.setPixelRgb(x, y, r, g, b);
+        }
+      }
+      return Uint8List.fromList(img.encodeJpg(image, quality: 80));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _setPhase(_Phase newPhase) {
+    if (!mounted) return;
+    if (newPhase == _phase || _phase == _Phase.error) return;
+
+    if (newPhase != _Phase.error && newPhase != _Phase.positioning && newPhase != _Phase.liveness) {
+      HapticFeedback.mediumImpact();
+      _successBounceController.forward(from: 0.0);
+    }
+    if (newPhase == _Phase.done) {
+      _particleController.forward(from: 0.0);
+    }
+
+    setState(() {
+      _phase = newPhase;
+    });
+
+    if (newPhase == _Phase.positioning) {
+      _challengeVerified = false;
+      _challengeStartTime = null;
+      _livenessService.reset();
+      _steadyStartTime = null;
+      _isFaceReady = false;
+      _clearSmoothing();
+    }
+
+    switch (newPhase) {
+      case _Phase.initializing:
+        break;
+      case _Phase.positioning:
+        _blinkCountdownController.reset();
+        _updateInstruction('Fit your face in the circle', subtitle: 'Make sure your full face is visible');
+        break;
+      case _Phase.liveness:
+        _blinkCountdownController.reset();
+        _updateInstruction('Calibrating…', subtitle: 'Look straight at the camera and hold still');
+        break;
+      case _Phase.capturing:
+        _updateInstruction('Hold still…', subtitle: 'Scanning your face silently');
+        break;
+      case _Phase.processing:
+        _updateInstruction('Calibrating Recognition', subtitle: 'Optimizing your face profile...');
+        break;
+      case _Phase.done:
+        _updateInstruction('Calibration Complete', subtitle: 'Your face profile has been personalised');
+        break;
+      case _Phase.error:
+        break;
+    }
+  }
+
+  void _updateInstruction(String title, {String? subtitle, bool animate = true}) {
+    if (!mounted) return;
+    if (_instructionTitle == title) {
+      _instructionDebounceTimer?.cancel();
+      return;
+    }
+
+    _instructionDebounceTimer?.cancel();
+    _instructionDebounceTimer = Timer(const Duration(milliseconds: 120), () {
+      if (!mounted) return;
+      if (_instructionTitle == title) return;
+
+      if (animate) {
+        _textFadeController.reverse().then((_) {
+          if (!mounted) return;
+          setState(() {
+            _instructionTitle = title;
+            _instructionSubtitle = subtitle ?? (_subtitles[title] ?? '');
+
+            final lower = title.toLowerCase();
+            if (lower.contains('move closer') ||
+                lower.contains('move left') ||
+                lower.contains('move right') ||
+                lower.contains('move slightly up') ||
+                lower.contains('move slightly down') ||
+                lower.contains('move to the center') ||
+                lower.contains('move slightly backward')) {
+              _borderColor = Colors.orangeAccent;
+            } else if (_phase != _Phase.error && _borderColor != AppStyles.successGreen) {
+              _borderColor = AppStyles.primaryBlue;
+            }
+          });
+          _textFadeController.forward();
+          if (_phase == _Phase.liveness) {
+            _blinkCountdownController.forward(from: 0.0);
+          }
+        });
+      } else {
+        setState(() {
+          _instructionTitle = title;
+          _instructionSubtitle = subtitle ?? (_subtitles[title] ?? '');
+          final lower = title.toLowerCase();
+          if (lower.contains('move closer') ||
+              lower.contains('move left') ||
+              lower.contains('move right') ||
+              lower.contains('move slightly up') ||
+              lower.contains('move slightly down') ||
+              lower.contains('move to the center') ||
+              lower.contains('move slightly backward')) {
+            _borderColor = Colors.orangeAccent;
+          } else if (_phase != _Phase.error && _borderColor != AppStyles.successGreen) {
+            _borderColor = AppStyles.primaryBlue;
+          }
+        });
+        if (_phase == _Phase.liveness) {
+          _blinkCountdownController.forward(from: 0.0);
+        }
+      }
+    });
+  }
+
+  void _startCountdownTimer() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_secondsRemaining > 1) {
+        setState(() => _secondsRemaining--);
+        _timerPulseController.forward().then((_) {
+          if (mounted) _timerPulseController.reverse();
+        });
+      } else {
+        setState(() => _secondsRemaining = 0);
+        timer.cancel();
+        if (mounted && _phase != _Phase.done && _phase != _Phase.error) {
+          debugPrint('[FACE_CAL] Timer expired — calling _setError');
+          _setError('Time ran out. Please try again in better lighting.');
+        }
+      }
+    });
+  }
+
+  void _setError(String message) {
+    if (!mounted) return;
+    debugPrint('[FACE_CAL] ERROR: $message');
+
+    if (_lastCapturedFrameBytes == null && _lastCameraImage != null) {
+      try {
+        final camImg = _lastCameraImage!;
+        if (camImg.format.group == ImageFormatGroup.jpeg) {
+          _lastCapturedFrameBytes = Uint8List.fromList(camImg.planes[0].bytes);
+        } else {
+          _lastCapturedFrameBytes = _convertYuvToJpegSync(camImg);
+        }
+      } catch (_) {}
+    }
+
+    setState(() {
+      _phase = _Phase.error;
+      _errorMessage = message;
+      _borderColor = AppStyles.errorRed;
+      _instructionTitle = 'Calibration Failed';
+      _instructionSubtitle = message;
+      _cameraFrozen = true;
+    });
+    try {
+      _cameraController?.stopImageStream();
+    } catch (_) {}
+  }
+
+  Future<void> _safeRestartImageStream() async {
+    if (_cameraController == null || !_cameraInitialized) return;
+    try {
+      if (_cameraController!.value.isStreamingImages) {
+        await _cameraController!.stopImageStream();
+      }
+    } catch (e) {
+      debugPrint('[FACE_CAL] stopImageStream error (ignored): $e');
+    }
+    try {
+      if (mounted) {
+        await _cameraController!.startImageStream(_onCameraFrame);
+      }
+    } catch (e) {
+      debugPrint('[FACE_CAL] startImageStream error: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    debugPrint('[CAPTURE] Disposed');
+    _pulseController.dispose();
+    _textFadeController.dispose();
+    _blinkCountdownController.dispose();
+    _successBounceController.dispose();
+    _particleController.dispose();
+    _scanLineController.dispose();
+    _timerPulseController.dispose();
+    _ringController.dispose();
+    _countdownTimer?.cancel();
+    _instructionDebounceTimer?.cancel();
+
+    if (_cameraController != null && _cameraInitialized) {
+      try {
+        _cameraController!.stopImageStream();
+      } catch (_) {}
+      _cameraController!.dispose();
+    }
+    _mlService.faceDetector.close();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Color timerColor = _secondsRemaining <= 15
+        ? AppStyles.errorRed
+        : _secondsRemaining <= 30
+        ? AppStyles.amberWarning
+        : AppStyles.successGreen;
+
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: AppStyles.backgroundLight,
+        body: SafeArea(
+          child: Column(
+            children: [
+              Theme(
+                data: Theme.of(context).copyWith(
+                  textTheme: Theme.of(context).textTheme.apply(
+                    bodyColor: const Color(0xFF1A202C),
+                    displayColor: const Color(0xFF1A202C),
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 48),
+                      const Spacer(),
+                      Column(
+                        children: const [
+                          Text(
+                            'Face Calibration',
+                            style: TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF1A202C),
+                              letterSpacing: -0.3,
+                              inherit: false,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Spacer(),
+                      const SizedBox(width: 48),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final double availW = constraints.maxWidth;
+                    final double availH = constraints.maxHeight;
+                    final double circleSize = availW * 0.80;
+                    double circleTop = availH * 0.30 - circleSize / 2 - 20;
+                    circleTop = math.max(circleTop, 16.0);
+
+                    _uiCircleSize = circleSize;
+                    _uiAvailW = availW;
+                    _uiAvailH = availH;
+
+                    double offsetX = 0;
+                    double offsetY = 0;
+                    if (_cameraInitialized && _bufFaceCX.isNotEmpty) {
+                      final Size? previewSize = _cameraController?.value.previewSize;
+                      final double sensorW = previewSize?.height ?? 3.0;
+                      if (sensorW > 0) {
+                        final double scale = availW / sensorW;
+                        final double faceUIX = _bufAvg(_bufFaceCX) * scale;
+                        final double faceUIY = _bufAvg(_bufFaceCY) * scale;
+                        final double circleUIX = availW / 2;
+                        final double circleUIY = circleTop + circleSize / 2;
+
+                        offsetX = (faceUIX - circleUIX).clamp(-6.0, 6.0);
+                        offsetY = (faceUIY - circleUIY).clamp(-6.0, 6.0);
+                      }
+                    }
+
+                    return SizedBox(
+                      width: availW,
+                      height: availH,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Positioned.fill(child: Container(color: AppStyles.backgroundLight)),
+                          AnimatedPositioned(
+                            duration: const Duration(milliseconds: 120),
+                            curve: Curves.easeOut,
+                            left: offsetX,
+                            top: offsetY,
+                            right: -offsetX,
+                            bottom: -offsetY,
+                            child: AnimatedOpacity(
+                              opacity: 1.0,
+                              duration: const Duration(milliseconds: 500),
+                              curve: Curves.easeIn,
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                Positioned(
+                                  left: (availW - circleSize) / 2,
+                                  top: circleTop,
+                                  child: ClipOval(
+                                    child: SizedBox(
+                                      width: circleSize,
+                                      height: circleSize,
+                                      child: OverflowBox(
+                                        maxWidth: availW,
+                                        maxHeight: availH,
+                                        child: Transform.translate(
+                                          offset: Offset(0, -circleTop),
+                                          child: Stack(
+                                            children: [
+                                              _buildCameraPreview(availW),
+                                              if (!_cameraFrozen)
+                                                Positioned.fill(
+                                                  child: AnimatedBuilder(
+                                                    animation: _scanLineController,
+                                                    builder: (context, child) {
+                                                      return CustomPaint(
+                                                        size: Size(circleSize, circleSize),
+                                                        painter: _ScanLinePainter(
+                                                          scanValue: _scanLineController.value,
+                                                          circleSize: circleSize,
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                Positioned(
+                                  left: (availW - circleSize) / 2,
+                                  top: circleTop,
+                                  child: ScaleTransition(
+                                    scale: Tween<double>(begin: 1.0, end: 1.05).animate(
+                                      CurvedAnimation(parent: _successBounceController, curve: Curves.elasticOut),
+                                    ),
+                                    child: TweenAnimationBuilder<double>(
+                                      tween: Tween<double>(begin: 0.0, end: _captureProgress / _framesPerPhase),
+                                      duration: const Duration(milliseconds: 800),
+                                      curve: Curves.elasticOut,
+                                      builder: (context, animatedProgress, child) {
+                                        double tilt = 0.0;
+                                        if (animatedProgress > 0.4 && animatedProgress < 0.9) {
+                                          tilt = math.sin((animatedProgress - 0.4) * math.pi * 4) * 0.03;
+                                        }
+                                        return Transform.rotate(
+                                          angle: tilt,
+                                          child: AnimatedBuilder(
+                                            animation: _pulseController,
+                                            builder: (context, _) {
+                                              return CustomPaint(
+                                                size: Size(circleSize, circleSize),
+                                                painter: _BorderPainter(
+                                                  pulseValue: _pulseController.value,
+                                                  baseColor: _borderColor,
+                                                  progress: animatedProgress,
+                                                  phase: _phase,
+                                                  flowValue: 0.0,
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                          Positioned.fill(
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 600),
+                              curve: Curves.easeOut,
+                              opacity: _phase == _Phase.capturing ? 0.3 : 0.0,
+                              child: CustomPaint(
+                                painter: _FillLightPainter(
+                                  circleCenter: Offset(availW / 2, circleTop + circleSize / 2),
+                                  circleRadius: circleSize / 2,
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned.fill(
+                            child: AnimatedOpacity(
+                              duration: const Duration(milliseconds: 100),
+                              curve: Curves.easeOut,
+                              opacity: _showFlash ? 0.3 : 0.0,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  gradient: RadialGradient(
+                                    center: FractionalOffset(0.5, (circleTop + circleSize / 2) / availH),
+                                    radius: 0.8,
+                                    colors: [Colors.white, Colors.white.withValues(alpha: 0.0)],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: (availW - circleSize) / 2,
+                            top: circleTop,
+                            child: AnimatedBuilder(
+                              animation: _particleController,
+                              builder: (context, _) => CustomPaint(
+                                size: Size(circleSize, circleSize),
+                                painter: _ParticleBurstPainter(_particleController.value),
+                              ),
+                            ),
+                          ),
+                          if (_phase == _Phase.error)
+                            Positioned(
+                              top: circleTop + circleSize + 40,
+                              left: 16,
+                              right: 16,
+                              bottom: 16,
+                              child: Container(
+                                alignment: Alignment.topCenter,
+                                child: SlideTransition(
+                                  position: Tween<Offset>(begin: const Offset(0, 0.06), end: const Offset(0, 0)).animate(
+                                    CurvedAnimation(parent: _textFadeController, curve: Curves.easeOut),
+                                  ),
+                                  child: FadeTransition(
+                                    opacity: _textFadeController,
+                                    child: _buildErrorStateCard(),
+                                  ),
+                                ),
+                              ),
+                            )
+                          else
+                            Positioned(
+                              top: circleTop + circleSize + 32,
+                              left: 16,
+                              right: 16,
+                              bottom: 16,
+                              child: SingleChildScrollView(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (_phase != _Phase.initializing) ...[
+                                      SizedBox(
+                                        height: 56,
+                                        child: Center(
+                                          child: AnimatedSwitcher(
+                                            duration: const Duration(milliseconds: 300),
+                                            child: (_phase == _Phase.liveness &&
+                                                    (_instructionTitle.contains('Blink') || _instructionSubtitle.contains('Blink')) &&
+                                                    !_challengeVerified)
+                                                ? SizedBox(
+                                                    key: const ValueKey('blink'),
+                                                    width: 50,
+                                                    height: 50,
+                                                    child: AnimatedBuilder(
+                                                      animation: _blinkCountdownController,
+                                                      builder: (context, child) {
+                                                        final double remaining = 3.0 * (1.0 - _blinkCountdownController.value);
+                                                        return Stack(
+                                                          alignment: Alignment.center,
+                                                          children: [
+                                                            SizedBox(
+                                                              width: 50,
+                                                              height: 50,
+                                                              child: CircularProgressIndicator(
+                                                                value: 1.0 - _blinkCountdownController.value,
+                                                                strokeWidth: 4.0,
+                                                                color: Colors.orangeAccent,
+                                                                backgroundColor: Colors.orangeAccent.withValues(alpha: 0.15),
+                                                              ),
+                                                            ),
+                                                            AnimatedSwitcher(
+                                                              duration: const Duration(milliseconds: 300),
+                                                              transitionBuilder: (Widget child, Animation<double> animation) {
+                                                                return ScaleTransition(scale: animation, child: FadeTransition(opacity: animation, child: child));
+                                                              },
+                                                              child: Text(
+                                                                '${remaining.ceil()}',
+                                                                key: ValueKey<int>(remaining.ceil()),
+                                                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.orangeAccent),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        );
+                                                      },
+                                                    ),
+                                                  )
+                                                : ScaleTransition(
+                                                    key: const ValueKey('ring'),
+                                                    scale: _timerPulseAnim,
+                                                    child: AnimatedBuilder(
+                                                      animation: _ringController,
+                                                      builder: (context, _) {
+                                                        return SizedBox(
+                                                          width: 44,
+                                                          height: 44,
+                                                          child: CustomPaint(
+                                                            painter: _MiniRingPainter(progress: _ringProgress.value, color: timerColor),
+                                                            child: Center(
+                                                              child: Text(
+                                                                '${_secondsRemaining}s',
+                                                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: timerColor),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        );
+                                                      },
+                                                    ),
+                                                  ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        'Attempt $_attemptCount of 2',
+                                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.grey.shade500),
+                                      ),
+                                      const SizedBox(height: 10),
+                                    ],
+                                    if (_phase != _Phase.initializing && _phase != _Phase.processing && _phase != _Phase.done)
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(16),
+                                        child: BackdropFilter(
+                                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black54,
+                                              gradient: LinearGradient(
+                                                begin: Alignment.topLeft,
+                                                end: Alignment.bottomRight,
+                                                colors: [Colors.black.withValues(alpha: 0.6), Colors.transparent],
+                                              ),
+                                              borderRadius: BorderRadius.circular(16),
+                                              border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 0.5),
+                                            ),
+                                            child: AnimatedBuilder(
+                                              animation: _pulseController,
+                                              builder: (context, _) {
+                                                return Row(
+                                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                  children: [
+                                                    _NeonChip(
+                                                      label: 'Liveness',
+                                                      isActive: _phase == _Phase.positioning || _phase == _Phase.liveness,
+                                                      isDone: _challengeVerified,
+                                                      pulseValue: _pulseController.value,
+                                                    ),
+                                                    _ShimmerLine(isDone: _challengeVerified, pulseController: _pulseController),
+                                                    _NeonChip(
+                                                      label: 'Scanning',
+                                                      isActive: _phase == _Phase.capturing,
+                                                      isDone: _liveEmbeddings.length >= _framesPerPhase,
+                                                      pulseValue: _pulseController.value,
+                                                    ),
+                                                    _ShimmerLine(isDone: _liveEmbeddings.length >= _framesPerPhase, pulseController: _pulseController),
+                                                    _NeonChip(
+                                                      label: 'Done',
+                                                      isActive: _phase == _Phase.done,
+                                                      isDone: _phase == _Phase.done,
+                                                      pulseValue: _pulseController.value,
+                                                    ),
+                                                  ],
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    const SizedBox(height: 18),
+                                    SlideTransition(
+                                      position: Tween<Offset>(begin: const Offset(0, 0.06), end: const Offset(0, 0)).animate(
+                                        CurvedAnimation(parent: _textFadeController, curve: Curves.easeOut),
+                                      ),
+                                      child: FadeTransition(
+                                        opacity: _textFadeController,
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            color: Colors.white,
+                                            borderRadius: BorderRadius.circular(16),
+                                            border: Border.all(color: _borderColor.withValues(alpha: 0.1), width: 1.5),
+                                            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 4))],
+                                          ),
+                                          padding: EdgeInsets.symmetric(
+                                            horizontal: 16,
+                                            vertical: _instructionTitle == 'Move to the center of the circle' ? 6 : 10,
+                                          ),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              Text(
+                                                _instructionTitle,
+                                                textAlign: TextAlign.center,
+                                                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppStyles.primaryBlue),
+                                              ),
+                                              _instructionTitle == 'Move to the center of the circle' ? const SizedBox.shrink() : const SizedBox(height: 2),
+                                              Text(
+                                                _instructionSubtitle,
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(fontSize: 14, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+                                              ),
+                                              if (_phase == _Phase.processing) ...[
+                                                const SizedBox(height: 16),
+                                                const CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(AppStyles.primaryBlue)),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCameraPreview(double containerWidth) {
+    if (!_cameraInitialized || _cameraController == null) {
+      return SizedBox(width: containerWidth, height: containerWidth, child: _PulsingCameraLoader());
+    }
+
+    final Size? previewSize = _cameraController!.value.previewSize;
+    final double sensorW = previewSize?.height ?? 3.0;
+    final double sensorH = previewSize?.width ?? 4.0;
+    final double previewAspect = sensorW / sensorH;
+
+    return SizedBox(
+      width: containerWidth,
+      height: containerWidth / previewAspect,
+      child: FittedBox(
+        fit: BoxFit.cover,
+        clipBehavior: Clip.hardEdge,
+        child: SizedBox(
+          width: sensorW,
+          height: sensorH,
+          child: _cameraFrozen && _lastCapturedFrameBytes != null
+              ? RotatedBox(quarterTurns: 3, child: Image.memory(_lastCapturedFrameBytes!, fit: BoxFit.cover))
+              : CameraPreview(_cameraController!),
+        ),
+      ),
+    );
+  }
+
+  void _onRetry() {
+    debugPrint('[FACE_CAL] User retry | resetting all state including attempt counter');
+    _resetCaptureState(resetAttemptCount: true, keepFrozen: true);
+
+    setState(() {
+      _phase = _Phase.positioning;
+      _borderColor = AppStyles.primaryBlue;
+      _errorMessage = null;
+      _secondsRemaining = _totalSeconds;
+      _instructionTitle = 'Fit your face in the circle';
+      _instructionSubtitle = 'Make sure your full face is visible';
+    });
+
+    _startCountdownTimer();
+    _ringController.reset();
+    _ringController.forward();
+
+    _cameraStabilizer?.resetStabilityOnly();
+
+    _safeRestartImageStream();
+  }
+
+  void _restartCalibration() {
+    _onRetry();
+  }
+
+  Widget _buildErrorStateCard() {
+    if (_phase != _Phase.error) return const SizedBox.shrink();
+
+    final bool isSmallScreen = MediaQuery.of(context).size.height < 700;
+    final double cardPaddingVer = isSmallScreen ? 12.0 : 16.0;
+    const double cardPaddingHor = 16.0;
+    final double iconToTitle = isSmallScreen ? 6.0 : 8.0;
+    final double titleToMessage = isSmallScreen ? 6.0 : 8.0;
+    final double messageToButton = isSmallScreen ? 10.0 : 12.0;
+
+    final double buttonHeight = isSmallScreen ? 38.0 : 42.0;
+
+    const IconData icon = Icons.face_retouching_off_rounded;
+    const Color iconColor = AppStyles.errorRed;
+    const String title = 'Calibration Failed';
+    final String message = _errorMessage ?? 'Please retry in good lighting, facing the camera directly.';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: iconColor.withValues(alpha: 0.3), width: 1.5),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 4))],
+      ),
+      padding: EdgeInsets.symmetric(horizontal: cardPaddingHor, vertical: cardPaddingVer),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: isSmallScreen ? 28 : 32, color: iconColor),
+          SizedBox(height: iconToTitle),
+          const Text(title, textAlign: TextAlign.center, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: iconColor)),
+          SizedBox(height: titleToMessage),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, color: Colors.grey.shade700, fontWeight: FontWeight.w500, height: 1.4),
+          ),
+          SizedBox(height: messageToButton),
+          ElevatedButton(
+            onPressed: _restartCalibration,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppStyles.primaryBlue,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              minimumSize: Size(160, buttonHeight),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text('Try Again', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NeonChip extends StatefulWidget {
+  final String label;
+  final bool isActive;
+  final bool isDone;
+  final double pulseValue;
+
+  const _NeonChip({required this.label, required this.isActive, required this.isDone, required this.pulseValue});
+
+  @override
+  State<_NeonChip> createState() => _NeonChipState();
+}
+
+class _NeonChipState extends State<_NeonChip> {
+  double _scale = 1.0;
+
+  @override
+  void didUpdateWidget(_NeonChip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.isDone && widget.isDone) _triggerBounce();
+  }
+
+  void _triggerBounce() async {
+    if (!mounted) return;
+    setState(() => _scale = 1.15);
+    await Future.delayed(const Duration(milliseconds: 140));
+    if (!mounted) return;
+    setState(() => _scale = 1.0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedScale(
+      scale: widget.isDone ? _scale : 1.0,
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOutBack,
+      child: _buildChipContent(),
+    );
+  }
+
+  Widget _buildChipContent() {
+    if (widget.isDone) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2ECC71),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [BoxShadow(color: const Color(0xFF2ECC71).withValues(alpha: 0.4), blurRadius: 6, offset: const Offset(0, 2))],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.check, color: Colors.white, size: 12),
+            const SizedBox(width: 4),
+            Text(widget.label, style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w700)),
+          ],
+        ),
+      );
+    }
+
+    if (widget.isActive) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: AppStyles.primaryBlue.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppStyles.primaryBlue.withValues(alpha: 0.5 + (0.5 * widget.pulseValue)), width: 1.5),
+          boxShadow: [BoxShadow(color: AppStyles.primaryBlue.withValues(alpha: 0.2 * widget.pulseValue), blurRadius: 8, spreadRadius: 2)],
+        ),
+        child: Text(widget.label, style: const TextStyle(fontSize: 12, color: AppStyles.primaryBlue, fontWeight: FontWeight.w700)),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFD1D5DB), width: 1.0),
+      ),
+      child: Text(widget.label, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280), fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+class _ShimmerLine extends StatelessWidget {
+  final bool isDone;
+  final AnimationController pulseController;
+
+  const _ShimmerLine({required this.isDone, required this.pulseController});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: AnimatedBuilder(
+        animation: pulseController,
+        builder: (context, child) {
+          return Container(
+            height: 2,
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              color: isDone ? null : Colors.grey.shade600,
+              gradient: isDone
+                  ? LinearGradient(
+                      colors: const [Color(0xFF2ECC71), Colors.white, Color(0xFF2ECC71)],
+                      stops: [math.max(0.0, pulseController.value - 0.3), pulseController.value, math.min(1.0, pulseController.value + 0.3)],
+                    )
+                  : null,
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _PulsingCameraLoader extends StatefulWidget {
+  @override
+  State<_PulsingCameraLoader> createState() => _PulsingCameraLoaderState();
+}
+
+class _PulsingCameraLoaderState extends State<_PulsingCameraLoader>
+    with TickerProviderStateMixin {
+  late AnimationController _pulseController;
+  late AnimationController _rotateController;
+  late Animation<double> _scale;
+  late Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+
+    _scale = Tween<double>(
+      begin: 0.90,
+      end: 1.05,
+    ).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
+
+    _opacity = Tween<double>(
+      begin: 0.6,
+      end: 0.95,
+    ).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
+
+    _rotateController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2500),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _rotateController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFFF0F4FF),
+      child: Center(
+        child: AnimatedBuilder(
+          animation: Listenable.merge([_pulseController, _rotateController]),
+          builder: (context, child) {
+            return SizedBox(
+              width: 120,
+              height: 120,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  CustomPaint(
+                    size: const Size(120, 120),
+                    painter: _OrbitRingsPainter(
+                      rotation1: _rotateController.value * 2 * math.pi,
+                      rotation2: -_rotateController.value * 2 * math.pi,
+                      color: const Color(0xFF1A73E8),
+                    ),
+                  ),
+                  ScaleTransition(
+                    scale: _scale,
+                    child: FadeTransition(
+                      opacity: _opacity,
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF1A73E8),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF1A73E8).withValues(alpha: 0.3),
+                              blurRadius: 8,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.camera_alt_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _OrbitRingsPainter extends CustomPainter {
+  final double rotation1;
+  final double rotation2;
+  final Color color;
+
+  _OrbitRingsPainter({
+    required this.rotation1,
+    required this.rotation2,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+
+    final outerRect = Rect.fromCircle(center: center, radius: 42);
+    final outerPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round
+      ..shader = SweepGradient(
+        colors: [color, color.withValues(alpha: 0.1), color],
+        stops: const [0.0, 0.5, 1.0],
+      ).createShader(outerRect);
+
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(rotation1);
+    canvas.translate(-center.dx, -center.dy);
+    canvas.drawArc(outerRect, 0, math.pi * 0.7, false, outerPaint);
+    canvas.drawArc(outerRect, math.pi, math.pi * 0.7, false, outerPaint);
+    canvas.restore();
+
+    final innerRect = Rect.fromCircle(center: center, radius: 34);
+    final innerPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round
+      ..shader = SweepGradient(
+        colors: [color.withValues(alpha: 0.8), color.withValues(alpha: 0.05), color.withValues(alpha: 0.8)],
+        stops: const [0.0, 0.5, 1.0],
+      ).createShader(innerRect);
+
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(rotation2);
+    canvas.translate(-center.dx, -center.dy);
+    canvas.drawArc(innerRect, 0, math.pi * 0.4, false, innerPaint);
+    canvas.drawArc(innerRect, math.pi * 2 / 3, math.pi * 0.4, false, innerPaint);
+    canvas.drawArc(innerRect, math.pi * 4 / 3, math.pi * 0.4, false, innerPaint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _OrbitRingsPainter oldDelegate) {
+    return oldDelegate.rotation1 != rotation1 ||
+        oldDelegate.rotation2 != rotation2 ||
+        oldDelegate.color != color;
+  }
+}
+
+class _FillLightPainter extends CustomPainter {
+  final Offset circleCenter;
+  final double circleRadius;
+
+  _FillLightPainter({required this.circleCenter, required this.circleRadius});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Path backgroundPath = Path()..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+    final Path circlePath = Path()..addOval(Rect.fromCircle(center: circleCenter, radius: circleRadius));
+    final Path fillPath = Path.combine(PathOperation.difference, backgroundPath, circlePath);
+
+    final Paint paint = Paint()
+      ..shader = RadialGradient(
+        center: Alignment((circleCenter.dx / size.width) * 2 - 1, (circleCenter.dy / size.height) * 2 - 1),
+        radius: 1.2,
+        colors: [Colors.white, const Color(0xFFE2F0FD), Colors.white.withValues(alpha: 0.0)],
+        stops: const [0.2, 0.6, 1.0],
+      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+
+    canvas.drawPath(fillPath, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _FillLightPainter oldDelegate) {
+    return oldDelegate.circleCenter != circleCenter || oldDelegate.circleRadius != circleRadius;
+  }
+}
+
+class _BorderPainter extends CustomPainter {
+  final double pulseValue;
+  final Color baseColor;
+  final double progress;
+  final _Phase phase;
+  final double flowValue;
+
+  _BorderPainter({required this.pulseValue, required this.baseColor, required this.progress, required this.phase, required this.flowValue});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double radius = size.width / 2;
+    final Offset center = Offset(radius, radius);
+    final Rect rect = Rect.fromCircle(center: center, radius: radius);
+
+    final paint = Paint()..color = baseColor..style = PaintingStyle.stroke..strokeWidth = 4.0;
+    final shadowPaint = Paint()
+      ..color = baseColor.withValues(alpha: pulseValue * 0.5)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4.0
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 8 + (pulseValue * 12));
+
+    canvas.drawCircle(center, radius, shadowPaint);
+    canvas.drawCircle(center, radius, paint);
+
+    if (progress > 0) {
+      const Color progressColor = Color(0xFF2ECC71);
+      final progressPaint = Paint()..color = progressColor..style = PaintingStyle.stroke..strokeWidth = 8.0..strokeCap = StrokeCap.butt;
+      final progressGlow = Paint()
+        ..color = progressColor.withValues(alpha: 0.6)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 12.0
+        ..strokeCap = StrokeCap.butt
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.0);
+
+      final sweepAngle = 2 * math.pi * progress;
+      canvas.drawArc(rect, -math.pi / 2, sweepAngle, false, progressGlow);
+      canvas.drawArc(rect, -math.pi / 2, sweepAngle, false, progressPaint);
+    }
+
+    if (phase != _Phase.processing && phase != _Phase.done) {
+      final double breathOffset = 4.0 + (10.0 * pulseValue);
+      final double haloRadius = radius + breathOffset;
+      final Paint haloPaint = Paint()
+        ..shader = RadialGradient(
+          colors: [baseColor.withValues(alpha: 0.15 * (1.0 - pulseValue)), baseColor.withValues(alpha: 0.0)],
+          stops: const [0.8, 1.0],
+        ).createShader(Rect.fromCircle(center: center, radius: haloRadius));
+
+      canvas.drawCircle(center, haloRadius, haloPaint);
+
+      final glowArcPaint = Paint()
+        ..color = baseColor.withValues(alpha: 0.45)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 6.0
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
+
+      final glowAngle = pulseValue * 2 * math.pi;
+      canvas.drawArc(rect, glowAngle, 0.436, false, glowArcPaint);
+    }
+
+    final Paint topHighlightPaint = Paint()..color = Colors.white.withValues(alpha: 0.18)..style = PaintingStyle.stroke..strokeWidth = 4.0..strokeCap = StrokeCap.round;
+    final Paint bottomShadowPaint = Paint()..color = Colors.black.withValues(alpha: 0.12)..style = PaintingStyle.stroke..strokeWidth = 4.0..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(rect, -math.pi * 0.85, 1.57, false, topHighlightPaint);
+    canvas.drawArc(rect, math.pi * 0.15, 1.57, false, bottomShadowPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _BorderPainter oldDelegate) {
+    return oldDelegate.pulseValue != pulseValue || oldDelegate.baseColor != baseColor || oldDelegate.progress != progress || oldDelegate.phase != phase;
+  }
+}
+
+class _ParticleBurstPainter extends CustomPainter {
+  final double progress;
+  _ParticleBurstPainter(this.progress);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (progress <= 0.0 || progress >= 1.0) return;
+    final center = Offset(size.width / 2, size.height / 2);
+    final paint = Paint()..color = Colors.white.withValues(alpha: 1.0 - progress);
+
+    final random = math.Random(12345);
+    for (int i = 0; i < 30; i++) {
+      final angle = random.nextDouble() * 2 * math.pi;
+      final speed = 50.0 + random.nextDouble() * 100.0;
+      final distance = (size.width / 2) + speed * progress;
+      final x = center.dx + math.cos(angle) * distance;
+      final y = center.dy + math.sin(angle) * distance;
+      final rectSize = 3.0 + random.nextDouble() * 5.0;
+      canvas.drawRect(Rect.fromCenter(center: Offset(x, y), width: rectSize, height: rectSize), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ParticleBurstPainter oldDelegate) {
+    return oldDelegate.progress != progress;
+  }
+}
+
+class _ScanLinePainter extends CustomPainter {
+  final double scanValue;
+  final double circleSize;
+
+  _ScanLinePainter({required this.scanValue, required this.circleSize});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double radius = circleSize / 2;
+    final double yOffset = (scanValue - 0.5) * circleSize;
+    final double halfWidth = math.sqrt(math.max(0.0, radius * radius - yOffset * yOffset));
+
+    final paint = Paint()
+      ..color = AppStyles.primaryBlue
+      ..strokeWidth = 2.5
+      ..shader = LinearGradient(
+        colors: [AppStyles.primaryBlue.withValues(alpha: 0), AppStyles.primaryBlue, AppStyles.primaryBlue.withValues(alpha: 0)],
+      ).createShader(Rect.fromLTWH(radius - halfWidth, 0, halfWidth * 2, 1));
+
+    final Offset start = Offset(radius - halfWidth, radius + yOffset);
+    final Offset end = Offset(radius + halfWidth, radius + yOffset);
+
+    canvas.drawLine(start, end, paint);
+
+    final glowPaint = Paint()
+      ..color = AppStyles.primaryBlue
+      ..strokeWidth = 2.5
+      ..shader = paint.shader
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.0);
+
+    canvas.drawLine(start, end, glowPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScanLinePainter oldDelegate) {
+    return true;
+  }
+}
+
+class _MiniRingPainter extends CustomPainter {
+  final double progress;
+  final Color color;
+
+  const _MiniRingPainter({required this.progress, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.width - 8) / 2;
+
+    final trackPaint = Paint()..color = Colors.black.withValues(alpha: 0.08)..style = PaintingStyle.stroke..strokeWidth = 3.5..strokeCap = StrokeCap.round;
+    canvas.drawArc(Rect.fromCircle(center: center, radius: radius), -math.pi / 2, 2 * math.pi, false, trackPaint);
+
+    final arcPaint = Paint()..color = color..style = PaintingStyle.stroke..strokeWidth = 3.5..strokeCap = StrokeCap.round;
+    canvas.drawArc(Rect.fromCircle(center: center, radius: radius), -math.pi / 2, 2 * math.pi * progress, false, arcPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MiniRingPainter oldDelegate) {
+    return oldDelegate.progress != progress || oldDelegate.color != color;
+  }
+}

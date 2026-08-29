@@ -18,8 +18,13 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
   late Animation<double> _scaleAnimation;
   late AnimationController _rippleController;
 
-  int _countdown = 4;
+  // Progress bar for redirect
+  static const int _redirectDuration = 4;
+  double _progress = 0.0;
+  int _elapsed = 0;
   late Timer _timer;
+  late String _markedAtTime;
+  late String _markedAtDate;
 
   @override
   void initState() {
@@ -34,19 +39,47 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
       CurvedAnimation(parent: _checkController, curve: Curves.elasticOut),
     );
 
+    // Single radial glow pulse — play once, not repeat
     _rippleController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
-    )..repeat();
+    )..forward();
 
     _checkController.forward();
 
+    final now = DateTime.now();
+    final hour = now.hour > 12
+        ? now.hour - 12
+        : now.hour == 0
+        ? 12
+        : now.hour;
+    final minute = now.minute.toString().padLeft(2, '0');
+    final period = now.hour >= 12 ? 'PM' : 'AM';
+    _markedAtTime = '$hour:$minute $period';
+
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    _markedAtDate = '${months[now.month - 1]} ${now.day}, ${now.year}';
+
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
+      _elapsed++;
       setState(() {
-        _countdown--;
+        _progress = _elapsed / _redirectDuration;
       });
-      if (_countdown <= 0) {
+      if (_elapsed >= _redirectDuration) {
         timer.cancel();
         Navigator.of(context).pushReplacementNamed('/dashboard');
       }
@@ -63,154 +96,226 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.close_rounded, color: AppStyles.textDark),
-          onPressed: () =>
-              Navigator.of(context).pushReplacementNamed('/dashboard'),
-        ),
-        title: const Text(
-          'Smart Attendance',
-          style: TextStyle(
-            color: AppStyles.textDark,
-            fontWeight: FontWeight.bold,
-            fontSize: 20,
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.close_rounded, color: AppStyles.textDark),
+            onPressed: () =>
+                Navigator.of(context).pushReplacementNamed('/dashboard'),
           ),
+          title: const Text(
+            'Smart Attendance',
+            style: TextStyle(
+              color: AppStyles.textDark,
+              fontWeight: FontWeight.w700,
+              fontSize: 18,
+              letterSpacing: -0.3,
+            ),
+          ),
+          centerTitle: true,
         ),
-        centerTitle: true,
-      ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0),
+        body: SafeArea(
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Spacer(),
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  AnimatedBuilder(
-                    animation: _rippleController,
-                    builder: (context, child) {
-                      return Container(
-                        width: 150 + (_rippleController.value * 50),
-                        height: 150 + (_rippleController.value * 50),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: AppStyles.successGreen.withValues(
-                            alpha: 1 - _rippleController.value,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                  ScaleTransition(
-                    scale: _scaleAnimation,
-                    child: Container(
-                      padding: const EdgeInsets.all(24),
-                      decoration: const BoxDecoration(
-                        color: AppStyles.successGreen,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.check_rounded,
-                        size: 60,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 32),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 300),
-                child: Text(
-                  'You are marked Present!',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: AppStyles.textDark,
-                  ),
-                ),
-              ),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 400),
-                child: Padding(
-                  padding: EdgeInsets.only(top: 8.0),
-                  child: Text(
-                    'Face verification successful',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 16, color: AppStyles.textGray),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 32),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 500),
-                child: Container(
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
+              Expanded(
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24.0,
+                    vertical: 16.0,
                   ),
                   child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text(
-                        'CHECK-IN TIME',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: AppStyles.textGray,
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        '09:05 AM',
-                        style: TextStyle(
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                          color: AppStyles.textDark,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppStyles.successGreen.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.security_rounded,
-                              color: AppStyles.successGreen,
-                              size: 16,
+                      const SizedBox(height: 12),
+                      Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          // Single radial glow pulse
+                          AnimatedBuilder(
+                            animation: _rippleController,
+                            builder: (context, child) {
+                              return Container(
+                                width: 120 + (_rippleController.value * 36),
+                                height: 120 + (_rippleController.value * 36),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: AppStyles.successGreen.withValues(
+                                    alpha: (1 - _rippleController.value) * 0.15,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          ScaleTransition(
+                            scale: _scaleAnimation,
+                            child: Container(
+                              width: 88,
+                              height: 88,
+                              decoration: BoxDecoration(
+                                color: isDark
+                                    ? AppStyles.successGreen.withValues(
+                                        alpha: 0.15,
+                                      )
+                                    : const Color(0xFFDCFCE7),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: AppStyles.successGreen.withValues(
+                                    alpha: isDark ? 0.3 : 0.2,
+                                  ),
+                                  width: 2,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: AppStyles.successGreen.withValues(
+                                      alpha: isDark ? 0.25 : 0.15,
+                                    ),
+                                    blurRadius: 20,
+                                    offset: const Offset(0, 8),
+                                  ),
+                                ],
+                              ),
+                              child: Center(
+                                child: Container(
+                                  width: 56,
+                                  height: 56,
+                                  decoration: const BoxDecoration(
+                                    color: AppStyles.successGreen,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.check_rounded,
+                                    size: 36,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
                             ),
-                            const SizedBox(width: 8),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      FadeSlideY(
+                        delay: const Duration(milliseconds: 250),
+                        child: Text(
+                          'You are marked Present!',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.4,
+                            color:
+                                theme.textTheme.displayLarge?.color ??
+                                AppStyles.textDark,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      FadeSlideY(
+                        delay: const Duration(milliseconds: 320),
+                        child: Text(
+                          'Face verification successful',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: isDark
+                                ? Colors.grey.shade400
+                                : AppStyles.textGray,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // ── Detail card (matching qr_success_screen style) ──────
+                      FadeSlideY(
+                        delay: const Duration(milliseconds: 400),
+                        child: Container(
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.05)
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: isDark
+                                  ? Colors.white.withValues(alpha: 0.08)
+                                  : const Color(0xFFE2E8F0),
+                            ),
+                            boxShadow: isDark
+                                ? null
+                                : [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(
+                                        alpha: 0.04,
+                                      ),
+                                      blurRadius: 12,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                          ),
+                          child: Column(
+                            children: [
+                              _DetailRow(
+                                icon: Icons.access_time_filled_rounded,
+                                iconColor: Colors.purple.shade400,
+                                label: 'Marked At',
+                                value: _markedAtTime,
+                                valueSubtitle: _markedAtDate,
+                              ),
+                              _divider(isDark),
+                              _DetailRow(
+                                icon: Icons.verified_user_rounded,
+                                iconColor: AppStyles.successGreen,
+                                label: 'Face Verified',
+                                value: 'Confirmed ✓',
+                                valueColor: AppStyles.successGreen,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // ── Progress bar + redirect text ─────────────────
+                      FadeSlideY(
+                        delay: const Duration(milliseconds: 500),
+                        child: Column(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(3),
+                              child: SizedBox(
+                                height: 3.5,
+                                width: double.infinity,
+                                child: LinearProgressIndicator(
+                                  value: _progress,
+                                  backgroundColor: isDark
+                                      ? Colors.white.withValues(alpha: 0.08)
+                                      : const Color(0xFFE2E8F0),
+                                  valueColor:
+                                      const AlwaysStoppedAnimation<Color>(
+                                        AppStyles.primaryBlue,
+                                      ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
                             Text(
-                              'On Time',
+                              'Redirecting to dashboard…',
                               style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                                color: const Color.fromARGB(204, 5, 107, 32),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                color: isDark
+                                    ? Colors.grey.shade400
+                                    : AppStyles.textGray,
                               ),
                             ),
                           ],
@@ -220,71 +325,134 @@ class _AttendanceSuccessScreenState extends State<AttendanceSuccessScreen>
                   ),
                 ),
               ),
-              const SizedBox(height: 24),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 600),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Location',
-                      style: TextStyle(color: AppStyles.textGray),
+              // ── Dashboard button pinned at bottom ──────────────
+              Container(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                child: SizedBox(
+                  height: 52,
+                  width: double.infinity,
+                  child: AnimatedButton(
+                    onPressed: () {
+                      _timer.cancel();
+                      Navigator.of(context).pushReplacementNamed('/dashboard');
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppStyles.primaryBlue,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      elevation: 0,
                     ),
-                    Text(
-                      'Main Campus',
+                    child: const Text(
+                      'Go to Dashboard',
                       style: TextStyle(
-                        color: AppStyles.textDark,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              const FadeSlideY(
-                delay: Duration(milliseconds: 700),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Date', style: TextStyle(color: AppStyles.textGray)),
-                    Text(
-                      'Oct 24, 2024',
-                      style: TextStyle(
-                        color: AppStyles.textDark,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Spacer(),
-              FadeSlideY(
-                delay: const Duration(milliseconds: 800),
-                child: AnimatedButton(
-                  onPressed: () {
-                    _timer.cancel();
-                    Navigator.of(context).pushReplacementNamed('/dashboard');
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppStyles.successGreen,
                   ),
-                  child: const Text('Go to Dashboard →'),
                 ),
               ),
-              const SizedBox(height: 10),
-              Text(
-                'Redirecting in ${_countdown}s…',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppStyles.textGray,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 16),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _divider(bool isDark) {
+    return Divider(
+      height: 1,
+      thickness: 1,
+      indent: 54,
+      color: isDark
+          ? Colors.white.withValues(alpha: 0.06)
+          : const Color(0xFFF1F5F9),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String label;
+  final String value;
+  final String? valueSubtitle;
+  final Color? valueColor;
+
+  const _DetailRow({
+    required this.icon,
+    required this.iconColor,
+    required this.label,
+    required this.value,
+    this.valueSubtitle,
+    this.valueColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Icon(icon, color: iconColor, size: 17),
+          ),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 95,
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppStyles.textGray,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: valueColor ??
+                        (theme.textTheme.bodyLarge?.color ??
+                            AppStyles.textDark),
+                  ),
+                  textAlign: TextAlign.end,
+                  softWrap: true,
+                ),
+                if (valueSubtitle != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    valueSubtitle!,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: theme.brightness == Brightness.dark
+                          ? Colors.grey.shade400
+                          : AppStyles.textGray,
+                    ),
+                    textAlign: TextAlign.end,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'utils/app_styles.dart';
 import 'utils/auth_flow_state.dart';
 
@@ -11,30 +12,168 @@ import 'screens/face/face_capture_preview_screen.dart' as preview;
 import 'screens/dashboard/dashboard_screen.dart' as dashboard;
 import 'screens/dashboard/history_screen.dart' as history;
 import 'screens/face/face_verification_screen.dart' as verify;
+import 'screens/face/face_calibration_verification_screen.dart'
+    as calibration_verify;
+import 'screens/face/face_calibration_preview_screen.dart'
+    as calibration_preview;
 import 'screens/attendance/attendance_success_screen.dart' as att_success;
 import 'screens/attendance/attendance_failed_screen.dart' as att_fail;
 import 'screens/attendance/location_error_screen.dart' as loc_error;
 import 'screens/dashboard/profile_screen.dart' as profile;
 import 'screens/dashboard/settings_screen.dart' as settings_screen;
+import 'screens/attendance/qr_precheck_screen.dart' as qr_precheck;
+import 'screens/attendance/qr_scanner_screen.dart' as qr_scanner;
+import 'screens/attendance/qr_face_verify_screen.dart' as qr_face_verify;
+import 'screens/attendance/qr_success_screen.dart' as qr_success;
+import 'screens/attendance/qr_timeout_screen.dart' as qr_timeout;
 import 'screens/auth/activate_account_screen.dart' as activate;
 // Auth & password reset flow
 import 'screens/auth/sign_in_screen.dart' as sign_in;
 import 'screens/auth/forgot_password_screen.dart' as forgot_pw;
-import 'screens/auth/password_reset_face_success_screen.dart' as pw_reset_success;
-import 'screens/auth/forgot_password_face_verify_screen.dart' as forgot_pw_verify;
+import 'screens/auth/password_reset_face_success_screen.dart'
+    as pw_reset_success;
+import 'screens/auth/forgot_password_face_verify_screen.dart'
+    as forgot_pw_verify;
 import 'screens/face/reset_face_verify_screen.dart' as reset_face_verify;
 import 'screens/auth/set_new_password_screen.dart' as set_new_pw;
 import 'screens/auth/password_updated_screen.dart' as pw_updated;
 import 'screens/auth/password_change_success_screen.dart' as pw_change_success;
 import 'screens/face/face_updated_success_screen.dart' as face_updated_success;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'services/face_landmark_service.dart';
+import 'services/notification_service.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+
+  debugPrint('[FCM-BG] Background message received: ${message.data}');
+
+  if (message.data['type'] == 'attendance_opened') {
+    final prefs = await SharedPreferences.getInstance();
+    final bool enabled = prefs.getBool('notifications_enabled') ?? true;
+    if (!enabled) {
+      debugPrint(
+        '[FCM-BG] Notification suppressed because notifications are disabled',
+      );
+      return;
+    }
+
+    final bgNotificationsPlugin = FlutterLocalNotificationsPlugin();
+    const AndroidInitializationSettings androidInit =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initSettings = InitializationSettings(
+      android: androidInit,
+    );
+    await bgNotificationsPlugin.initialize(settings: initSettings);
+    await NotificationService.createNotificationChannel(bgNotificationsPlugin);
+
+    await NotificationService.showAttendanceNotification(
+      plugin: bgNotificationsPlugin,
+      data: message.data,
+    );
+    debugPrint('[FCM-BG] Background attendance notification displayed');
+  }
+}
+
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    NotificationService.localNotificationsPlugin;
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    debugPrint('[GLOBAL ERROR] ${details.exception}');
+  };
+
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    debugPrint('[UI ERROR] ${details.exception}');
+    return Material(
+      color: Colors.white,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.wifi_off_rounded, size: 48, color: Colors.grey.shade400),
+              const SizedBox(height: 12),
+              const Text(
+                "Something went wrong.\nPlease restart the app.",
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  };
+
+  await dotenv.load(fileName: ".env");
+
+  // Initialize Firebase before Supabase
+  await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  const AndroidInitializationSettings androidInit =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const InitializationSettings initSettings = InitializationSettings(
+    android: androidInit,
+  );
+  await flutterLocalNotificationsPlugin.initialize(settings: initSettings);
+  await NotificationService.createNotificationChannel(
+    flutterLocalNotificationsPlugin,
+  );
+
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+    debugPrint('[FCM-FG] Foreground message received: ${message.data}');
+
+    if (message.data['type'] == 'attendance_opened') {
+      // Check user preference before showing foreground notification
+      final prefs = await SharedPreferences.getInstance();
+      final bool enabled = prefs.getBool('notifications_enabled') ?? true;
+      if (!enabled) {
+        debugPrint(
+          '[FCM-FG] Notification blocked because notifications are disabled',
+        );
+        return;
+      }
+
+      await NotificationService.showAttendanceNotification(
+        plugin: flutterLocalNotificationsPlugin,
+        data: message.data,
+      );
+      debugPrint('[FCM-FG] Foreground attendance notification displayed');
+    }
+  });
+
+  await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+    alert: true,
+    badge: true,
+    sound: true,
+  );
+
+  await Supabase.initialize(
+    url: dotenv.env['SUPABASE_URL']!,
+    anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
+  );
+
+  // Pre-warm face landmark model so the first face screen opens instantly
+  await FaceLandmarkService().initialize();
+
+  runApp(const SmartAttendanceApp());
+}
 
 final ValueNotifier<ThemeMode> appThemeNotifier = ValueNotifier(
   ThemeMode.light,
 );
-
-void main() {
-  runApp(const SmartAttendanceApp());
-}
 
 class SmartAttendanceApp extends StatelessWidget {
   const SmartAttendanceApp({super.key});
@@ -74,12 +213,22 @@ class SmartAttendanceApp extends StatelessWidget {
                 page = const reg_success.RegistrationSuccessScreen();
                 break;
               case '/registration_failed':
-                page = const reg_fail.RegistrationFailedScreen();
+                final args = routeSettings.arguments;
+                String? subtitle;
+                if (args is Map) {
+                  subtitle = args['subtitle'] as String?;
+                } else if (args is String) {
+                  subtitle = args;
+                }
+                page = reg_fail.RegistrationFailedScreen(subtitle: subtitle);
                 break;
               case '/face_preview':
                 page = const preview.FaceCapturePreviewScreen();
                 break;
               case '/dashboard':
+                debugPrint(
+                  '[ROUTE] /dashboard guard check: faceRegistered=${AuthFlowState.instance.faceRegistered}',
+                );
                 if (AuthFlowState.instance.canAccessDashboard) {
                   page = const dashboard.DashboardScreen();
                 } else {
@@ -91,6 +240,13 @@ class SmartAttendanceApp extends StatelessWidget {
                 break;
               case '/face_verification':
                 page = const verify.FaceVerificationScreen();
+                break;
+              case '/face_calibration_verify':
+                page =
+                    const calibration_verify.FaceCalibrationVerificationScreen();
+                break;
+              case '/face_calibration_preview':
+                page = const calibration_preview.FaceCalibrationPreviewScreen();
                 break;
               case '/attendance_success':
                 page = const att_success.AttendanceSuccessScreen();
@@ -109,6 +265,46 @@ class SmartAttendanceApp extends StatelessWidget {
                 break;
               case '/activate':
                 page = const activate.ActivateAccountScreen();
+                break;
+              case '/qr-precheck':
+                page = const qr_precheck.QrPrecheckScreen();
+                break;
+              case '/qr-scanner':
+                page = const qr_scanner.QrScannerScreen();
+                break;
+              case '/qr-face-verify':
+                page = const qr_face_verify.QrFaceVerifyScreen();
+                break;
+              case '/qr-success':
+                page = const qr_success.QrSuccessScreen();
+                break;
+              case '/qr-timeout':
+                final args = routeSettings.arguments;
+                final bool isTimeout;
+                String? customTitle;
+                String? customMessage;
+                if (args is bool) {
+                  isTimeout = args;
+                } else if (args is Map) {
+                  isTimeout = args['isTimeout'] as bool? ?? true;
+                  if (args['customTitle'] is String) {
+                    customTitle = args['customTitle'] as String;
+                  } else if (args['isVerificationExpired'] == true) {
+                    customTitle = 'Face Verification Time Expired';
+                    customMessage =
+                        'The verification window has ended. Please scan the QR code again to retry.';
+                  }
+                  if (args['customMessage'] is String) {
+                    customMessage = args['customMessage'] as String;
+                  }
+                } else {
+                  isTimeout = true;
+                }
+                page = qr_timeout.QrTimeoutScreen(
+                  isTimeout: isTimeout,
+                  customTitle: customTitle,
+                  customMessage: customMessage,
+                );
                 break;
               // ── Auth & password reset flow ───────────────────────────────
               case '/sign_in':
@@ -149,7 +345,7 @@ class SmartAttendanceApp extends StatelessWidget {
               return AuthPageRoute(page: page);
             }
 
-            return AppStyles.buildPageTransition(page);
+            return AppStyles.buildPageTransition(page, settings: routeSettings);
           },
         );
       },

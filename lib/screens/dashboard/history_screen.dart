@@ -1,152 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../services/supabase_service.dart';
 import '../../utils/app_styles.dart';
+import '../../utils/network_helper.dart';
 import '../../widgets/custom_bottom_nav.dart';
 import '../../widgets/fade_slide_y.dart';
 
 import 'dart:math' as math;
-
-const List<Map<String, dynamic>> _subjectAttendance = [
-  {
-    'subject': 'Software Engineering',
-    'code': 'SE',
-    'held': 30,
-    'attended': 18,
-    'faculty': 'Dr. V. Singh',
-  },
-  {
-    'subject': 'DBMS',
-    'code': 'DB',
-    'held': 38,
-    'attended': 26,
-    'faculty': 'Dr. P. Sharma',
-  },
-  {
-    'subject': 'Computer Networks',
-    'code': 'CN',
-    'held': 36,
-    'attended': 30,
-    'faculty': 'Prof. A. Rao',
-  },
-  {
-    'subject': 'Operating Systems',
-    'code': 'OS',
-    'held': 40,
-    'attended': 32,
-    'faculty': 'Prof. S. Mehta',
-  },
-  {
-    'subject': 'Data Structures',
-    'code': 'DS',
-    'held': 42,
-    'attended': 38,
-    'faculty': 'Dr. R. Kumar',
-  },
-];
-
-const List<Map<String, dynamic>> _collegeAttendance = [
-  {
-    'dateLabel': 'Today',
-    'fullDate': 'Oct 24, 2024',
-    'time': '09:05 AM',
-    'status': 'present',
-  },
-  {
-    'dateLabel': 'Yesterday',
-    'fullDate': 'Oct 23, 2024',
-    'time': '09:12 AM',
-    'status': 'present',
-  },
-  {
-    'dateLabel': 'Sat • Oct 22',
-    'fullDate': 'Oct 22, 2024',
-    'time': '—',
-    'status': 'absent',
-  },
-  {
-    'dateLabel': 'Fri • Oct 21',
-    'fullDate': 'Oct 21, 2024',
-    'time': '08:58 AM',
-    'status': 'present',
-  },
-  {
-    'dateLabel': 'Thu • Oct 20',
-    'fullDate': 'Oct 20, 2024',
-    'time': '09:20 AM',
-    'status': 'late',
-  },
-  {
-    'dateLabel': 'Wed • Oct 19',
-    'fullDate': 'Oct 19, 2024',
-    'time': '09:01 AM',
-    'status': 'present',
-  },
-  {
-    'dateLabel': 'Tue • Oct 18',
-    'fullDate': 'Oct 18, 2024',
-    'time': '—',
-    'status': 'absent',
-  },
-];
-
-const List<Map<String, dynamic>> _classAttendance = [
-  {
-    'dateGroup': 'Today • Oct 24, 2024',
-    'subject': 'Data Structures',
-    'period': '1st Period',
-    'time': '09:05 AM',
-    'status': 'present',
-  },
-  {
-    'dateGroup': 'Today • Oct 24, 2024',
-    'subject': 'Operating Systems',
-    'period': '2nd Period',
-    'time': '10:10 AM',
-    'status': 'present',
-  },
-  {
-    'dateGroup': 'Today • Oct 24, 2024',
-    'subject': 'DBMS',
-    'period': '3rd Period',
-    'time': '—',
-    'status': 'absent',
-  },
-  {
-    'dateGroup': 'Yesterday • Oct 23, 2024',
-    'subject': 'Computer Networks',
-    'period': '1st Period',
-    'time': '09:08 AM',
-    'status': 'present',
-  },
-  {
-    'dateGroup': 'Yesterday • Oct 23, 2024',
-    'subject': 'Data Structures',
-    'period': '2nd Period',
-    'time': '10:15 AM',
-    'status': 'present',
-  },
-  {
-    'dateGroup': 'Yesterday • Oct 23, 2024',
-    'subject': 'Software Engineering',
-    'period': '4th Period',
-    'time': '—',
-    'status': 'absent',
-  },
-  {
-    'dateGroup': 'Fri • Oct 21, 2024',
-    'subject': 'Operating Systems',
-    'period': '1st Period',
-    'time': '09:00 AM',
-    'status': 'present',
-  },
-  {
-    'dateGroup': 'Fri • Oct 21, 2024',
-    'subject': 'DBMS',
-    'period': '2nd Period',
-    'time': '10:05 AM',
-    'status': 'present',
-  },
-];
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -158,16 +18,84 @@ class HistoryScreen extends StatefulWidget {
 class _HistoryScreenState extends State<HistoryScreen>
     with TickerProviderStateMixin {
   late TabController _tabController;
+  late AnimationController _headerAnimController;
+  late Animation<double> _headerFadeAnim;
+  late Animation<Offset> _headerSlideAnim;
+
+  // Month/year selection state
+  int _selectedYear = DateTime.now().year;
+  String _selectedMonthAbbr = _monthAbbreviations[DateTime.now().month - 1];
+  bool _pillPressed = false;
+  bool _sheetOpen = false;
+
+  String get _selectedMonthLabel => '$_selectedMonthAbbr $_selectedYear';
+
+  // Dynamic data state
+  String? _studentClassId;
+  String? _loadError;
+
+  // College tab
+  List<Map<String, dynamic>> _collegeRecords = [];
+
+  // Classes tab
+  List<Map<String, dynamic>> _classRecords = [];
+
+  // Subjects tab
+  List<Map<String, dynamic>> _subjectRecords = [];
+
+  // Timetable tab
+  List<Map<String, dynamic>> _timetableSlots = [];
+  bool _timetableLoading = true;
+
+  // Available months per year — derived from real data
+  Map<int, List<String>> _availableMonths = {};
+
+  static const List<String> _monthAbbreviations = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
+
+    _headerAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _headerFadeAnim = CurvedAnimation(
+      parent: _headerAnimController,
+      curve: Curves.easeOut,
+    );
+    _headerSlideAnim =
+        Tween<Offset>(begin: const Offset(0, -0.25), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _headerAnimController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
+    // Start header entry animation after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _headerAnimController.forward();
+    });
+    _loadStudentClass();
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _headerAnimController.dispose();
     super.dispose();
   }
 
@@ -178,19 +106,760 @@ class _HistoryScreenState extends State<HistoryScreen>
     if (index == 3) Navigator.of(context).pushReplacementNamed('/profile');
   }
 
+  // ── Data fetching ──────────────────────────────────────────────────────────
+
+  Future<void> _loadStudentClass() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+      final studentData = await supabase
+          .from('students')
+          .select('class_id')
+          .eq('id', user.id)
+          .maybeSingle();
+      if (studentData == null) return;
+      _studentClassId = studentData['class_id'] as String;
+      await _fetchAllData();
+      if (mounted) setState(() => _loadError = null);
+    } catch (e) {
+      debugPrint('[HISTORY] loadStudentClass error: $e');
+      // Only show the offline banner if we have no data at all yet —
+      // if a refresh fails but data is already showing, keep it visible silently
+      if (mounted && _collegeRecords.isEmpty && _classRecords.isEmpty) {
+        setState(() => _loadError = NetworkHelper.friendlyMessage(e));
+      }
+    }
+  }
+
+  Future<void> _fetchAllData() async {
+    if (!mounted) return;
+    await Future.wait([
+      _fetchCollegeData(),
+      _fetchClassData(),
+      _fetchSubjectData(),
+      _fetchTimetableData(),
+    ]);
+    _buildAvailableMonths();
+  }
+
+  Future<void> _fetchCollegeData() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+
+      // Fetch real attendance records
+      final records = await supabase
+          .from('college_attendance')
+          .select('id, date, marked_at, status')
+          .eq('student_id', user.id)
+          .order('date', ascending: false)
+          .limit(180);
+
+      // Fetch student created_at to know start date
+      final studentData = await supabase
+          .from('students')
+          .select('created_at')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      // Determine start date — day student account was created
+      DateTime startDate;
+      if (studentData != null && studentData['created_at'] != null) {
+        final created = DateTime.parse(studentData['created_at'] as String).toLocal();
+        startDate = DateTime(created.year, created.month, created.day);
+      } else {
+        // Fallback: start of current month
+        final now = DateTime.now();
+        startDate = DateTime(now.year, now.month, 1);
+      }
+
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final cutoff = DateTime(now.year, now.month, now.day, 16, 0); // 4 PM
+
+      // Build a map of existing records keyed by date string
+      final Map<String, Map<String, dynamic>> recordsByDate = {};
+      for (final r in records) {
+        recordsByDate[r['date'] as String] = r;
+      }
+
+      // Generate all working days (Mon–Sat) from startDate to today
+      final List<String> workingDays = [];
+      DateTime cursor = startDate;
+      while (!cursor.isAfter(today)) {
+        // weekday: 1=Mon ... 6=Sat, 7=Sun
+        if (cursor.weekday != 7) {
+          workingDays.add(cursor.toIso8601String().split('T')[0]);
+        }
+        cursor = cursor.add(const Duration(days: 1));
+      }
+
+      final List<Map<String, dynamic>> built = [];
+
+      final weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      final months = [
+        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      ];
+
+      for (final dateStr in workingDays.reversed) {
+        final date = DateTime.parse(dateStr);
+        final recordDay = DateTime(date.year, date.month, date.day);
+        final yesterday = today.subtract(const Duration(days: 1));
+
+        // Skip today if before 4 PM and no record exists
+        final isToday = recordDay == today;
+        final isPast = recordDay.isBefore(today);
+        final isTodayPastCutoff = isToday && now.isAfter(cutoff);
+
+        // Only show today if past cutoff or has a real record
+        if (isToday && !isTodayPastCutoff && !recordsByDate.containsKey(dateStr)) {
+          continue;
+        }
+
+        String dateLabel;
+        if (recordDay == today) {
+          dateLabel = 'Today';
+        } else if (recordDay == yesterday) {
+          dateLabel = 'Yesterday';
+        } else {
+          final weekday = weekdays[date.weekday - 1];
+          final monthAbbr = months[date.month - 1];
+          dateLabel = '$weekday \u2022 $monthAbbr ${date.day}';
+        }
+
+        final existingRecord = recordsByDate[dateStr];
+
+        if (existingRecord != null) {
+          // Real record exists — use it
+          final markedAtStr = existingRecord['marked_at'] as String?;
+          String status = existingRecord['status'] as String? ?? 'absent';
+          String timeDisplay = '\u2014';
+
+          if (markedAtStr != null) {
+            final markedAt = DateTime.parse(markedAtStr).toLocal();
+            final hour = markedAt.hour;
+            final minute = markedAt.minute.toString().padLeft(2, '0');
+            final period = hour >= 12 ? 'PM' : 'AM';
+            final displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+            timeDisplay = '$displayHour:$minute $period';
+
+            // Derive late: present but marked after 9:15 AM
+            if (status == 'present') {
+              final cutoffMorning = DateTime(
+                markedAt.year, markedAt.month, markedAt.day, 9, 15,
+              );
+              if (markedAt.isAfter(cutoffMorning)) status = 'late';
+            }
+          }
+
+          built.add({
+            'dateLabel': dateLabel,
+            'fullDate': '${months[date.month - 1]} ${date.day}, ${date.year}',
+            'time': timeDisplay,
+            'status': status,
+            'rawDate': dateStr,
+          });
+        } else if (isPast || isTodayPastCutoff) {
+          // No record and day is past or today past 4 PM — mark as absent
+          built.add({
+            'dateLabel': dateLabel,
+            'fullDate': '${months[date.month - 1]} ${date.day}, ${date.year}',
+            'time': '\u2014',
+            'status': 'absent',
+            'rawDate': dateStr,
+          });
+        }
+      }
+
+      if (mounted) setState(() => _collegeRecords = built);
+    } catch (e) {
+      debugPrint('[HISTORY] fetchCollegeData error: $e');
+    }
+  }
+
+  Future<void> _fetchClassData() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null || _studentClassId == null) return;
+
+      // Fetch student account creation date
+      final studentData = await supabase
+          .from('students')
+          .select('created_at')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      DateTime startDate;
+      if (studentData != null && studentData['created_at'] != null) {
+        final created = DateTime.parse(
+          studentData['created_at'] as String,
+        ).toLocal();
+        startDate = DateTime(created.year, created.month, created.day);
+      } else {
+        final now = DateTime.now();
+        startDate = DateTime(now.year, now.month, 1);
+      }
+
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final nowMinutes = now.hour * 60 + now.minute;
+
+      // Fetch timetable for student's class
+      final timetableRows = await supabase
+          .from('timetables')
+          .select('''
+            day_of_week, subject_id, period_id,
+            subject:subjects ( name ),
+            period:periods ( period_number, start_time, end_time )
+          ''')
+          .eq('class_id', _studentClassId!);
+
+      if ((timetableRows as List).isEmpty) {
+        if (mounted) setState(() => _classRecords = []);
+        return;
+      }
+
+      // Build subjectId -> teacher display name map via teacher_assignments
+      // (the current source of truth for who teaches what)
+      final assignmentsForClass = await supabase
+          .from('teacher_assignments')
+          .select('subject_id, teacher_id')
+          .eq('class_id', _studentClassId!);
+
+      final Map<String, String> subjectTeacherMap = {};
+      final assignmentTeacherIds = (assignmentsForClass as List)
+          .map((a) => a['teacher_id'] as String?)
+          .where((id) => id != null)
+          .cast<String>()
+          .toSet()
+          .toList();
+
+      if (assignmentTeacherIds.isNotEmpty) {
+        final teacherNamesResp = await supabase
+            .rpc('get_teacher_names', params: {'teacher_ids': assignmentTeacherIds});
+        final Map<String, String> idToName = {};
+        for (final t in (teacherNamesResp as List)) {
+          final id = t['id'] as String?;
+          final name = (t['full_name'] as String?)?.trim() ?? '';
+          final title = (t['title'] as String?)?.trim() ?? 'Mr';
+          if (id != null && name.isNotEmpty) idToName[id] = '$title. $name';
+        }
+        for (final a in assignmentsForClass) {
+          final subjId = a['subject_id'] as String?;
+          final teacherId = a['teacher_id'] as String?;
+          if (subjId != null && teacherId != null && idToName.containsKey(teacherId)) {
+            subjectTeacherMap[subjId] = idToName[teacherId]!;
+          }
+        }
+      }
+
+      // Fetch all finalized sessions for this class from startDate
+      final startDateStr = startDate.toIso8601String().split('T')[0];
+      final todayStr = today.toIso8601String().split('T')[0];
+
+      final sessions = await supabase
+          .from('attendance_sessions')
+          .select('id, session_date, subject_id, period_id, finalized_at')
+          .eq('class_id', _studentClassId!)
+          .eq('status', 'finalized')
+          .gte('session_date', startDateStr)
+          .lte('session_date', todayStr)
+          .order('finalized_at', ascending: false)
+          .limit(500);
+
+      final sessionIds =
+          (sessions as List).map((s) => s['id'] as String).toList();
+
+      // Fetch student's period_attendance
+      Map<String, String> sessionStatusMap = {};
+      if (sessionIds.isNotEmpty) {
+        final attendance = await supabase
+            .from('period_attendance')
+            .select('session_id, status')
+            .eq('student_id', user.id)
+            .inFilter('session_id', sessionIds);
+        for (final a in attendance) {
+          sessionStatusMap[a['session_id'] as String] =
+              a['status'] as String? ?? 'absent';
+        }
+      }
+
+      // Build session lookup: "date__subjectId__periodId" → sessionId
+      final Map<String, String> sessionKeyMap = {};
+      for (final s in sessions) {
+        final key =
+            '${s['session_date']}__${s['subject_id']}__${s['period_id']}';
+        // Keep latest finalized_at if duplicate
+        if (!sessionKeyMap.containsKey(key)) {
+          sessionKeyMap[key] = s['id'] as String;
+        }
+      }
+
+      // Also build finalized_at map for time display
+      final Map<String, String?> sessionFinalizedAt = {};
+      for (final s in sessions) {
+        final key =
+            '${s['session_date']}__${s['subject_id']}__${s['period_id']}';
+        if (!sessionFinalizedAt.containsKey(key)) {
+          sessionFinalizedAt[key] = s['finalized_at'] as String?;
+        }
+      }
+
+      // Generate all working days from startDate to today
+      final List<Map<String, dynamic>> built = [];
+
+      final months = [
+        'Jan','Feb','Mar','Apr','May','Jun',
+        'Jul','Aug','Sep','Oct','Nov','Dec',
+      ];
+      final weekdays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+      final yesterday = today.subtract(const Duration(days: 1));
+
+      DateTime cursor = startDate;
+      while (!cursor.isAfter(today)) {
+        // Skip Sunday
+        if (cursor.weekday == 7) {
+          cursor = cursor.add(const Duration(days: 1));
+          continue;
+        }
+
+        final dateStr = cursor.toIso8601String().split('T')[0];
+        final isToday = cursor == today;
+        final recordDay = DateTime(cursor.year, cursor.month, cursor.day);
+
+        String dateGroup;
+        if (recordDay == today) {
+          dateGroup =
+              'Today \u2022 ${months[cursor.month - 1]} ${cursor.day}, ${cursor.year}';
+        } else if (recordDay == yesterday) {
+          dateGroup =
+              'Yesterday \u2022 ${months[cursor.month - 1]} ${cursor.day}, ${cursor.year}';
+        } else {
+          final weekday = weekdays[cursor.weekday - 1];
+          dateGroup =
+              '$weekday \u2022 ${months[cursor.month - 1]} ${cursor.day}, ${cursor.year}';
+        }
+
+        // Find timetable slots for this day
+        for (final slot in timetableRows) {
+          final slotDay = slot['day_of_week'] as int;
+          if (slotDay != cursor.weekday) continue;
+
+          final subjectId = slot['subject_id'] as String;
+          final periodId = slot['period_id'] as String;
+          final subjectName =
+              (slot['subject'] as Map?)?['name'] as String? ?? 'Unknown';
+          final periodNum =
+              (slot['period'] as Map?)?['period_number'] as int? ?? 0;
+          final endTimeStr =
+              (slot['period'] as Map?)?['end_time'] as String? ?? '00:00';
+          final startTimeStr =
+              (slot['period'] as Map?)?['start_time'] as String? ?? '00:00';
+
+          // Parse end time
+          final endParts = endTimeStr.split(':');
+          final endMinutes =
+              int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+
+          // For today: only show if period end time has passed
+          if (isToday && nowMinutes < endMinutes) continue;
+
+          final startDisplay = startTimeStr.length >= 5
+              ? startTimeStr.substring(0, 5)
+              : startTimeStr;
+
+          // Get ordinal
+          String getOrdinal(int n) {
+            if (n >= 11 && n <= 13) return '${n}th';
+            switch (n % 10) {
+              case 1: return '${n}st';
+              case 2: return '${n}nd';
+              case 3: return '${n}rd';
+              default: return '${n}th';
+            }
+          }
+
+          final periodLabel = '${getOrdinal(periodNum)} Period';
+          final sessionKey = '${dateStr}__${subjectId}__$periodId';
+          final sessionId = sessionKeyMap[sessionKey];
+
+          String status;
+          String timeDisplay = '\u2014';
+
+          if (sessionId != null) {
+            // Session exists — get student status
+            final studentStatus = sessionStatusMap[sessionId];
+            status = (studentStatus == 'present') ? 'present' : 'absent';
+
+            final finalizedAtStr = sessionFinalizedAt[sessionKey];
+            if (finalizedAtStr != null) {
+              final dt = DateTime.parse(finalizedAtStr).toLocal();
+              final hour = dt.hour;
+              final minute = dt.minute.toString().padLeft(2, '0');
+              final ampm = hour >= 12 ? 'PM' : 'AM';
+              final displayHour =
+                  hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+              timeDisplay = '$displayHour:$minute $ampm';
+            }
+          } else {
+            // No session — Pending
+            status = 'pending';
+          }
+
+          built.add({
+            'dateGroup': dateGroup,
+            'subject': subjectName,
+            'teacher': subjectTeacherMap[subjectId] ?? '',
+            'period': periodLabel,
+            'time': timeDisplay,
+            'status': status,
+            'rawDate': dateStr,
+            'periodNumber': periodNum,
+            'startTime': startDisplay,
+          });
+        }
+
+        cursor = cursor.add(const Duration(days: 1));
+      }
+
+      // Sort by date descending then period ascending
+      built.sort((a, b) {
+        final dateCompare =
+            (b['rawDate'] as String).compareTo(a['rawDate'] as String);
+        if (dateCompare != 0) return dateCompare;
+        return (a['periodNumber'] as int).compareTo(b['periodNumber'] as int);
+      });
+
+      if (mounted) setState(() => _classRecords = built);
+    } catch (e) {
+      debugPrint('[HISTORY] fetchClassData error: $e');
+    }
+  }
+
+  Future<void> _fetchSubjectData() async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null || _studentClassId == null) return;
+
+      // Step 1: Teacher assignments
+      final assignmentsRaw = await supabase
+          .from('teacher_assignments')
+          .select('subject_id, teacher_id, subjects(id, name, code)')
+          .eq('class_id', _studentClassId!);
+
+      final List<Map<String, dynamic>> assignments = (assignmentsRaw as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      if (assignments.isEmpty) {
+        if (mounted) setState(() => _subjectRecords = []);
+        return;
+      }
+
+      // Step 2: Teacher names — via teachers table joining users
+      // teachers.id = users.id, so we fetch users directly by teacher_id
+      final teacherIds = assignments
+          .map((a) => a['teacher_id'] as String?)
+          .where((id) => id != null)
+          .cast<String>()
+          .toSet()
+          .toList();
+
+      final Map<String, String> teacherNames = {};
+      if (teacherIds.isNotEmpty) {
+        final teachersRaw = await supabase
+            .rpc('get_teacher_names', params: {'teacher_ids': teacherIds});
+
+        for (final t in (teachersRaw as List)) {
+          final id = t['id'] as String?;
+          final name = t['full_name'] as String?;
+          final title = t['title'] as String? ?? 'Mr';
+          if (id != null) teacherNames[id] = '$title. ${name ?? 'Faculty'}';
+        }
+      }
+
+      // Step 3: ALL finalized sessions for this class
+      final sessionsRaw = await supabase
+          .from('attendance_sessions')
+          .select('id, subject_id')
+          .eq('class_id', _studentClassId!)
+          .eq('status', 'finalized');
+
+      final List<Map<String, dynamic>> sessions = (sessionsRaw as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      final sessionIds = sessions.map((s) => s['id'] as String).toList();
+
+      // Step 4: Student's period_attendance — ONLY sessions where student has a record
+      Map<String, String> sessionStatusMap = {};
+      if (sessionIds.isNotEmpty) {
+        final attendanceRaw = await supabase
+            .from('period_attendance')
+            .select('session_id, status')
+            .eq('student_id', user.id)
+            .inFilter('session_id', sessionIds)
+            .inFilter('status', ['present', 'absent']);
+
+        for (final a in (attendanceRaw as List)) {
+          final sid = a['session_id'] as String?;
+          final st = a['status'] as String?;
+          if (sid != null && st != null) sessionStatusMap[sid] = st;
+        }
+      }
+
+      // Step 5: Build subject records
+      // held = sessions where student HAS a period_attendance record (present or absent)
+      // attended = sessions where student was present
+      final List<Map<String, dynamic>> built = [];
+
+      for (final asgn in assignments) {
+        final subjectId = asgn['subject_id'] as String?;
+        final teacherId = asgn['teacher_id'] as String?;
+        final subjectMap = asgn['subjects'];
+
+        final subjectName = subjectMap is Map
+            ? (subjectMap['name'] as String? ?? 'Unknown')
+            : 'Unknown';
+        final facultyName = teacherId != null
+            ? (teacherNames[teacherId] ?? 'Faculty')
+            : 'Faculty';
+
+        // Only sessions for this subject
+        final subjectSessionIds = sessions
+            .where((s) => s['subject_id'] == subjectId)
+            .map((s) => s['id'] as String)
+            .toList();
+
+        // held = only sessions where student has an attendance record
+        final int held = subjectSessionIds
+            .where((sid) => sessionStatusMap.containsKey(sid))
+            .length;
+        final int attended = subjectSessionIds
+            .where((sid) => sessionStatusMap[sid] == 'present')
+            .length;
+
+        built.add({
+          'subject': subjectName,
+          'held': held,
+          'attended': attended,
+          'faculty': facultyName,
+        });
+      }
+
+      if (mounted) setState(() => _subjectRecords = built);
+    } catch (e, st) {
+      debugPrint('[SUBJECT] error: $e\n$st');
+      if (mounted) setState(() => _subjectRecords = []);
+    }
+  }
+
+  Future<void> _fetchTimetableData() async {
+    try {
+      if (_studentClassId == null) return;
+
+      final rows = await supabase
+          .from('timetables')
+          .select('''
+            day_of_week,
+            subject_id,
+            teacher_id,
+            period_id,
+            subject:subjects ( name ),
+            period:periods ( period_number, start_time, end_time ),
+            teachers ( id, title )
+          ''')
+          .eq('class_id', _studentClassId!)
+          .order('day_of_week')
+          .order('period_id');
+
+      if ((rows as List).isEmpty) {
+        if (mounted) setState(() { _timetableSlots = []; _timetableLoading = false; });
+        return;
+      }
+
+      // Fetch teacher names
+      final teacherIds = rows
+          .map((r) => r['teacher_id'] as String?)
+          .where((id) => id != null)
+          .cast<String>()
+          .toSet()
+          .toList();
+      final teacherNamesResp = await supabase
+          .rpc('get_teacher_names', params: {'teacher_ids': teacherIds});
+      final Map<String, String> teacherFullNames = {};
+      final Map<String, String> teacherTitleMap = {};
+      for (final t in (teacherNamesResp as List)) {
+        final id = t['id'] as String?;
+        final name = (t['full_name'] as String?)?.trim() ?? '';
+        final title = (t['title'] as String?)?.trim() ?? 'Mr';
+        if (id != null && name.isNotEmpty) {
+          teacherFullNames[id] = name;
+          teacherTitleMap[id] = title;
+        }
+      }
+
+      final List<Map<String, dynamic>> slots = rows.map<Map<String, dynamic>>((r) {
+        final teacherId = r['teacher_id'] as String?;
+        final title = teacherId != null ? (teacherTitleMap[teacherId] ?? 'Mr') : '';
+        final fullName = teacherId != null ? (teacherFullNames[teacherId] ?? '') : '';
+        // Empty string when unassigned — the UI hides the row entirely rather than showing a label
+        final facultyName = fullName.trim().isNotEmpty ? '$title. $fullName' : '';
+
+        final periodNum = (r['period'] as Map?)?['period_number'] as int? ?? 0;
+        final startTime = ((r['period'] as Map?)?['start_time'] as String? ?? '').isNotEmpty
+            ? ((r['period'] as Map?)?['start_time'] as String).substring(0, 5)
+            : '';
+        final endTime = ((r['period'] as Map?)?['end_time'] as String? ?? '').isNotEmpty
+            ? ((r['period'] as Map?)?['end_time'] as String).substring(0, 5)
+            : '';
+
+        return {
+          'dayOfWeek': r['day_of_week'] as int,
+          'periodNumber': periodNum,
+          'startTime': startTime,
+          'endTime': endTime,
+          'subject': (r['subject'] as Map?)?['name'] as String? ?? 'Unknown',
+          'faculty': facultyName,
+        };
+      }).toList();
+
+      // Sort by day then period
+      slots.sort((a, b) {
+        final dayComp = (a['dayOfWeek'] as int).compareTo(b['dayOfWeek'] as int);
+        if (dayComp != 0) return dayComp;
+        return (a['periodNumber'] as int).compareTo(b['periodNumber'] as int);
+      });
+
+      if (mounted) setState(() { _timetableSlots = slots; _timetableLoading = false; });
+    } catch (e) {
+      debugPrint('[TIMETABLE] error: $e');
+      if (mounted) setState(() { _timetableLoading = false; });
+    }
+  }
+
+  void _buildAvailableMonths() {
+    final now = DateTime.now();
+    final monthAbbrs = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+
+    // Collect all dates from college + class records
+    final Set<String> allDates = {};
+    for (final r in _collegeRecords) {
+      allDates.add(r['rawDate'] as String);
+    }
+    for (final r in _classRecords) {
+      allDates.add(r['rawDate'] as String);
+    }
+
+    // Group by year → set of month indices (0-based)
+    final Map<int, Set<int>> yearMonths = {};
+    for (final d in allDates) {
+      final date = DateTime.parse(d);
+      yearMonths.putIfAbsent(date.year, () => {}).add(date.month - 1);
+    }
+
+    // Build available months map — only past/current months
+    final Map<int, List<String>> result = {};
+    for (final year in yearMonths.keys) {
+      final List<String> months = [];
+      for (int m = 0; m < 12; m++) {
+        final isDataPresent = yearMonths[year]?.contains(m) ?? false;
+        final isFuture = DateTime(
+          year,
+          m + 1,
+        ).isAfter(DateTime(now.year, now.month));
+        if (isDataPresent && !isFuture) months.add(monthAbbrs[m]);
+      }
+      if (months.isNotEmpty) result[year] = months;
+    }
+
+    if (mounted) {
+      setState(() {
+        _availableMonths = result;
+        // Auto-select latest available month if current selection is not available
+        if (result.isNotEmpty) {
+          final latestYear = result.keys.reduce((a, b) => a > b ? a : b);
+          final monthsForYear = result[latestYear]!;
+          if (!result.containsKey(_selectedYear) ||
+              !(result[_selectedYear]?.contains(_selectedMonthAbbr) ?? false)) {
+            _selectedYear = latestYear;
+            _selectedMonthAbbr = monthsForYear.last;
+          }
+        }
+      });
+    }
+  }
+
+  // Filter helper for month filtering
+  List<Map<String, dynamic>> _filterByMonth(
+    List<Map<String, dynamic>> records,
+  ) {
+    return records.where((r) {
+      final raw = r['rawDate'] as String?;
+      if (raw == null) return false;
+      final date = DateTime.parse(raw);
+      return date.year == _selectedYear &&
+          _monthAbbreviations[date.month - 1] == _selectedMonthAbbr;
+    }).toList();
+  }
+
+  void _showMonthPicker() {
+    setState(() => _sheetOpen = true);
+    showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      enableDrag: true,
+      builder: (ctx) => _MonthPickerSheet(
+        initialYear: _selectedYear,
+        initialMonth: _selectedMonthAbbr,
+        monthAbbreviations: _monthAbbreviations,
+        selectableMonths: _availableMonths,
+        availableYears: _availableMonths.keys.toList()..sort(),
+      ),
+    ).then((result) {
+      setState(() => _sheetOpen = false);
+      if (result != null) {
+        setState(() {
+          _selectedYear = result['year'] as int;
+          _selectedMonthAbbr = result['month'] as String;
+        });
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final int collegePresentCount = _collegeAttendance
+    final filteredCollege = _filterByMonth(_collegeRecords);
+    final filteredClasses = _filterByMonth(_classRecords);
+
+    final int collegePresentCount = filteredCollege
+        .where((e) => e['status'] == 'present' || e['status'] == 'late')
+        .length;
+    final int collegeTotal = filteredCollege.length;
+    final int classPresentCount = filteredClasses
         .where((e) => e['status'] == 'present')
         .length;
-    final int collegeTotal = _collegeAttendance.length;
-    final int classPresentCount = _classAttendance
-        .where((e) => e['status'] == 'present')
+    final int classTotal = filteredClasses
+        .where((e) => e['status'] != 'pending')
         .length;
-    final int classTotal = _classAttendance.length;
 
     return PopScope(
       canPop: false,
@@ -301,87 +970,183 @@ class _HistoryScreenState extends State<HistoryScreen>
           backgroundColor: Colors.transparent,
           elevation: 0,
           automaticallyImplyLeading: false,
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'History',
-                style: TextStyle(
-                  color:
-                      theme.textTheme.displayLarge?.color ?? AppStyles.textDark,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 24,
-                ),
+          toolbarHeight: 64,
+          title: FadeTransition(
+            opacity: _headerFadeAnim,
+            child: SlideTransition(
+              position: _headerSlideAnim,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    'History',
+                    style: TextStyle(
+                      color:
+                          theme.textTheme.displayLarge?.color ??
+                          AppStyles.textDark,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 24,
+                    ),
+                  ),
+                  // ── Inline Month Selector ─────────────────────────────
+                  GestureDetector(
+                    onTapDown: (_) => setState(() => _pillPressed = true),
+                    onTapUp: (_) {
+                      setState(() => _pillPressed = false);
+                      _showMonthPicker();
+                    },
+                    onTapCancel: () => setState(() => _pillPressed = false),
+                    child: AnimatedScale(
+                      scale: _pillPressed ? 0.97 : 1.0,
+                      duration: const Duration(milliseconds: 120),
+                      curve: Curves.easeInOut,
+                      child: AnimatedOpacity(
+                        opacity: _pillPressed ? 0.90 : 1.0,
+                        duration: const Duration(milliseconds: 120),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              _selectedMonthLabel,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: isDark
+                                    ? Colors.white.withValues(alpha: 0.72)
+                                    : AppStyles.textDark.withValues(
+                                        alpha: 0.65,
+                                      ),
+                                height: 1.0,
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                            AnimatedRotation(
+                              turns: _sheetOpen ? 0.5 : 0.0,
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeInOut,
+                              child: Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                size: 17,
+                                color: isDark
+                                    ? Colors.white.withValues(alpha: 0.60)
+                                    : AppStyles.textDark.withValues(
+                                        alpha: 0.55,
+                                      ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              Text(
-                'Oct 2024',
-                style: TextStyle(
-                  color: AppStyles.textGray.withValues(alpha: 0.8),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+            ),
           ),
           bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(48),
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.08)
-                    : Colors.black.withValues(alpha: 0.05),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: TabBar(
-                controller: _tabController,
-                indicator: BoxDecoration(
-                  color: theme.primaryColor,
-                  borderRadius: BorderRadius.circular(10),
+            preferredSize: const Size.fromHeight(52),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.08)
+                      : Colors.black.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                indicatorSize: TabBarIndicatorSize.tab,
-                labelColor: Colors.white,
-                unselectedLabelColor: AppStyles.textGray,
-                labelStyle: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13,
+                child: TabBar(
+                  isScrollable: true,
+                  tabAlignment: TabAlignment.start,
+                  controller: _tabController,
+                  indicator: BoxDecoration(
+                    color: theme.primaryColor,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  labelColor: Colors.white,
+                  unselectedLabelColor: AppStyles.textGray,
+                  labelStyle: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                  unselectedLabelStyle: const TextStyle(
+                    fontWeight: FontWeight.w500,
+                    fontSize: 13,
+                  ),
+                  dividerColor: Colors.transparent,
+                  tabs: const [
+                    Tab(text: 'College'),
+                    Tab(text: 'Classes'),
+                    Tab(text: 'Subjects'),
+                    Tab(text: 'Timetable'),
+                  ],
                 ),
-                unselectedLabelStyle: const TextStyle(
-                  fontWeight: FontWeight.w500,
-                  fontSize: 13,
-                ),
-                dividerColor: Colors.transparent,
-                tabs: const [
-                  Tab(text: 'College'),
-                  Tab(text: 'Classes'),
-                  Tab(text: 'Subjects'),
-                ],
               ),
             ),
           ),
         ),
         body: SafeArea(
-          child: TabBarView(
-            controller: _tabController,
+          child: Column(
             children: [
-              _CollegeAttendanceTab(
-                isDark: isDark,
-                theme: theme,
-                presentCount: collegePresentCount,
-                totalCount: collegeTotal,
-                records: _collegeAttendance,
-              ),
-              _ClassAttendanceTab(
-                isDark: isDark,
-                theme: theme,
-                presentCount: classPresentCount,
-                totalCount: classTotal,
-                records: _classAttendance,
-              ),
-              _SubjectsTab(
-                isDark: isDark,
-                theme: theme,
-                records: _subjectAttendance,
+              if (_loadError != null)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.wifi_off_rounded, size: 16, color: Colors.orange.shade700),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _loadError!,
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.orange.shade800),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _fetchAllData,
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _CollegeAttendanceTab(
+                        isDark: isDark,
+                        theme: theme,
+                        presentCount: collegePresentCount,
+                        totalCount: collegeTotal,
+                        records: filteredCollege,
+                      ),
+                      _ClassAttendanceTab(
+                        isDark: isDark,
+                        theme: theme,
+                        presentCount: classPresentCount,
+                        totalCount: classTotal,
+                        records: filteredClasses,
+                      ),
+                      _SubjectsTab(
+                        isDark: isDark,
+                        theme: theme,
+                        records: _subjectRecords,
+                      ),
+                      _TimetableTab(
+                        isDark: isDark,
+                        theme: theme,
+                        slots: _timetableSlots,
+                        isLoading: _timetableLoading,
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ],
           ),
@@ -621,17 +1386,35 @@ class _CollegeAttendanceTab extends StatelessWidget {
                     const SizedBox(width: 14),
                     // Event info only — no date repeated
                     Expanded(
-                      child: Text(
-                        status == 'absent'
-                            ? 'Not marked'
-                            : 'Entered at ${record['time']}',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color:
-                              theme.textTheme.displayLarge?.color ??
-                              AppStyles.textDark,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            status == 'absent'
+                                ? 'Not marked'
+                                : status == 'late'
+                                ? 'Late entry'
+                                : 'Entered at',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: AppStyles.textGray,
+                            ),
+                          ),
+                          if (status != 'absent') ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              record['time'] as String,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color:
+                                    theme.textTheme.displayLarge?.color ??
+                                    AppStyles.textDark,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -672,7 +1455,7 @@ class _CollegeAttendanceTab extends StatelessWidget {
   }
 }
 
-class _ClassAttendanceTab extends StatelessWidget {
+class _ClassAttendanceTab extends StatefulWidget {
   final bool isDark;
   final ThemeData theme;
   final int presentCount;
@@ -688,14 +1471,34 @@ class _ClassAttendanceTab extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final int absentCount = records
-        .where((e) => e['status'] == 'absent')
-        .length;
+  State<_ClassAttendanceTab> createState() => _ClassAttendanceTabState();
+}
 
-    // Group records by dateGroup
+class _ClassAttendanceTabState extends State<_ClassAttendanceTab> {
+  // Status filter: 'all', 'present', 'absent', 'pending'
+  String _statusFilter = 'all';
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    final theme = widget.theme;
+    final records = widget.records;
+
+    final int absentCount =
+        records.where((e) => e['status'] == 'absent').length;
+    final int pendingCount =
+        records.where((e) => e['status'] == 'pending').length;
+
+    // Apply status filter
+    final filteredRecords = _statusFilter == 'all'
+        ? records
+        : records
+            .where((e) => e['status'] == _statusFilter)
+            .toList();
+
+    // Group filtered records by dateGroup
     final Map<String, List<Map<String, dynamic>>> grouped = {};
-    for (final record in records) {
+    for (final record in filteredRecords) {
       final key = record['dateGroup'] as String;
       grouped.putIfAbsent(key, () => []).add(record);
     }
@@ -704,6 +1507,7 @@ class _ClassAttendanceTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
       children: [
+        // ── Stat chips ───────────────────────────────────
         FadeSlideY(
           delay: const Duration(milliseconds: 100),
           child: Row(
@@ -711,12 +1515,12 @@ class _ClassAttendanceTab extends StatelessWidget {
               Expanded(
                 child: _StatChip(
                   label: 'Present',
-                  value: '$presentCount',
+                  value: '${widget.presentCount}',
                   color: AppStyles.successGreen,
                   isDark: isDark,
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               Expanded(
                 child: _StatChip(
                   label: 'Absent',
@@ -725,94 +1529,212 @@ class _ClassAttendanceTab extends StatelessWidget {
                   isDark: isDark,
                 ),
               ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _StatChip(
+                  label: 'Pending',
+                  value: '$pendingCount',
+                  color: AppStyles.amberWarning,
+                  isDark: isDark,
+                ),
+              ),
             ],
           ),
         ),
-        const SizedBox(height: 20),
-        ...groups.asMap().entries.map((groupEntry) {
-          final gi = groupEntry.key;
-          final groupDate = groupEntry.value.key;
-          final groupRecords = groupEntry.value.value;
+        const SizedBox(height: 14),
 
-          return FadeSlideY(
-            delay: Duration(milliseconds: 160 + (gi * 80)),
+        // ── Status filter pills ──────────────────────────
+        FadeSlideY(
+          delay: const Duration(milliseconds: 140),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _FilterPill(
+                  label: 'All',
+                  isSelected: _statusFilter == 'all',
+                  color: theme.primaryColor,
+                  isDark: isDark,
+                  onTap: () => setState(() => _statusFilter = 'all'),
+                ),
+                const SizedBox(width: 8),
+                _FilterPill(
+                  label: 'Present',
+                  isSelected: _statusFilter == 'present',
+                  color: AppStyles.successGreen,
+                  isDark: isDark,
+                  onTap: () => setState(() => _statusFilter = 'present'),
+                ),
+                const SizedBox(width: 8),
+                _FilterPill(
+                  label: 'Absent',
+                  isSelected: _statusFilter == 'absent',
+                  color: AppStyles.errorRed,
+                  isDark: isDark,
+                  onTap: () => setState(() => _statusFilter = 'absent'),
+                ),
+                const SizedBox(width: 8),
+                _FilterPill(
+                  label: 'Pending',
+                  isSelected: _statusFilter == 'pending',
+                  color: AppStyles.amberWarning,
+                  isDark: isDark,
+                  onTap: () => setState(() => _statusFilter = 'pending'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // ── Records ──────────────────────────────────────
+        if (filteredRecords.isEmpty)
+          Center(
             child: Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Date header with accent line
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 3,
-                          height: 16,
-                          decoration: BoxDecoration(
-                            color: theme.primaryColor,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Text(
-                          groupDate,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color:
-                                theme.textTheme.displayLarge?.color ??
-                                AppStyles.textDark,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // All periods in unified card
-                  Container(
-                    decoration: BoxDecoration(
-                      color: theme.cardTheme.color ?? Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(
-                            alpha: isDark ? 0.15 : 0.05,
-                          ),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      children: [
-                        for (int pi = 0; pi < groupRecords.length; pi++) ...[
-                          _ClassPeriodRow(
-                            record: groupRecords[pi],
-                            theme: theme,
-                            isDark: isDark,
-                          ),
-                          if (pi < groupRecords.length - 1)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                              ),
-                              child: Divider(
-                                height: 1,
-                                color: isDark
-                                    ? Colors.white.withValues(alpha: 0.08)
-                                    : Colors.black.withValues(alpha: 0.06),
-                              ),
-                            ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
+              padding: const EdgeInsets.only(top: 40),
+              child: Text(
+                'No $_statusFilter records found.',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: AppStyles.textGray.withValues(alpha: 0.7),
+                ),
               ),
             ),
-          );
-        }),
+          )
+        else
+          ...groups.asMap().entries.map((groupEntry) {
+            final gi = groupEntry.key;
+            final groupDate = groupEntry.value.key;
+            final groupRecords = groupEntry.value.value;
+
+            return FadeSlideY(
+              delay: Duration(milliseconds: 160 + (gi * 80)),
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 3,
+                            height: 16,
+                            decoration: BoxDecoration(
+                              color: theme.primaryColor,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            groupDate,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color:
+                                  theme.textTheme.displayLarge?.color ??
+                                  AppStyles.textDark,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: theme.cardTheme.color ?? Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(
+                              alpha: isDark ? 0.15 : 0.05,
+                            ),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          for (int pi = 0;
+                              pi < groupRecords.length;
+                              pi++) ...[
+                            _ClassPeriodRow(
+                              record: groupRecords[pi],
+                              theme: theme,
+                              isDark: isDark,
+                            ),
+                            if (pi < groupRecords.length - 1)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                ),
+                                child: Divider(
+                                  height: 1,
+                                  color: isDark
+                                      ? Colors.white.withValues(alpha: 0.08)
+                                      : Colors.black.withValues(alpha: 0.06),
+                                ),
+                              ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
       ],
+    );
+  }
+}
+
+class _FilterPill extends StatelessWidget {
+  final String label;
+  final bool isSelected;
+  final Color color;
+  final bool isDark;
+  final VoidCallback onTap;
+
+  const _FilterPill({
+    required this.label,
+    required this.isSelected,
+    required this.color,
+    required this.isDark,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? color
+              : color.withValues(alpha: isDark ? 0.12 : 0.08),
+          borderRadius: BorderRadius.circular(50),
+          border: Border.all(
+            color: isSelected
+                ? color
+                : color.withValues(alpha: 0.3),
+            width: 1.5,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: isSelected
+                ? Colors.white
+                : color,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -833,11 +1755,19 @@ class _ClassPeriodRow extends StatelessWidget {
     final status = record['status'] as String;
     final Color statusColor = status == 'present'
         ? AppStyles.successGreen
+        : status == 'pending'
+        ? AppStyles.amberWarning
         : AppStyles.errorRed;
     final IconData statusIcon = status == 'present'
         ? Icons.check_circle_rounded
+        : status == 'pending'
+        ? Icons.hourglass_top_rounded
         : Icons.cancel_rounded;
-    final String statusLabel = status == 'present' ? 'Present' : 'Absent';
+    final String statusLabel = status == 'present'
+        ? 'Present'
+        : status == 'pending'
+        ? 'Pending'
+        : 'Absent';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -874,15 +1804,37 @@ class _ClassPeriodRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  status == 'absent'
-                      ? record['period'] as String
-                      : '${record['period']}  •  ${record['time']}',
+                  '${record['period']}  •  ${record['time']}',
                   style: TextStyle(
                     fontSize: 12,
                     color:
                         theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
                   ),
                 ),
+                if ((record['teacher'] as String? ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.person_outline_rounded,
+                        size: 11,
+                        color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                      ),
+                      const SizedBox(width: 3),
+                      Flexible(
+                        child: Text(
+                          record['teacher'] as String,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: theme.textTheme.bodyMedium?.color ?? AppStyles.textGray,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -1425,6 +2377,1123 @@ class _InfoChip extends StatelessWidget {
           fontSize: 10,
           fontWeight: FontWeight.w600,
           color: color,
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Month Picker Bottom Sheet
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MonthPickerSheet extends StatefulWidget {
+  final int initialYear;
+  final String initialMonth;
+  final List<String> monthAbbreviations;
+  final Map<int, List<String>> selectableMonths;
+  final List<int> availableYears;
+
+  const _MonthPickerSheet({
+    required this.initialYear,
+    required this.initialMonth,
+    required this.monthAbbreviations,
+    required this.selectableMonths,
+    required this.availableYears,
+  });
+
+  @override
+  State<_MonthPickerSheet> createState() => _MonthPickerSheetState();
+}
+
+class _MonthPickerSheetState extends State<_MonthPickerSheet>
+    with SingleTickerProviderStateMixin {
+  late int _activeYear;
+  String? _tappedMonth;
+
+  @override
+  void initState() {
+    super.initState();
+    _activeYear = widget.initialYear;
+  }
+
+  bool _isSelectable(String month) {
+    final selectable = widget.selectableMonths[_activeYear] ?? [];
+    return selectable.contains(month);
+  }
+
+  void _selectMonth(String month) async {
+    if (!_isSelectable(month)) return;
+    setState(() => _tappedMonth = month);
+    await Future.delayed(const Duration(milliseconds: 160));
+    if (mounted) {
+      Navigator.of(context).pop({'year': _activeYear, 'month': month});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final bg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+    final handleColor = isDark
+        ? Colors.white.withValues(alpha: 0.18)
+        : Colors.black.withValues(alpha: 0.13);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 20),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.10),
+            blurRadius: 28,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── Drag handle ───────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 4),
+            child: Container(
+              width: 38,
+              height: 4,
+              decoration: BoxDecoration(
+                color: handleColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          // ── Title ─────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+            child: Row(
+              children: [
+                Text(
+                  'Select Month',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                    color:
+                        theme.textTheme.displayLarge?.color ??
+                        AppStyles.textDark,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // ── Year pill row ──────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
+            child: Row(
+              children: widget.availableYears.map((year) {
+                final isSelected = year == _activeYear;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: GestureDetector(
+                    onTap: () => setState(() => _activeYear = year),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeInOut,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? theme.primaryColor
+                            : (isDark
+                                  ? Colors.white.withValues(alpha: 0.07)
+                                  : Colors.black.withValues(alpha: 0.04)),
+                        borderRadius: BorderRadius.circular(50),
+                        border: Border.all(
+                          color: isSelected
+                              ? theme.primaryColor
+                              : (isDark
+                                    ? Colors.white.withValues(alpha: 0.14)
+                                    : Colors.black.withValues(alpha: 0.10)),
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Text(
+                        '$year',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: isSelected
+                              ? Colors.white
+                              : (isDark
+                                    ? Colors.white.withValues(alpha: 0.65)
+                                    : AppStyles.textGray),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          // ── Month grid ────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+            child: GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 4,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                childAspectRatio: 1.85,
+              ),
+              itemCount: widget.monthAbbreviations.length,
+              itemBuilder: (ctx, i) {
+                final month = widget.monthAbbreviations[i];
+                final selectable = _isSelectable(month);
+                final isCurrentSelected =
+                    month == widget.initialMonth &&
+                    _activeYear == widget.initialYear;
+                final isTapped = _tappedMonth == month;
+
+                return GestureDetector(
+                  onTap: selectable ? () => _selectMonth(month) : null,
+                  child: AnimatedScale(
+                    scale: isTapped ? 0.90 : 1.0,
+                    duration: const Duration(milliseconds: 130),
+                    curve: Curves.easeInOut,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeInOut,
+                      decoration: BoxDecoration(
+                        color: isCurrentSelected && selectable
+                            ? theme.primaryColor
+                            : isTapped
+                            ? theme.primaryColor.withValues(alpha: 0.80)
+                            : selectable
+                            ? (isDark
+                                  ? Colors.white.withValues(alpha: 0.07)
+                                  : Colors.black.withValues(alpha: 0.04))
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isCurrentSelected && selectable
+                              ? theme.primaryColor
+                              : selectable
+                              ? (isDark
+                                    ? Colors.white.withValues(alpha: 0.12)
+                                    : Colors.black.withValues(alpha: 0.09))
+                              : Colors.transparent,
+                          width: 1,
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: Opacity(
+                        opacity: selectable ? 1.0 : 0.30,
+                        child: Text(
+                          month,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight:
+                                (isCurrentSelected && selectable) || isTapped
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            color: (isCurrentSelected && selectable) || isTapped
+                                ? Colors.white
+                                : (isDark
+                                      ? Colors.white.withValues(alpha: 0.85)
+                                      : AppStyles.textDark),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TimetableTab extends StatefulWidget {
+  final bool isDark;
+  final ThemeData theme;
+  final List<Map<String, dynamic>> slots;
+  final bool isLoading;
+
+  const _TimetableTab({
+    required this.isDark,
+    required this.theme,
+    required this.slots,
+    required this.isLoading,
+  });
+
+  @override
+  State<_TimetableTab> createState() => _TimetableTabState();
+}
+
+class _TimetableTabState extends State<_TimetableTab> {
+  static const _dayShort = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+  late int _selectedDay;
+  late int _previousDay;
+  bool _goingForward = true;
+  bool _isWeekView = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final today = DateTime.now().weekday;
+    _selectedDay = today == 7 ? 1 : today;
+    _previousDay = _selectedDay;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (widget.slots.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.calendar_month_outlined,
+                size: 48, color: AppStyles.textGray.withValues(alpha: 0.4)),
+            const SizedBox(height: 12),
+            Text('No timetable assigned yet',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: AppStyles.textGray.withValues(alpha: 0.7),
+                  fontWeight: FontWeight.w500,
+                )),
+          ],
+        ),
+      );
+    }
+
+    final Map<int, List<Map<String, dynamic>>> byDay = {};
+    for (final slot in widget.slots) {
+      final d = slot['dayOfWeek'] as int;
+      byDay.putIfAbsent(d, () => []).add(slot);
+    }
+
+    final activeDays = [1, 2, 3, 4, 5, 6].where((d) => byDay.containsKey(d)).toList();
+
+    // ── Period accent colors (same as day view) ──────────
+    Color periodColor(int periodNum, ThemeData theme) {
+      switch (periodNum) {
+        case 1: return theme.primaryColor;
+        case 2: return AppStyles.successGreen;
+        case 3: return const Color(0xFFF39C12);
+        case 4: return const Color(0xFF9B59B6);
+        case 5: return AppStyles.errorRed;
+        default: return theme.primaryColor;
+      }
+    }
+
+    return Column(
+      children: [
+        // ── View toggle pill — always on top ────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 6),
+          child: Container(
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: widget.isDark
+                  ? Colors.white.withValues(alpha: 0.07)
+                  : Colors.black.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _isWeekView = false),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeInOut,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: !_isWeekView
+                            ? widget.theme.primaryColor
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        boxShadow: !_isWeekView
+                            ? [
+                                BoxShadow(
+                                  color: widget.theme.primaryColor
+                                      .withValues(alpha: 0.25),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                )
+                              ]
+                            : [],
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.view_day_rounded,
+                            size: 14,
+                            color: !_isWeekView
+                                ? Colors.white
+                                : (widget.isDark
+                                    ? Colors.white.withValues(alpha: 0.45)
+                                    : AppStyles.textGray),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Day View',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: !_isWeekView
+                                  ? Colors.white
+                                  : (widget.isDark
+                                      ? Colors.white.withValues(alpha: 0.45)
+                                      : AppStyles.textGray),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _isWeekView = true),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeInOut,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: _isWeekView
+                            ? widget.theme.primaryColor
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        boxShadow: _isWeekView
+                            ? [
+                                BoxShadow(
+                                  color: widget.theme.primaryColor
+                                      .withValues(alpha: 0.25),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                )
+                              ]
+                            : [],
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.grid_view_rounded,
+                            size: 14,
+                            color: _isWeekView
+                                ? Colors.white
+                                : (widget.isDark
+                                    ? Colors.white.withValues(alpha: 0.45)
+                                    : AppStyles.textGray),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Week Grid',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: _isWeekView
+                                  ? Colors.white
+                                  : (widget.isDark
+                                      ? Colors.white.withValues(alpha: 0.45)
+                                      : AppStyles.textGray),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // ── Day selector strip — only in Day View ───────────
+        if (!_isWeekView)
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: activeDays.map((day) {
+                  final isSelected = day == _selectedDay;
+                  final isToday = day == DateTime.now().weekday;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: GestureDetector(
+                      onTap: () {
+                        if (_selectedDay != day) {
+                          setState(() {
+                            _previousDay = _selectedDay;
+                            _selectedDay = day;
+                            _goingForward = day > _previousDay;
+                          });
+                        }
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        curve: Curves.easeInOut,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 9),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? widget.theme.primaryColor
+                              : (widget.isDark
+                                  ? Colors.white.withValues(alpha: 0.07)
+                                  : Colors.black.withValues(alpha: 0.05)),
+                          borderRadius: BorderRadius.circular(50),
+                          border: isSelected
+                              ? null
+                              : Border.all(
+                                  color: widget.isDark
+                                      ? Colors.white.withValues(alpha: 0.12)
+                                      : Colors.black.withValues(alpha: 0.09),
+                                  width: 1,
+                                ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _dayShort[day - 1],
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: isSelected
+                                    ? FontWeight.w800
+                                    : FontWeight.w600,
+                                letterSpacing: isSelected ? 0.6 : 0,
+                                color: isSelected
+                                    ? Colors.white
+                                    : (widget.isDark
+                                        ? Colors.white.withValues(alpha: 0.55)
+                                        : AppStyles.textGray),
+                              ),
+                            ),
+                            if (isSelected && isToday) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 5, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.25),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text(
+                                  'TODAY',
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+
+        // ── Content area ────────────────────────────────────
+        Expanded(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.04),
+                  end: Offset.zero,
+                ).animate(CurvedAnimation(
+                    parent: animation, curve: Curves.easeOutCubic)),
+                child: child,
+              ),
+            ),
+            child: _isWeekView
+                ? _WeekGridView(
+                    key: const ValueKey('week'),
+                    byDay: byDay,
+                    activeDays: activeDays,
+                    isDark: widget.isDark,
+                    theme: widget.theme,
+                    periodColor: periodColor,
+                  )
+                : AnimatedSwitcher(
+                    key: const ValueKey('day'),
+                    duration: const Duration(milliseconds: 320),
+                    transitionBuilder: (child, animation) => FadeTransition(
+                      opacity: animation,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: _goingForward
+                              ? const Offset(0.18, 0)
+                              : const Offset(-0.18, 0),
+                          end: Offset.zero,
+                        ).animate(CurvedAnimation(
+                            parent: animation,
+                            curve: Curves.easeOutCubic)),
+                        child: child,
+                      ),
+                    ),
+                    child: SingleChildScrollView(
+                      key: ValueKey(_selectedDay),
+                      padding: const EdgeInsets.only(
+                          left: 20, right: 20, top: 4, bottom: 20),
+                      child: Column(
+                        children: (byDay[_selectedDay] ?? [])
+                            .asMap()
+                            .entries
+                            .map(
+                              (entry) {
+                                final index = entry.key;
+                                final slot = entry.value;
+                                return FadeSlideY(
+                                  delay: Duration(
+                                      milliseconds: 40 + (index * 50)),
+                                  child: Padding(
+                                    padding:
+                                        const EdgeInsets.only(bottom: 8),
+                                    child: _TimetablePeriodRow(
+                                      slot: slot,
+                                      isToday: _selectedDay ==
+                                          DateTime.now().weekday,
+                                      isDark: widget.isDark,
+                                      theme: widget.theme,
+                                    ),
+                                  ),
+                                );
+                              },
+                            )
+                            .toList(),
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _WeekGridView extends StatelessWidget {
+  final Map<int, List<Map<String, dynamic>>> byDay;
+  final List<int> activeDays;
+  final bool isDark;
+  final ThemeData theme;
+  final Color Function(int, ThemeData) periodColor;
+
+  static const _dayShort = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+  const _WeekGridView({
+    super.key,
+    required this.byDay,
+    required this.activeDays,
+    required this.isDark,
+    required this.theme,
+    required this.periodColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Collect all unique period numbers across all days
+    final Set<int> allPeriods = {};
+    for (final slots in byDay.values) {
+      for (final s in slots) {
+        allPeriods.add(s['periodNumber'] as int);
+      }
+    }
+    final sortedPeriods = allPeriods.toList()..sort();
+
+    final today = DateTime.now().weekday;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+      child: Column(
+        children: [
+          // ── Header row: empty + day columns ──────────
+          Row(
+            children: [
+              // Time label column header
+              SizedBox(
+                width: 48,
+                child: Text(
+                  'Period',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: AppStyles.textGray,
+                    letterSpacing: 0.3,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              ...activeDays.map((day) {
+                final isToday = day == today;
+                return Expanded(
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 2),
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    decoration: BoxDecoration(
+                      color: isToday
+                          ? theme.primaryColor
+                          : (isDark
+                              ? Colors.white.withValues(alpha: 0.06)
+                              : Colors.black.withValues(alpha: 0.04)),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      _dayShort[day - 1],
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5,
+                        color: isToday
+                            ? Colors.white
+                            : (isDark
+                                ? Colors.white.withValues(alpha: 0.6)
+                                : AppStyles.textGray),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // ── Period rows ───────────────────────────────
+          ...sortedPeriods.map((pNum) {
+            final color = periodColor(pNum, theme);
+
+            // Find start/end time from any day that has this period
+            String startTime = '';
+            String endTime = '';
+            for (final slots in byDay.values) {
+              for (final s in slots) {
+                if (s['periodNumber'] == pNum) {
+                  startTime = s['startTime'] as String? ?? '';
+                  endTime = s['endTime'] as String? ?? '';
+                  break;
+                }
+              }
+              if (startTime.isNotEmpty) break;
+            }
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Period number + time column
+                  SizedBox(
+                    width: 48,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 22,
+                          height: 22,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: color.withValues(alpha: 0.15),
+                            border: Border.all(
+                              color: color.withValues(alpha: 0.5),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Center(
+                            child: Text(
+                              '$pNum',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: color,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          startTime,
+                          style: TextStyle(
+                            fontSize: 8,
+                            fontWeight: FontWeight.w700,
+                            color: color,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        Text(
+                          endTime,
+                          style: TextStyle(
+                            fontSize: 8,
+                            fontWeight: FontWeight.w500,
+                            color: AppStyles.textGray,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Day cells for this period
+                  ...activeDays.map((day) {
+                    final slots = byDay[day] ?? [];
+                    final slot = slots.cast<Map<String, dynamic>?>()
+                        .firstWhere(
+                          (s) => s?['periodNumber'] == pNum,
+                          orElse: () => null,
+                        );
+
+                    if (slot == null) {
+                      return Expanded(
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                          height: 64,
+                          decoration: BoxDecoration(
+                            color: day == today
+                                ? theme.primaryColor.withValues(alpha: isDark ? 0.14 : 0.08)
+                                : (isDark
+                                    ? Colors.white.withValues(alpha: 0.03)
+                                    : Colors.black.withValues(alpha: 0.02)),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: day == today
+                                  ? theme.primaryColor.withValues(alpha: 0.45)
+                                  : (isDark
+                                      ? Colors.white.withValues(alpha: 0.06)
+                                      : Colors.black.withValues(alpha: 0.05)),
+                              width: day == today ? 2.0 : 1,
+                            ),
+                          ),
+                          child: Center(
+                            child: Text(
+                              '—',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppStyles.textGray
+                                    .withValues(alpha: 0.3),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+
+                    final subject = slot['subject'] as String? ?? '';
+                    final faculty = slot['faculty'] as String? ?? '';
+
+                    // Auto abbreviation: initials for multi-word, first 4 chars for single-word
+                    final words = subject.trim().split(RegExp(r'\s+'));
+                    final abbr = words.length > 1
+                        ? words.map((w) => w.isNotEmpty ? w[0].toUpperCase() : '').join()
+                        : subject.length > 4 ? subject.substring(0, 4) : subject;
+
+                    // Last name only for grid cell — empty string when unassigned
+                    final parts = faculty.trim().split(' ');
+                    final teacherShort = faculty.isEmpty
+                        ? ''
+                        : (parts.length >= 2 ? parts[1] : (parts.isNotEmpty ? parts[0] : faculty));
+
+
+                    return Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: day == today
+                              ? theme.primaryColor.withValues(alpha: isDark ? 0.22 : 0.11)
+                              : (isDark
+                                  ? (theme.cardTheme.color ?? const Color(0xFF1E1E1E))
+                                  : Colors.white),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: day == today
+                                ? color.withValues(alpha: 0.90)
+                                : color.withValues(alpha: 0.55),
+                            width: day == today ? 2.5 : 1.5,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: color.withValues(alpha: day == today ? 0.12 : 0.08),
+                              blurRadius: 4,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 3, vertical: 6),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                abbr,
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                  color: color,
+                                  height: 1.1,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Container(
+                                width: 20,
+                                height: 1,
+                                color: color.withValues(alpha: 0.3),
+                              ),
+                              const SizedBox(height: 4),
+                              if (teacherShort.isNotEmpty)
+                                Text(
+                                  teacherShort,
+                                  textAlign: TextAlign.center,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 6,
+                                    fontWeight: FontWeight.w700,
+                                    color: isDark
+                                        ? Colors.white.withValues(alpha: 0.55)
+                                        : AppStyles.textGray,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+class _TimetablePeriodRow extends StatefulWidget {
+  final Map<String, dynamic> slot;
+  final bool isToday;
+  final bool isDark;
+  final ThemeData theme;
+
+  const _TimetablePeriodRow({
+    required this.slot,
+    required this.isToday,
+    required this.isDark,
+    required this.theme,
+  });
+
+  @override
+  State<_TimetablePeriodRow> createState() => _TimetablePeriodRowState();
+}
+
+class _TimetablePeriodRowState extends State<_TimetablePeriodRow> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final int periodNum = widget.slot['periodNumber'] as int;
+    final String start = widget.slot['startTime'] as String;
+    final String end = widget.slot['endTime'] as String;
+    final String subject = widget.slot['subject'] as String;
+    final String faculty = widget.slot['faculty'] as String;
+
+    Color accentColor;
+    switch (periodNum) {
+      case 1: accentColor = widget.theme.primaryColor; break;
+      case 2: accentColor = AppStyles.successGreen; break;
+      case 3: accentColor = const Color(0xFFF39C12); break;
+      case 4: accentColor = const Color(0xFF9B59B6); break;
+      case 5: accentColor = AppStyles.errorRed; break;
+      default: accentColor = widget.theme.primaryColor; break;
+    }
+
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedScale(
+        scale: _pressed ? 0.97 : 1.0,
+        duration: const Duration(milliseconds: 130),
+        curve: Curves.easeInOut,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            decoration: BoxDecoration(
+              color: widget.theme.cardTheme.color ?? Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(
+                      alpha: widget.isDark ? 0.15 : 0.05),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // ── Left accent bar — rounded with card ──
+                  Container(
+                    width: 5,
+                    color: accentColor,
+                  ),
+                  // ── Accent tint background ──
+                  Expanded(
+                    child: Container(
+                      color: accentColor.withValues(
+                          alpha: widget.isDark ? 0.06 : 0.03),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          // Period circle
+                          Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: accentColor.withValues(alpha: 0.12),
+                              border: Border.all(
+                                color: accentColor.withValues(alpha: 0.5),
+                                width: 2,
+                              ),
+                            ),
+                            child: Center(
+                              child: Text(
+                                '$periodNum',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                  color: accentColor,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          // Subject + teacher
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  subject,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: widget.theme.textTheme
+                                            .displayLarge?.color ??
+                                        AppStyles.textDark,
+                                    height: 1.2,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 3),
+                                if (faculty.isNotEmpty)
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.person_outline_rounded,
+                                        size: 11,
+                                        color: widget.theme.textTheme
+                                                .bodyMedium?.color ??
+                                            AppStyles.textGray,
+                                      ),
+                                      const SizedBox(width: 3),
+                                      Expanded(
+                                        child: Text(
+                                          faculty,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w500,
+                                            color: widget.theme.textTheme
+                                                    .bodyMedium?.color ??
+                                                AppStyles.textGray,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // Time block
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                start,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: accentColor,
+                                  height: 1.1,
+                                ),
+                              ),
+                              Container(
+                                margin: const EdgeInsets.symmetric(
+                                    vertical: 2),
+                                width: 20,
+                                height: 1,
+                                color: accentColor.withValues(alpha: 0.35),
+                              ),
+                              Text(
+                                end,
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w500,
+                                  color: widget.theme.textTheme
+                                          .bodyMedium?.color ??
+                                      AppStyles.textGray,
+                                  height: 1.1,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
